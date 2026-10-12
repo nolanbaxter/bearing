@@ -44,7 +44,7 @@ const gone = () => {
   return { world, body };
 };
 
-const OPTIONS = 'type, shape, size, radius, height, density, mass, position, rotation, velocity, angularVelocity';
+const OPTIONS = 'type, shape, size, radius, height, density, mass, inertia, position, rotation, velocity, angularVelocity';
 
 /** [entry, the call, the exact message]. */
 const cases = [
@@ -86,6 +86,7 @@ const cases = [
       [e, run({ mass: 1, density: 1 }), `${call}: give mass or density, not both`],
       [e, run({ mass: 0 }), `${call}: mass must be a positive number, got 0`],
       [e, run({ density: Infinity }), `${call}: density must be a positive number, got Infinity`],
+      [e, run({ inertia: [1, 0, 1] }), `${call}: inertia must be 3 positive numbers, or null to follow the shape, got 1,0,1`],
       [e, run({ position: { x: 1, y: 2, z: 3 } }), `${call}: position must be 3 finite numbers, got an object`],
       [e, run({ rotation: [0, 0, 0, 0] }), `${call}: rotation must be 4 finite numbers, not all zero, got 0,0,0,0`],
       [e, run({ type: 'static', velocity: [0, 0, 0] }), `${call}: a static body has no velocity`],
@@ -115,7 +116,8 @@ const cases = [
   ['world-step', () => fresh().world.step(0), 'step: dt must be a positive number of seconds, got 0'],
 
   ...['id', 'slot', 'world', 'alive'].map((p) => [`body-${p}`, () => { fresh().body[p] = 1; }, `body.${p} is read only`]),
-  ...[['mass', 'setBody(body, { mass })'], ['position', 'setPosition(x, y, z)'], ['rotation', 'setRotation(q)'],
+  ...[['mass', 'setBody(body, { mass })'], ['inertia', 'setBody(body, { inertia })'],
+    ['position', 'setPosition(x, y, z)'], ['rotation', 'setRotation(q)'],
     ['velocity', 'setVelocity(x, y, z)'], ['angularVelocity', 'setAngularVelocity(x, y, z)']].flatMap(([p, hint]) => [
     [`body-${p.toLowerCase()}`, () => gone().body[p], `${p}: this world was destroyed`],
     [`body-${p.toLowerCase()}`, () => dead().body[p], `${p}: this body was removed`],
@@ -123,7 +125,9 @@ const cases = [
   ]),
 
   ...[['setPosition', [0, 0, 0]], ['setRotation', [[0, 0, 0, 1]]], ['setAxisAngle', [[0, 1, 0], 1]],
-    ['setEuler', [0, 0]], ['setVelocity', [0, 0, 0]], ['setAngularVelocity', [0, 0, 0]]].flatMap(([m, args]) => [
+    ['setEuler', [0, 0]], ['setVelocity', [0, 0, 0]], ['setAngularVelocity', [0, 0, 0]],
+    ['applyForce', [[0, 0, 0]]], ['applyTorque', [[0, 0, 0]]], ['applyImpulse', [[0, 0, 0]]],
+    ['applyAngularImpulse', [[0, 0, 0]]]].flatMap(([m, args]) => [
     [`body-${m.toLowerCase()}`, () => gone().body[m](...args), `${m}: this world was destroyed`],
     [`body-${m.toLowerCase()}`, () => dead().body[m](...args), `${m}: this body was removed`],
   ]),
@@ -136,6 +140,13 @@ const cases = [
   ['body-setvelocity', () => new World().addBody({ type: 'static' }).setVelocity(1, 0, 0), 'setVelocity: a static body has no velocity'],
   ['body-setangularvelocity', () => fresh().body.setAngularVelocity(0, Infinity, 0), 'setAngularVelocity: x, y and z must be finite numbers, got 0,Infinity,0'],
   ['body-setangularvelocity', () => new World().addBody({ type: 'static' }).setAngularVelocity(0, 1, 0), 'setAngularVelocity: a static body has no angularVelocity'],
+  ['body-applyforce', () => fresh().body.applyForce(10), 'applyForce: force must be 3 finite numbers, got 10'],
+  ['body-applyforce', () => fresh().body.applyForce([0, 1, 0], [0, 0]), 'applyForce: point must be 3 finite numbers, got 0,0'],
+  // Checked even on a body forces don't move, so a bad call is caught wherever it lands.
+  ['body-applytorque', () => new World().addBody({ type: 'static' }).applyTorque([NaN, 0, 0]), 'applyTorque: torque must be 3 finite numbers, got NaN,0,0'],
+  ['body-applyimpulse', () => fresh().body.applyImpulse(), 'applyImpulse: impulse must be 3 finite numbers, got undefined'],
+  ['body-applyimpulse', () => fresh().body.applyImpulse([0, 1, 0], null), 'applyImpulse: point must be 3 finite numbers, got null'],
+  ['body-applyangularimpulse', () => fresh().body.applyAngularImpulse([0, '1', 0]), "applyAngularImpulse: impulse must be 3 finite numbers, got 0,'1',0"],
   ['body-destroy', () => gone().body.destroy(), 'destroy: this world was destroyed'],
 ];
 

@@ -118,6 +118,25 @@ export function cos(x) {
   }
 }
 
+/**
+ * Rotates (x, y, z) by the unit quaternion at q[o..o+3], into out[0..2]. With
+ * `inverse`, by its conjugate: world to body instead of body to world. Takes
+ * the quaternion by offset and writes into a caller's array, so the step can
+ * use it on its columns without allocating.
+ *
+ * v' = v + w t + u × t, with u the quaternion's vector part and t = 2 u × v:
+ * two cross products, cheaper than building the matrix.
+ */
+export function rotate(q, o, x, y, z, inverse, out) {
+  const s = inverse ? -1 : 1;
+  const ux = q[o] * s, uy = q[o + 1] * s, uz = q[o + 2] * s, w = q[o + 3];
+  const tx = 2 * (uy * z - uz * y), ty = 2 * (uz * x - ux * z), tz = 2 * (ux * y - uy * x);
+  out[0] = x + w * tx + (uy * tz - uz * ty);
+  out[1] = y + w * ty + (uz * tx - ux * tz);
+  out[2] = z + w * tz + (ux * ty - uy * tx);
+  return out;
+}
+
 /** The rotation of `radians` about a unit `axis`, as [x, y, z, w]. */
 export function quatAxisAngle(axis, radians) {
   const half = radians * 0.5, s = sin(half);

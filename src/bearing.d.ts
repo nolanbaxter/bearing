@@ -18,6 +18,8 @@ interface BodyCommon {
   density?: number;
   /** kg. Give this or `density`, not both. */
   mass?: number;
+  /** Moments of inertia about the body's own axes, kg·m². Worked out from the shape and mass unless given; null goes back to that. */
+  inertia?: Vec3 | null;
   /** m, default [0, 0, 0]. */
   position?: Vec3;
   /** Quaternion [x, y, z, w], default [0, 0, 0, 1]. Normalized as it comes in. */
@@ -71,6 +73,8 @@ interface BodyInfoCommon {
   mass?: number;
   /** Present if the body was not given a mass. */
   density?: number;
+  /** Present if the body was given an inertia. */
+  inertia?: [number, number, number];
   position: [number, number, number];
   rotation: [number, number, number, number];
   /** Absent for a static body. */
@@ -128,6 +132,8 @@ export class Body {
   readonly alive: boolean;
   /** kg. */
   readonly mass: number;
+  /** kg·m² about the body's own x, y and z axes, a frozen copy. */
+  readonly inertia: readonly [number, number, number];
   /** m, a frozen copy. */
   readonly position: readonly [number, number, number];
   /** Quaternion [x, y, z, w], a frozen copy. */
@@ -144,6 +150,14 @@ export class Body {
   setEuler(yaw: number, pitch: number, roll?: number): this;
   setVelocity(x: number, y: number, z: number): this;
   setAngularVelocity(x: number, y: number, z: number): this;
+  /** N, world space, for the next step only. At `point` (world space, m) it turns the body too. */
+  applyForce(force: Vec3, point?: Vec3): this;
+  /** N·m, world space, for the next step only. */
+  applyTorque(torque: Vec3): this;
+  /** N·s, world space, at once. At `point` (world space, m) it turns the body too. */
+  applyImpulse(impulse: Vec3, point?: Vec3): this;
+  /** N·m·s, world space, at once. */
+  applyAngularImpulse(impulse: Vec3): this;
   /** Same as world.remove(body). */
   destroy(): void;
 }

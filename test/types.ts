@@ -34,6 +34,13 @@ export function examples(): void {
   player.setEuler(Math.PI / 2, 0).setAxisAngle([0, 1, 0], 1).setAngularVelocity(0, 1, 0);
   const [x, y, z, w] = marble.rotation;
   const mass: number = marble.mass;
+  const [ix, iy, iz] = crate.inertia;
+  world.setBody(crate, { inertia: [1, 2, 3] });
+  world.setBody(crate, { inertia: null });
+  world.addBody({ shape: 'sphere', inertia: [2, 2, 2] });
+  crate.applyForce([0, 15000, 0]).applyForce([1, 0, 0], [0.5, 0, 0]).applyTorque([0, 200, 0]);
+  crate.applyImpulse([0, 0, -500], [2.4, 1, 0]).applyImpulse(new Float32Array(3)).applyAngularImpulse([0, 50, 0]);
+  void [ix, iy, iz];
   const alive: boolean = marble.alive;
   const again: Body = world.body(marble.id);
   const same: boolean = again.id === marble.id;
@@ -63,6 +70,10 @@ export function mistakes(world: World, body: Body): void {
   new Body();
   // @ts-expect-error three numbers, not two
   body.setPosition(1, 2);
+  // @ts-expect-error a force is a vector, not three numbers
+  body.applyForce(0, 100, 0);
+  // @ts-expect-error inertia is read only: use setBody
+  body.inertia = [1, 1, 1];
   // @ts-expect-error transforms are read only
   world.transforms = new Float32Array(0);
   const options: BodyOptions = { shape: 'capsule', height: 2 };

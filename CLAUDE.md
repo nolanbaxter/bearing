@@ -37,6 +37,14 @@ These were made with Nolan and override the rules below where they differ.
 - **Storage shrinks by the 1/4 rule, not a timer**: when the slots in use fall to a quarter of
   capacity, shrink to the power of two growth would have picked. Amortized O(1), no thrash, and
   rule 81's "quiet period" isn't needed.
+- **Tumbling carries angular momentum, not a gyroscopic torque** (2026-10-12, step 2, measured
+  in a scratch comparison). Bullet's implicit gyroscopic step kept only 74% of a flipping box's
+  energy after 20 s; an implicit-midpoint version kept energy but let momentum wander 8% at
+  20 rad/s and blew up at 50. `tumble()` in `src/world.js` works out L, turns the body by the ω L
+  gives at the half step, and reads ω back from L: momentum exact to rounding, energy only ever
+  falls (bounded by |L|²/2I_min). `test/motion.test.js` holds the measured energy figures.
+- **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
+  they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks
   every message in `docs/API.md`'s Throws lines both ways; `test/docs.test.js` runs every example
   in the docs and README. Types are checked in CI only (`npx -p typescript@7`), as in Winding.

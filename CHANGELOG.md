@@ -26,3 +26,11 @@ All notable changes to Bearing are recorded here. The format follows
   function, and rotations from angles use Bearing's own sine and cosine.
 - Every error names its call, its option, what it must be and what it got, and an unknown option
   suggests the nearest real one.
+- Inertia from the shape and mass, about the body's own axes, or an `inertia` option to give your
+  own; `body.inertia` reads it.
+- Lopsided bodies tumble as real ones do: a box spun about its middle axis flips over. A step
+  carries angular momentum across exactly, so it is kept to rounding, and energy can only fall,
+  so a fast spin never blows up.
+- Forces and impulses: `body.applyForce(force, point)` and `body.applyTorque(torque)` act for the
+  next step; `body.applyImpulse(impulse, point)` and `body.applyAngularImpulse(impulse)` act at
+  once. Static and kinematic bodies are not moved by them.

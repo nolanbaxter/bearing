@@ -56,7 +56,7 @@ These hold everywhere, so one learned is one learned for good.
 
 Every call, setting and entry, A to Z by its name.
 
-**A** &nbsp; [`world.addBody()`](#world-addbody) · [`body.alive`](#body-alive) · [`body.angularVelocity`](#body-angularvelocity)
+**A** &nbsp; [`world.addBody()`](#world-addbody) · [`body.alive`](#body-alive) · [`body.angularVelocity`](#body-angularvelocity) · [`body.applyAngularImpulse()`](#body-applyangularimpulse) · [`body.applyForce()`](#body-applyforce) · [`body.applyImpulse()`](#body-applyimpulse) · [`body.applyTorque()`](#body-applytorque)
 
 **B** &nbsp; [`world.body()`](#world-body) · [`world.bodyCount`](#world-bodycount) · [`world.bodyOf()`](#world-bodyof)
 
@@ -64,7 +64,7 @@ Every call, setting and entry, A to Z by its name.
 
 **G** &nbsp; [`world.gravity`](#world-gravity)
 
-**I** &nbsp; [`body.id`](#body-id)
+**I** &nbsp; [`body.id`](#body-id) · [`body.inertia`](#body-inertia)
 
 **L** &nbsp; [Limits](#limits)
 
@@ -201,6 +201,7 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 | `height` | `2` | A capsule's full height, tip to tip, along its own y, in metres. At least twice `radius`. The defaults are Godot's capsule, about a person. |
 | `density` | `1000` | kg/m³; water's. The mass is the density times the shape's volume. |
 | `mass` | from `density` | kg. Give this instead of `density` for a body of a known weight. |
+| `inertia` | from the shape and mass | The moments of inertia `[x, y, z]` about the body's own axes, in kg·m²: how hard it is to turn about each. Worked out for a solid shape; give it for one that isn't, such as a hollow ball. `null` goes back to working it out. |
 | `position` | `[0, 0, 0]` | Where the body's centre is, in metres. |
 | `rotation` | `[0, 0, 0, 1]` | A quaternion `[x, y, z, w]`, normalized as it comes in. |
 | `velocity` | `[0, 0, 0]` | m/s. Not for a static body. |
@@ -208,7 +209,7 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 
 Returns: a [`Body`](#body).
 
-Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `addBody: shape must be 'box', 'sphere' or 'capsule', got …`; `addBody: a <shape> has no <option>`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a static body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
+Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, inertia, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `addBody: shape must be 'box', 'sphere' or 'capsule', got …`; `addBody: a <shape> has no <option>`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a static body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
 
 ```js
 const ground = world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
@@ -227,7 +228,7 @@ allowed. Bodies don't collide yet: collision arrives in a later version.
 Changes any of the options [`addBody`](#world-addbody) took, with the same names, defaults and
 checks, and leaves the rest as they are.
 
-Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `setBody: shape must be 'box', 'sphere' or 'capsule', got …`; `setBody: a <shape> has no <option>`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a static body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
+Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, inertia, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `setBody: shape must be 'box', 'sphere' or 'capsule', got …`; `setBody: a <shape> has no <option>`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a static body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
 
 ```js
 world.setBody(crate, { size: [2, 1, 1] });           // twice as long, and twice as heavy
@@ -236,7 +237,7 @@ world.setBody(crate, { shape: 'sphere', radius: 1 });
 ```
 
 Notes: everything that follows from a change follows at once: a new shape or size gives a new
-mass, unless the body was given a `mass`, which it keeps. A new shape starts from its own default
+mass and inertia, unless the body was given a `mass` or an `inertia`, which it keeps. A new shape starts from its own default
 sizes; the old shape's don't carry over, so a sphere of radius 1.5 made a capsule needs a `height`
 of at least 3. A body made static stops: its velocities become zero. A capsule's radius and height
 are checked together, so changing one must still fit the other. Setting `position` or `rotation`
@@ -249,10 +250,10 @@ A copy of the body's options as they are now, in the form [`addBody`](#world-add
 `world.addBody(world.bodyOf(body))` makes a copy of it. Changing the result changes nothing; pass
 it to [`setBody`](#world-setbody) for that.
 
-Returns: `{ type, shape, …sizes, mass or density, position, rotation, velocity, angularVelocity }`.
+Returns: `{ type, shape, …sizes, mass or density, inertia, position, rotation, velocity, angularVelocity }`.
 The sizes are the shape's own: `size` for a box, `radius` for a sphere, `radius` and `height` for a
-capsule. `mass` if the body was given one, `density` if not. A static body has no `velocity` or
-`angularVelocity`.
+capsule. `mass` if the body was given one, `density` if not, and `inertia` only if it was given one. A
+static body has no `velocity` or `angularVelocity`.
 
 Throws: `bodyOf: this world was destroyed`; `bodyOf: body must be a Body, got …`; `bodyOf: that body belongs to another world`; `bodyOf: this body was removed`.
 
@@ -297,7 +298,9 @@ console.log(again.id === crate.id);   // true
 
 Moves the world on by `dt` seconds, exactly: there is no hidden accumulator and no substepping, so
 call it from your loop's fixed update, once per step. A dynamic body is pulled by gravity and
-moves at its velocity; a kinematic body moves at its velocity; a static body stays put.
+moves at its velocity and turns at its angular velocity, after any forces and torques applied
+since the last step have acted; a kinematic body moves and turns as its velocities say; a static
+body stays put.
 
 Throws: `step: this world was destroyed`; `step: dt must be a positive number of seconds, got …`.
 
@@ -310,8 +313,16 @@ function update(dt) {   // called at a fixed rate, such as 60 times a second
 Notes: the integration is semi-implicit Euler, velocity first and position from the new velocity.
 It keeps orbits and pendulums from gaining energy the way plain Euler does, at the same cost.
 Before moving anything, a step copies [`transforms`](#world-transforms) into
-[`previous`](#world-previous). A world with no bodies costs almost nothing to step. Bodies don't
-collide yet.
+[`previous`](#world-previous). A world with no bodies costs almost nothing to step, and a step with
+no forces applied doesn't look for any. Bodies don't collide yet.
+
+A lopsided body turning freely tumbles as a real one does: a book spun about its middle axis
+flips over, and spun about its longest or shortest it doesn't. What a step carries across exactly
+is the body's angular momentum, so a tumbling body keeps it to rounding. Its energy can drift
+down a little where the real motion keeps it all: measured over 120 s at 60 Hz, a 1 × 2 × 3 m box
+flipping at 5 rad/s keeps 99.96% of it, at 20 rad/s 94%, and at 50 rad/s, most of a radian a
+step, 89%. It never gains energy, so it never blows up. A sphere or a cube turns at a constant
+angular velocity, exactly.
 
 <a id="world-destroy"></a>
 ### `world.destroy()`
@@ -403,6 +414,23 @@ console.log(ball.mass);   // 523.6 for a 0.5 m ball of water
 
 Notes: a static or kinematic body acts as if it were infinitely heavy. Its mass is kept, and used
 if it is made dynamic.
+
+<a id="body-inertia"></a>
+### `body.inertia` → `[x, y, z]`
+
+The body's moments of inertia about its own x, y and z axes, in kg·m², as a frozen copy: how hard
+it is to turn about each. Worked out from the shape and mass, or the `inertia` it was given. Read
+only; change it with [`setBody`](#world-setbody).
+
+Throws: `inertia: this world was destroyed`; `inertia: this body was removed`; `body.inertia is read only; use setBody(body, { inertia })`.
+
+```js
+const [ix, iy, iz] = crate.inertia;   // 166.7 each, for a 1 m box of water
+```
+
+Notes: a box w × h × d of mass m has m (h² + d²) / 12 about x, and the same pattern about y and z;
+a sphere has 2/5 m r² about every axis; a capsule, a cylinder with two hemispheres, has the sum of
+its parts about its centre.
 
 <a id="body-position"></a>
 ### `body.position` → `[x, y, z]`
@@ -541,6 +569,72 @@ Throws: `setAngularVelocity: this world was destroyed`; `setAngularVelocity: thi
 ```js
 crate.setAngularVelocity(0, Math.PI, 0);   // half a turn a second about Y
 ```
+
+<a id="body-applyforce"></a>
+### `body.applyForce(force, point)` → `Body`
+
+Pushes the body with `force`, in newtons, for the next [`step`](#world-step), after which it is
+cleared. Applied at `point`, in world space and metres, it turns the body too; left out, it acts
+through the body's centre. Several forces before one step add up.
+
+Throws: `applyForce: this world was destroyed`; `applyForce: this body was removed`; `applyForce: force must be 3 finite numbers, got …`; `applyForce: point must be 3 finite numbers, got …`.
+
+```js
+function update(dt) {
+  crate.applyForce([0, 15000, 0]);   // a steady lift: apply it every step
+  world.step(dt);
+}
+```
+
+Notes: a force lasts one step, so a steady push is applied every step, before each
+[`step`](#world-step); nothing builds up between steps out of sight. Static and kinematic bodies act
+as if infinitely heavy, so forces don't move them; the arguments are still checked. Forces are in
+world space, whichever way the body is turned.
+
+<a id="body-applytorque"></a>
+### `body.applyTorque(torque)` → `Body`
+
+Twists the body with `torque`, in newton-metres about each world axis, for the next
+[`step`](#world-step), after which it is cleared.
+
+Throws: `applyTorque: this world was destroyed`; `applyTorque: this body was removed`; `applyTorque: torque must be 3 finite numbers, got …`.
+
+```js
+crate.applyTorque([0, 200, 0]);   // spin it up about Y, this step
+```
+
+Notes: as [`applyForce`](#body-applyforce): one step, adding up, nothing for a static or kinematic
+body.
+
+<a id="body-applyimpulse"></a>
+### `body.applyImpulse(impulse, point)` → `Body`
+
+Changes the body's velocity at once, by `impulse` in newton-seconds divided by its mass: a kick, a
+hit, a jump. Applied at `point`, in world space and metres, it changes the angular velocity too;
+left out, it acts through the body's centre.
+
+Throws: `applyImpulse: this world was destroyed`; `applyImpulse: this body was removed`; `applyImpulse: impulse must be 3 finite numbers, got …`; `applyImpulse: point must be 3 finite numbers, got …`.
+
+```js
+crate.applyImpulse([0, 0, -500], [2.4, 1, 0]);   // kicked near one edge: it slides and swings
+```
+
+Notes: unlike a force, it doesn't wait for a step: [`velocity`](#body-velocity) reads the change
+straight away. Nothing for a static or kinematic body.
+
+<a id="body-applyangularimpulse"></a>
+### `body.applyAngularImpulse(impulse)` → `Body`
+
+Changes the body's angular velocity at once, by `impulse` in newton-metre-seconds about each
+world axis, through the body's inertia.
+
+Throws: `applyAngularImpulse: this world was destroyed`; `applyAngularImpulse: this body was removed`; `applyAngularImpulse: impulse must be 3 finite numbers, got …`.
+
+```js
+ball.applyAngularImpulse([0, 50, 0]);   // set it spinning about Y
+```
+
+Notes: nothing for a static or kinematic body.
 
 <a id="body-destroy"></a>
 ### `body.destroy()`

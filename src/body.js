@@ -43,6 +43,10 @@ export class Body {
   get mass() { return this.#world._massOf('mass', this.#id); }
   set mass(_) { readOnly('body.mass', "setBody(body, { mass })"); }
 
+  /** kg·m² about the body's own x, y and z axes, a frozen copy. */
+  get inertia() { return this.#world._vector('inertia', this.#id, this.#world._inertia, 3); }
+  set inertia(_) { readOnly('body.inertia', 'setBody(body, { inertia })'); }
+
   /** m, a frozen copy. */
   get position() { return this.#world._vector('position', this.#id, this.#world._position, 3); }
   set position(_) { readOnly('body.position', 'setPosition(x, y, z)'); }
@@ -99,6 +103,33 @@ export class Body {
   /** rad/s about each world axis. */
   setAngularVelocity(x, y, z) {
     this.#world._setVelocity('setAngularVelocity', this.#id, 'angularVelocity', x, y, z);
+    return this;
+  }
+
+  /**
+   * A force in N, world space, acting for the next step and then cleared.
+   * Off the centre, at `point` (world space, m), it turns the body too.
+   */
+  applyForce(force, point) {
+    this.#world._applyForce('applyForce', this.#id, force, point);
+    return this;
+  }
+
+  /** A torque in N·m, world space, acting for the next step and then cleared. */
+  applyTorque(torque) {
+    this.#world._applyTorque('applyTorque', this.#id, torque);
+    return this;
+  }
+
+  /** An impulse in N·s, world space, changing the velocity at once. Off the centre, at `point`, it turns the body too. */
+  applyImpulse(impulse, point) {
+    this.#world._applyImpulse('applyImpulse', this.#id, impulse, point);
+    return this;
+  }
+
+  /** An angular impulse in N·m·s, world space, changing the angular velocity at once. */
+  applyAngularImpulse(impulse) {
+    this.#world._applyAngularImpulse('applyAngularImpulse', this.#id, impulse);
     return this;
   }
 
