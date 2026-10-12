@@ -40,5 +40,8 @@
   ],
   "engines": {
     "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test/world.test.js && node test/ids.test.js && node test/math.test.js && node test/errors.test.js && node test/docs.test.js && node --expose-gc test/soak.test.js"
   }
 }

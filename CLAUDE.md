@@ -20,10 +20,26 @@ These were made with Nolan and override the rules below where they differ.
   `Math.sqrt`, `abs`, `min`, `max`, `floor`, `ceil`, `round`, `sign`, `trunc` and `fround` give
   the same bits on every CPU and engine. The functions the spec calls *implementation-approximated*
   do not: `Math.sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `exp`, `expm1`, `log` and
-  family, `pow`, `cbrt`, `hypot`, the hyperbolics, and the `**` operator. **Nothing reachable from
-  `world.step()` may call them**; where an angle is needed, Bearing uses its own versions built
-  from the exact operations. A test enforces this. Iteration order must not depend on anything
-  but the inputs (no `Math.random`, no sort with an inconsistent comparator).
+  family, `pow`, `cbrt`, `hypot`, the hyperbolics, and the `**` operator. **Nothing in `src/` may
+  call them** — not only the step: a setter like `setAxisAngle` writes state too, so it has to be
+  exact as well. Where an angle is needed, use `sin`/`cos` from `src/core/math.js` (fdlibm's
+  method, exact operations only, within 1 ulp). `test/math.test.js` enforces this. Iteration
+  order must not depend on anything but the inputs (no `Math.random`, no sort with an
+  inconsistent comparator).
+- **Body state is Float64Array columns; only `transforms`/`previous` are Float32Array**
+  (2026-10-12, measured by `bench/storage.cjs`). Float32 state was 34–37% slower at 1k, 8k and
+  64k bodies on the i7-1260P (conversion on every read and write), and columns, an interleaved
+  record and a hot/cold split were within 2%. This overrides the "Float32Array columns" in rules
+  17 and 75. Re-measure if the solver's access pattern changes the picture.
+- **Ids are 53-bit**: `generation * 2^24 + slot`, 29 bits of generation, so a slot never
+  retires in practice and the soak test's slot count can return (Winding's 8-bit generation
+  can't). See `src/core/slots.js`.
+- **Storage shrinks by the 1/4 rule, not a timer**: when the slots in use fall to a quarter of
+  capacity, shrink to the power of two growth would have picked. Amortized O(1), no thrash, and
+  rule 81's "quiet period" isn't needed.
+- **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks
+  every message in `docs/API.md`'s Throws lines both ways; `test/docs.test.js` runs every example
+  in the docs and README. Types are checked in CI only (`npx -p typescript@7`), as in Winding.
 - **GitHub: Nolan's personal account only** (2026-10-12). The repo is `nolanbaxter/bearing`,
   private until Nolan says otherwise. Commits are authored as
   `LmnTrtl <294360573+nolanbaxter@users.noreply.github.com>` (set in this repo's git config), and

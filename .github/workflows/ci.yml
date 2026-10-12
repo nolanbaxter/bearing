@@ -1,0 +1,38 @@
+# Every test on every push, on each Node Bearing supports.
+#
+# The suite is a few seconds, so everything runs every time. Winding runs only
+# the suites a change reaches; that is worth copying once this is big enough
+# for the difference to matter (rule 95), and not before.
+#
+# No install step: there are no dependencies -- nothing to cache, nothing to
+# audit, nothing to go stale between a green run and a red one.
+name: CI
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+
+  types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      # TypeScript is fetched for this step alone; the package still depends on nothing.
+      - run: npx -y -p typescript@7 tsc --noEmit --strict --target es2022 --module nodenext --lib es2022 test/types.ts
