@@ -1,0 +1,21 @@
+# There are no dependencies and no build step, so most of this is editor and OS
+# droppings rather than artifacts.
+
+node_modules/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Logs and scratch
+*.log
+npm-debug.log*
+/tmp/
+*.bak
+*.orig
+
+# Claude Code's per-machine settings. CLAUDE.md, the rules, is committed.
+.claude/settings.local.json

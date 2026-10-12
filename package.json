@@ -1,0 +1,44 @@
+{
+  "name": "bearing-physics",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A physics engine in plain JavaScript, for any renderer. No dependencies, no build step.",
+  "license": "MIT",
+  "author": "Nolan Baxter",
+  "homepage": "https://github.com/nolanbaxter/bearing#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nolanbaxter/bearing.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nolanbaxter/bearing/issues"
+  },
+  "keywords": [
+    "physics",
+    "physics-engine",
+    "rigid-body",
+    "collision",
+    "collision-detection",
+    "raycast",
+    "deterministic",
+    "gamedev",
+    "3d"
+  ],
+  "type": "module",
+  "main": "./src/bearing.js",
+  "types": "./src/bearing.d.ts",
+  "exports": {
+    ".": "./src/bearing.js",
+    "./*": "./src/*"
+  },
+  "unpkg": "./src/bearing.js",
+  "jsdelivr": "./src/bearing.js",
+  "sideEffects": false,
+  "files": [
+    "src",
+    "docs/API.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}
