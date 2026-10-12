@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bearing storage A/B</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, Consolas, monospace; margin: 16px; background: #fff; color: #111; }
+  @media (prefers-color-scheme: dark) { body { background: #111; color: #ddd; } }
+</style>
+<!-- Open as a file. The script is classic, not a module, because browsers refuse modules over file://. -->
+<script src="storage.cjs"></script>
+<pre id="out">Running. It takes about a minute, and the page won't respond until it's done.
+</pre>
+<script>
+  const out = document.getElementById('out');
+  // Let the message paint before the synchronous run takes the thread.
+  setTimeout(() => {
+    out.textContent = '';
+    storageBench.run((line) => { out.textContent += line + '\n'; });
+  }, 100);
+</script>
