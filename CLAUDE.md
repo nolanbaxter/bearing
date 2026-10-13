@@ -58,7 +58,13 @@ These were made with Nolan and override the rules below where they differ.
   damping ratio 10. A manifold's normal points are swept once per point (four for a box face),
   which is what stops a flat-landing box tipping and sliding. Every contact tolerance is
   `PIXEL` (1/200) of the smaller body's thinnest size. `world.substeps` is the one public knob.
-  Contacts are paired O(n²) until milestone 5 (marked `ponytail:` in `src/contact.js`).
+  Pairs come from the broadphase (below).
+- **The broadphase is a dynamic AABB tree** (2026-10-13, milestone 5, measured in
+  `bench/broadphase.js` on recorded motion against sweep and prune and sort and sweep). Static
+  bodies in their own tree; fat boxes of `FAT` (1/4 of the thinnest size) around and `AHEAD` (16
+  steps of velocity) ahead; a persistent pair list (`src/pairs.js`) holding warm-start impulses.
+  Layers and masks are 32 bits, and negative numbers (`~MASK`, `1 << 31`) are accepted as the same
+  bits (Nolan, 2026-10-13). Re-run the bench's default after any change to the broadphase.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

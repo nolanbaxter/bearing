@@ -177,7 +177,7 @@ itself, which reads and writes each body's velocity per point and multiplies by 
 inertia on every push. Box2D keeps a pair's velocities in locals and precomputes the angular parts
 once a step; milestone 16 measures doing the same.
 
-**5. Broadphase and filtering ⬜**
+**5. Broadphase and filtering ✅** *(approved and done 2026-10-13; the Ryzen run is still to do)*
 *Concepts:* bounding volumes; dynamic AABB trees; sweep-and-prune; pair caches; collision filtering with bit masks.
 A dynamic AABB tree and sweep-and-prune, both built and timed on 1,000 and 10,000 boxes; the
 better one kept. Pairs found incrementally, with no world bounds. Collision layers and masks: a
@@ -185,6 +185,26 @@ better one kept. Pairs found incrementally, with no world bounds. Collision laye
 *(proposal)*.
 *Done when:* 10,000 boxes pair up in a measured time on both machines; filtering is tested both
 ways; the tree is ready for queries.
+*Result:* `src/tree.js`, `src/broadphase.js` and `src/pairs.js`, held by
+`test/broadphase.test.js`: on a scene of every shape and type, with bodies added, removed,
+teleported and refiltered as it runs, the pairs a step touches are exactly those testing every pair
+finds, and breaking the broadphase three ways each fails it. The choice was measured in
+`bench/broadphase.js` on recorded Bearing motion, replayed into each candidate alone, so later
+changes to the solver can't tilt it: a dynamic AABB tree (static bodies in a tree of their own)
+against three-axis incremental sweep and prune and a one-axis sort and sweep, over a dense pile,
+fast sparse fliers, standing towers and a half-static level. The tree won every scene at 10,000
+bodies on the i7-1260P (pile 10.9 ms a step against 22.1 and 31.9; at rest 0.27 against 4.9 and
+6.3) and answered box queries 1.4 to 63 times faster. What made it win was found by the bench: a
+moving tree's cost is re-filing, so each fat box reaches 16 steps ahead along the body's velocity
+(`AHEAD`) as well as a quarter of its size around it (`FAT`); without the reach ahead it only tied
+sweep in the pile and was nearly 9 times slower in the level. Layers and masks: 32 bits each,
+negative numbers taken as the same bits (Nolan's OK), tested both ways and changed mid-scene. The
+10,000-body soak steps again, and tree nodes and pairs come back each round. Found and fixed on
+the way: a body re-filed by `setBody` was listed twice.
+*Cost to watch:* in a dense pile about one body in 25 is still re-filed each step (415 of
+10,000), at a few microseconds each: a remove, an insert and a query; milestone 16 measures growing the leaf and
+refitting instead. Bearing's whole step for 10,000 bodies in a pile is about 480 ms, nearly all of
+it the solver: the broadphase is about 2% of it today.
 
 **6. Islands and sleeping ⬜**
 *Concepts:* islands as connected components (union-find); sleep thresholds; waking.

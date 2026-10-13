@@ -15,6 +15,8 @@ export function examples(): void {
 
   const ground = world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0], friction: 0.8 });
   world.addBody({ shape: 'sphere', restitution: 0.7, damping: 0.1, angularDamping: 0.2, gravityScale: 0.5 });
+  const debris = world.addBody({ layers: 1 << 2, mask: ~(1 << 1) });
+  const bits: number = world.bodyOf(debris).layers & world.bodyOf(debris).mask;
   world.substeps = 16;
   const substeps: number = new World({ substeps: 4 }).substeps;
   const bounce: number = world.bodyOf(ground).restitution;

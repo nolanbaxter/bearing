@@ -2,9 +2,10 @@
 //
 // A step's contact work, in order:
 //
-//   find      every pair that might touch is handed to the narrowphase
-//             (collide.js), and each pair that does, or will within a step,
-//             becomes a manifold: a normal and up to four points
+//   narrow    every pair in the pair list (pairs.js, kept by the broadphase)
+//             is handed to the narrowphase (collide.js), and each pair that
+//             touches, or will within a step, becomes a manifold: a normal
+//             and up to four points
 //   prepare   each point gets what the solver needs and doesn't change during
 //             the step: where it is on each body, how hard it is to push
 //             (its effective mass), and how fast the bodies met there
@@ -24,9 +25,10 @@
 //
 // WARM STARTING. Each point starts the step with the impulse it ended the
 // last one with, matched by the narrowphase's feature ids. A resting stack
-// needs the same impulses step after step, so it starts at the answer. Pairs
-// are found in slot order every step, so last step's manifolds are matched to
-// this step's by walking both lists together, with no hash table.
+// needs the same impulses step after step, so it starts at the answer. The
+// impulses are kept on the pair, which lasts as long as the two bodies' fat
+// boxes overlap, so nothing has to be looked up: store() writes them after
+// the solve, and the next step's carry() reads them back.
 
 import { collide, Shape, Manifold, SPHERE, CAPSULE, BOX as BOX_KIND } from './collide.js';
 import { rotate } from './core/math.js';
@@ -61,7 +63,7 @@ export class Contacts {
     const m = capacity, p = capacity * P;
     const grow = (name, Type, n) => { this[name] = this[name] ? resized(this[name], n) : new Type(n); };
     grow('a', Int32Array, m); grow('b', Int32Array, m);
-    grow('idA', Float64Array, m); grow('idB', Float64Array, m);
+    grow('pair', Int32Array, m);   // which pair in the pair list this manifold is
     grow('points', Uint8Array, m);
     grow('normal', Float64Array, 3 * m); grow('t1', Float64Array, 3 * m); grow('t2', Float64Array, 3 * m);
     grow('friction', Float64Array, m); grow('restitution', Float64Array, m); grow('tolerance', Float64Array, m);
@@ -109,74 +111,104 @@ const manifold = new Manifold();
 const v3 = new Float64Array(3);
 
 /**
- * Fills `next` with this step's manifolds, carrying impulses over from `last`
- * (last step's, in the same slot order). `world` provides the columns; `dt` is
- * the whole step, which the speculative margin covers.
- *
- * ponytail: every pair of bodies is tried, O(n²) bounding-box checks a step.
- * Fine for the hundreds the tests and demos use; milestone 5's broadphase
- * replaces this loop, and its pairs come in its own order, so the walk below
- * that matches last step's manifolds must then become a lookup.
+ * Fills `next` with this step's manifolds, one for each pair in the pair
+ * list whose shapes touch, or will within the step. A pair that no longer
+ * holds (a body gone, filtered apart, or fat boxes parted) is dropped from
+ * the list here. Each manifold starts from the impulses its pair remembers.
  */
-export function find(world, dt, last, next) {
-  const n = world._slots.top, state = world._slots.state, type = world._type;
+export function narrow(world, pairs, broadphase, next) {
   const box = world._box, reach = world._motion;
   next.count = 0;
-  let walk = 0;
-  for (let a = 0; a < n; a++) {
-    if (state[a] !== 1) continue;
-    const a6 = a * 6;
-    for (let b = a + 1; b < n; b++) {
-      if (state[b] !== 1) continue;
-      // Neither moves by contact: nothing to solve. Static and kinematic
-      // bodies only ever push.
-      if (type[a] !== DYNAMIC && type[b] !== DYNAMIC) continue;
-      const b6 = b * 6;
-      if (box[a6] > box[b6 + 3] || box[b6] > box[a6 + 3]
-        || box[a6 + 1] > box[b6 + 4] || box[b6 + 1] > box[a6 + 4]
-        || box[a6 + 2] > box[b6 + 5] || box[b6 + 2] > box[a6 + 5]) continue;
-
-      load(world, a, shapeA);
-      load(world, b, shapeB);
-      const tolerance = Math.min(world._size[a], world._size[b]) * PIXEL;
-      const margin = reach[a] + reach[b] + tolerance;
-      if (collide(shapeA, shapeB, margin, tolerance, manifold) === 0) continue;
-
-      const m = next.count++;
-      next.ensure(next.count);
-      next.a[m] = a; next.b[m] = b;
-      next.idA[m] = world._slots.id(a); next.idB[m] = world._slots.id(b);
-      next.points[m] = manifold.count;
-      for (let k = 0; k < 3; k++) next.normal[3 * m + k] = manifold.normal[k];
-      // Friction mixes as a geometric mean, so ice is slippery against
-      // anything; restitution takes the larger, so a bouncy ball bounces off
-      // anything. Box2D's rules.
-      next.friction[m] = Math.sqrt(world._friction[a] * world._friction[b]);
-      next.restitution[m] = Math.max(world._restitution[a], world._restitution[b]);
-      next.tolerance[m] = tolerance;
-      for (let k = 0; k < manifold.count; k++) {
-        const i = m * P + k;
-        next.pid[i] = manifold.ids[k];
-        next.separation[i] = manifold.separations[k];
-        for (let c = 0; c < 3; c++) next.point[3 * i + c] = manifold.points[3 * k + c];
-        next.normalImpulse[i] = 0; next.tangentImpulse1[i] = 0; next.tangentImpulse2[i] = 0;
-      }
-      basis(next, m);
-
-      // Last step's manifold for this pair, if any: both lists are in slot
-      // order, so it is at or after where the walk stopped.
-      while (walk < last.count && (last.a[walk] < a || (last.a[walk] === a && last.b[walk] < b))) walk++;
-      if (walk < last.count && last.a[walk] === a && last.b[walk] === b
-          && last.idA[walk] === next.idA[m] && last.idB[walk] === next.idB[m]) {
-        carry(last, walk, next, m);
-      }
+  for (let p = 0; p < pairs.count;) {
+    if (!pairs.holds(p, broadphase)) {
+      pairs.remove(p);   // the last pair moves into p, so p is looked at again
+      continue;
     }
+    const a = pairs.a[p], b = pairs.b[p], a6 = a * 6, b6 = b * 6;
+    // Fat boxes overlap, but their actual boxes, grown only by this step's
+    // motion, may not: nothing can touch this step, and nothing is carried.
+    if (box[a6] > box[b6 + 3] || box[b6] > box[a6 + 3] || box[a6 + 1] > box[b6 + 4]
+      || box[b6 + 1] > box[a6 + 4] || box[a6 + 2] > box[b6 + 5] || box[b6 + 2] > box[a6 + 5]) {
+      pairs.points[p] = 0;
+      p++;
+      continue;
+    }
+    load(world, a, shapeA);
+    load(world, b, shapeB);
+    const tolerance = Math.min(world._size[a], world._size[b]) * PIXEL;
+    const margin = reach[a] + reach[b] + tolerance;
+    if (collide(shapeA, shapeB, margin, tolerance, manifold) === 0) {
+      pairs.points[p] = 0;
+      p++;
+      continue;
+    }
+
+    const m = next.count++;
+    next.ensure(next.count);
+    next.a[m] = a; next.b[m] = b; next.pair[m] = p;
+    next.points[m] = manifold.count;
+    for (let k = 0; k < 3; k++) next.normal[3 * m + k] = manifold.normal[k];
+    // Friction mixes as a geometric mean, so ice is slippery against
+    // anything; restitution takes the larger, so a bouncy ball bounces off
+    // anything. Box2D's rules.
+    next.friction[m] = Math.sqrt(world._friction[a] * world._friction[b]);
+    next.restitution[m] = Math.max(world._restitution[a], world._restitution[b]);
+    next.tolerance[m] = tolerance;
+    for (let k = 0; k < manifold.count; k++) {
+      const i = m * P + k;
+      next.pid[i] = manifold.ids[k];
+      next.separation[i] = manifold.separations[k];
+      for (let c = 0; c < 3; c++) next.point[3 * i + c] = manifold.points[3 * k + c];
+      next.normalImpulse[i] = 0; next.tangentImpulse1[i] = 0; next.tangentImpulse2[i] = 0;
+    }
+    basis(next, m);
+    carry(pairs, p, next, m);
+    p++;
   }
   return next.count;
 }
 
+/**
+ * The pair's remembered impulses onto this step's points with the same
+ * feature id. Friction is remembered as a vector in world space and laid onto
+ * this step's tangents, since the tangents turn with the normal from step to step.
+ */
+function carry(pairs, p, next, m) {
+  const remembered = pairs.points[p];
+  if (remembered === 0) return;
+  for (let k = 0; k < next.points[m]; k++) {
+    const i = m * P + k, id = next.pid[i];
+    for (let j = 0; j < remembered; j++) {
+      const o = p * P + j;
+      if (pairs.pid[o] !== id) continue;
+      next.normalImpulse[i] = pairs.normalImpulse[o];
+      const fx = pairs.friction[3 * o], fy = pairs.friction[3 * o + 1], fz = pairs.friction[3 * o + 2];
+      next.tangentImpulse1[i] = fx * next.t1[3 * m] + fy * next.t1[3 * m + 1] + fz * next.t1[3 * m + 2];
+      next.tangentImpulse2[i] = fx * next.t2[3 * m] + fy * next.t2[3 * m + 1] + fz * next.t2[3 * m + 2];
+      break;
+    }
+  }
+}
+
+/** After the solve: each pair remembers its points' ids and impulses, for the next step. */
+export function store(pairs, c) {
+  for (let m = 0; m < c.count; m++) {
+    const p = c.pair[m], count = c.points[m];
+    pairs.points[p] = count;
+    for (let k = 0; k < count; k++) {
+      const i = m * P + k, o = p * P + k, m3 = 3 * m;
+      pairs.pid[o] = c.pid[i];
+      pairs.normalImpulse[o] = c.normalImpulse[i];
+      const l1 = c.tangentImpulse1[i], l2 = c.tangentImpulse2[i];
+      pairs.friction[3 * o] = c.t1[m3] * l1 + c.t2[m3] * l2;
+      pairs.friction[3 * o + 1] = c.t1[m3 + 1] * l1 + c.t2[m3 + 1] * l2;
+      pairs.friction[3 * o + 2] = c.t1[m3 + 2] * l1 + c.t2[m3 + 2] * l2;
+    }
+  }
+}
+
 /** A body's shape, placed, into s. */
-function load(world, slot, s) {
+export function load(world, slot, s) {
   const shape = world._shape[slot], d = world._dims, s3 = slot * 3;
   if (shape === BOX) {
     s.kind = BOX_KIND;
@@ -210,29 +242,6 @@ function basis(c, m) {
   c.t2[3 * m] = ny * tz - nz * ty; c.t2[3 * m + 1] = nz * tx - nx * tz; c.t2[3 * m + 2] = nx * ty - ny * tx;
 }
 
-/**
- * Last step's impulses onto this step's points with the same feature id.
- * Friction is carried as a vector in world space and laid onto this step's
- * tangents, since the tangents turn with the normal from step to step.
- */
-function carry(last, lm, next, m) {
-  for (let k = 0; k < next.points[m]; k++) {
-    const i = m * P + k, id = next.pid[i];
-    for (let j = 0; j < last.points[lm]; j++) {
-      const o = lm * P + j;
-      if (last.pid[o] !== id) continue;
-      next.normalImpulse[i] = last.normalImpulse[o];
-      let fx = 0, fy = 0, fz = 0;
-      for (let c = 0; c < 3; c++) {
-        const f = last.t1[3 * lm + c] * last.tangentImpulse1[o] + last.t2[3 * lm + c] * last.tangentImpulse2[o];
-        if (c === 0) fx = f; else if (c === 1) fy = f; else fz = f;
-      }
-      next.tangentImpulse1[i] = fx * next.t1[3 * m] + fy * next.t1[3 * m + 1] + fz * next.t1[3 * m + 2];
-      next.tangentImpulse2[i] = fx * next.t2[3 * m] + fy * next.t2[3 * m + 1] + fz * next.t2[3 * m + 2];
-      break;
-    }
-  }
-}
 
 // ---- prepare ----
 

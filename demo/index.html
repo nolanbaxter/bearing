@@ -135,6 +135,33 @@
         }
       },
     },
+    rain: {
+      label: 'Rain: 2,000 balls',
+      look: { target: [0, 2, 0], distance: 60, pitch: 0.45 },
+      build(world) {
+        // Spread over the whole floor and dropped from different heights:
+        // thousands of bodies, but each only ever near a few, which is what
+        // the broadphase is for.
+        for (let n = 0; n < 2000; n++) {
+          const x = Math.sin(n * 12.9898) * 27, z = Math.cos(n * 78.233) * 27, y = 2 + (n % 40) * 0.6;
+          world.addBody({ shape: 'sphere', radius: 0.3, restitution: 0.4, position: [x, y, z], color: [SKY, LEAF, SUN][n % 3] });
+        }
+      },
+    },
+    layers: {
+      label: 'Layers: two colours',
+      look: { target: [0, 3, 0], distance: 20, pitch: 0.3 },
+      build(world) {
+        // Red and blue are on layers 2 and 3, and each one's mask leaves out
+        // the other's layer: they fall through each other, but land on the
+        // floor (layer 1) and stack on their own colour.
+        const RED = 1 << 1, BLUE = 1 << 2;
+        for (let k = 0; k < 8; k++) {
+          world.addBody({ position: [-0.25, 1 + k * 1.6, 0], layers: RED, mask: ~BLUE, color: CLAY });
+          world.addBody({ position: [0.25, 1.8 + k * 1.6, 0], layers: BLUE, mask: ~RED, color: SKY });
+        }
+      },
+    },
   };
 
   try {

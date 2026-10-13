@@ -29,6 +29,8 @@ density unless you give one), no tolerances to tune, and nothing to size in adva
 - **Contacts**: exact contact points for every pair of shapes, friction that holds a box on a slope
   until it is steep enough to slide, bounces that settle, and stacks that stand. A 210-box pyramid
   stands for as long as you like on the defaults, within 1.5 mm of where it was built.
+- **Thousands of bodies**: only bodies whose boxes overlap are tested, and a body at rest costs
+  almost nothing. 32 collision layers, with a mask per body for what it collides with.
 - **Tolerances that scale**: every tolerance comes from the size of what touches, so a 1 cm marble
   and a 50 m building behave with nothing retuned. See [Contacts](docs/API.md#contacts).
 

@@ -46,3 +46,8 @@ All notable changes to Bearing are recorded here. The format follows
 - Every contact tolerance comes from the size of the bodies touching (a two-hundredth of the
   smaller one's thinnest size, about a pixel), so a 1 cm marble and a 50 m building both settle
   with nothing retuned.
+- Thousands of bodies: a broadphase finds which bodies might touch without testing every pair.
+  Bodies sit in a tree of boxes, and only a body that moves out of its box is looked up again, so
+  a pile at rest costs almost nothing to keep. No world bounds and nothing to size.
+- Body options `layers` and `mask`: 32 collision layers as bits. Two bodies collide when each one's
+  layers are in the other's mask; by default everything collides with everything.

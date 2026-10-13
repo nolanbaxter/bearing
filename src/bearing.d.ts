@@ -30,6 +30,10 @@ interface BodyCommon {
   angularDamping?: number;
   /** Multiplies the world's gravity for this body, default 1. */
   gravityScale?: number;
+  /** Which of 32 layers the body is in, as bits, default 1. Negative 32-bit numbers (`~x`, `1 << 31`) are taken as the same bits. */
+  layers?: number;
+  /** Which layers it collides with, as bits, default 0xffffffff (all). */
+  mask?: number;
   /** m, default [0, 0, 0]. */
   position?: Vec3;
   /** Quaternion [x, y, z, w], default [0, 0, 0, 1]. Normalized as it comes in. */
@@ -90,6 +94,10 @@ interface BodyInfoCommon {
   damping: number;
   angularDamping: number;
   gravityScale: number;
+  /** Unsigned, 0 to 4294967295. */
+  layers: number;
+  /** Unsigned, 0 to 4294967295. */
+  mask: number;
   position: [number, number, number];
   rotation: [number, number, number, number];
   /** Absent for a static body. */

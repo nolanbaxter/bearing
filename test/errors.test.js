@@ -44,7 +44,7 @@ const gone = () => {
   return { world, body };
 };
 
-const OPTIONS = 'type, shape, size, radius, height, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, position, rotation, velocity, angularVelocity';
+const OPTIONS = 'type, shape, size, radius, height, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity';
 
 /** [entry, the call, the exact message]. */
 const cases = [
@@ -94,6 +94,8 @@ const cases = [
       [e, run({ damping: NaN }), `${call}: damping must be 0 or more, got NaN`],
       [e, run({ angularDamping: Infinity }), `${call}: angularDamping must be 0 or more, got Infinity`],
       [e, run({ gravityScale: '1' }), `${call}: gravityScale must be a finite number, got '1'`],
+      [e, run({ layers: 2 ** 32 }), `${call}: layers must be a whole number that fits in 32 bits, got 4294967296`],
+      [e, run({ mask: 0.5 }), `${call}: mask must be a whole number that fits in 32 bits, got 0.5`],
       [e, run({ inertia: [1, 0, 1] }), `${call}: inertia must be 3 positive numbers, or null to follow the shape, got 1,0,1`],
       [e, run({ position: { x: 1, y: 2, z: 3 } }), `${call}: position must be 3 finite numbers, got an object`],
       [e, run({ rotation: [0, 0, 0, 0] }), `${call}: rotation must be 4 finite numbers, not all zero, got 0,0,0,0`],

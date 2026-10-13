@@ -27,20 +27,32 @@ async function collect() {
 }
 const heap = () => process.memoryUsage().heapUsed + process.memoryUsage().arrayBuffers;
 
-// ponytail: the 10,000-body rounds don't step. The pair search is O(n²) until
-// milestone 5's broadphase, and these test storage, not contacts; the contact
-// soak below steps a colliding pile instead. Step these again with the broadphase.
+/** Everything the broadphase holds: tree nodes in use and allotted, and pairs listed. */
+const held = (world) => {
+  const [statics, moving] = world._broadphase.trees;
+  return {
+    nodes: statics.count + moving.count, treeCapacity: statics.capacity + moving.capacity,
+    pairs: world._pairs.count, pairCapacity: world._pairs.capacity,
+  };
+};
 
 await test('10,000 bodies added and removed 300 times: slots return, storage never drifts', async () => {
   const world = new World();
   const resident = [];
-  for (let i = 0; i < 100; i++) resident.push(world.addBody({ position: [3 * i, 0, 0] }));
+  // Floating, so they stay 3 m apart for the whole test and never pair.
+  for (let i = 0; i < 100; i++) resident.push(world.addBody({ position: [3 * i, 0, 0], gravityScale: 0 }));
   world.step(1 / 60);
   const start = { top: world._slots.top, count: world.bodyCount, capacity: world.transforms.length / 7 };
+  const startHeld = held(world);
   const burst = new Array(10000);
-  const after = [];
+  const after = [], treeAfter = [];
   for (let round = 0; round < 300; round++) {
-    for (let i = 0; i < burst.length; i++) burst[i] = world.addBody({ shape: 'sphere' });
+    // A grid 2 m apart, so the step finds no pairs among them, but files and
+    // queries all 10,000 in the broadphase's trees.
+    for (let i = 0; i < burst.length; i++) {
+      burst[i] = world.addBody({ shape: 'sphere', position: [(i % 100) * 2, 10 + Math.floor(i / 100) * 2, 5] });
+    }
+    world.step(1 / 60);
     // Oldest first, then newest first: the highest slot goes last, so storage
     // falls in one go, or first, so it falls a step at a time.
     if (round % 2) burst.reverse();
@@ -48,6 +60,12 @@ await test('10,000 bodies added and removed 300 times: slots return, storage nev
     assert.equal(world.bodyCount, start.count, `round ${round}: count`);
     assert.equal(world._slots.top, start.top, `round ${round}: slots in use`);
     after.push(world.transforms.length / 7);
+    world.step(1 / 60);
+    const now = held(world);
+    assert.equal(now.nodes, startHeld.nodes, `round ${round}: tree nodes kept`);
+    assert.equal(now.pairs, 0, `round ${round}: pairs kept`);
+    assert.equal(now.pairCapacity, startHeld.pairCapacity, `round ${round}: pair storage kept`);
+    treeAfter.push(now.treeCapacity);
   }
   // Removed all at once, storage comes back to exactly where it started.
   // Removed a step at a time, it stops shrinking inside the no-thrash band,
@@ -57,6 +75,9 @@ await test('10,000 bodies added and removed 300 times: slots return, storage nev
   for (let r = 0; r < after.length; r++) {
     assert.equal(after[r], after[r % 2], `round ${r}: storage drifted`);
     assert.ok(after[r] < 4 * start.top, `round ${r}: ${after[r]} slots of storage for ${start.top} in use`);
+    // The trees follow the same rule, each on its own.
+    assert.equal(treeAfter[r], treeAfter[r % 2], `round ${r}: tree storage drifted`);
+    assert.ok(treeAfter[r] <= 4 * startHeld.nodes + 32, `round ${r}: ${treeAfter[r]} tree nodes for ${startHeld.nodes} in use`);
   }
   for (const b of resident) assert.ok(b.alive);
 });
@@ -98,10 +119,11 @@ await test('a colliding pile built and cleared 50 times: contact storage and mem
     for (let s = 0; s < 10; s++) world.step(1 / 60);
     assert.ok(world._contacts.count > 100, `round ${round}: only ${world._contacts.count} contacts`);
     for (const b of pile) world.remove(b);
-    // Two steps, so both of the step's contact lists have been through a trim.
+    // One step finds every pair gone and trims what held them, down to the
+    // smallest size each keeps: 16 nodes a tree, 16 pairs.
     world.step(1 / 60);
-    world.step(1 / 60);
-    assert.equal(world._contacts.capacity + world._spare.capacity, 0, `round ${round}: contact storage kept`);
+    assert.equal(world._contacts.capacity, 0, `round ${round}: contact storage kept`);
+    assert.deepEqual(held(world), { nodes: 1, treeCapacity: 32, pairs: 0, pairCapacity: 16 }, `round ${round}: broadphase storage kept`);
   }
   await collect();
   const grown = heap() - before;

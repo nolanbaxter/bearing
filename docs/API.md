@@ -49,7 +49,7 @@ These hold everywhere, so one learned is one learned for good.
 <a id="contents"></a>
 ## Contents
 
-[World](#world-class) · [Body](#body) · [Contacts](#contacts) · [Determinism](#determinism) · [Limits](#limits)
+[World](#world-class) · [Body](#body) · [Contacts](#contacts) · [Layers and masks](#layers) · [Determinism](#determinism) · [Limits](#limits)
 
 <a id="index"></a>
 ## Index
@@ -68,7 +68,7 @@ Every call, setting and entry, A to Z by its name.
 
 **I** &nbsp; [`body.id`](#body-id) · [`body.inertia`](#body-inertia)
 
-**L** &nbsp; [Limits](#limits)
+**L** &nbsp; [Layers and masks](#layers) · [Limits](#limits)
 
 **M** &nbsp; [`body.mass`](#body-mass)
 
@@ -228,6 +228,8 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 | `damping` | `0` | Velocity lost per second, as air drag would take it, in 1/s. 0 is none. |
 | `angularDamping` | `0` | The same, for its spin, in 1/s. |
 | `gravityScale` | `1` | Multiplies the world's gravity, for this body: 0 floats, -1 rises. |
+| `layers` | `1` | Which of 32 layers the body is in, one bit each: the first layer only. See [Layers and masks](#layers). |
+| `mask` | `0xffffffff` | Which layers it collides with, one bit each: all of them. |
 | `position` | `[0, 0, 0]` | Where the body's centre is, in metres. |
 | `rotation` | `[0, 0, 0, 1]` | A quaternion `[x, y, z, w]`, normalized as it comes in. |
 | `velocity` | `[0, 0, 0]` | m/s. Not for a static body. |
@@ -235,7 +237,7 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 
 Returns: a [`Body`](#body).
 
-Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `addBody: shape must be 'box', 'sphere' or 'capsule', got …`; `addBody: a <shape> has no <option>`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `addBody: friction must be 0 or more, got …`; `addBody: restitution must be from 0 to 1, got …`; `addBody: damping must be 0 or more, got …`; `addBody: angularDamping must be 0 or more, got …`; `addBody: gravityScale must be a finite number, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a static body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
+Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `addBody: shape must be 'box', 'sphere' or 'capsule', got …`; `addBody: a <shape> has no <option>`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `addBody: friction must be 0 or more, got …`; `addBody: restitution must be from 0 to 1, got …`; `addBody: damping must be 0 or more, got …`; `addBody: angularDamping must be 0 or more, got …`; `addBody: gravityScale must be a finite number, got …`; `addBody: layers must be a whole number that fits in 32 bits, got …`; `addBody: mask must be a whole number that fits in 32 bits, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a static body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
 
 ```js
 const ground = world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
@@ -254,7 +256,7 @@ allowed. Bodies collide as soon as they are added; see [Contacts](#contacts).
 Changes any of the options [`addBody`](#world-addbody) took, with the same names, defaults and
 checks, and leaves the rest as they are.
 
-Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `setBody: shape must be 'box', 'sphere' or 'capsule', got …`; `setBody: a <shape> has no <option>`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `setBody: friction must be 0 or more, got …`; `setBody: restitution must be from 0 to 1, got …`; `setBody: damping must be 0 or more, got …`; `setBody: angularDamping must be 0 or more, got …`; `setBody: gravityScale must be a finite number, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a static body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
+Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `setBody: shape must be 'box', 'sphere' or 'capsule', got …`; `setBody: a <shape> has no <option>`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `setBody: friction must be 0 or more, got …`; `setBody: restitution must be from 0 to 1, got …`; `setBody: damping must be 0 or more, got …`; `setBody: angularDamping must be 0 or more, got …`; `setBody: gravityScale must be a finite number, got …`; `setBody: layers must be a whole number that fits in 32 bits, got …`; `setBody: mask must be a whole number that fits in 32 bits, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a static body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
 
 ```js
 world.setBody(crate, { size: [2, 1, 1] });           // twice as long, and twice as heavy
@@ -276,7 +278,8 @@ A copy of the body's options as they are now, in the form [`addBody`](#world-add
 `world.addBody(world.bodyOf(body))` makes a copy of it. Changing the result changes nothing; pass
 it to [`setBody`](#world-setbody) for that.
 
-Returns: `{ type, shape, …sizes, mass or density, inertia, friction, restitution, damping, angularDamping, gravityScale, position, rotation, velocity, angularVelocity }`.
+Returns: `{ type, shape, …sizes, mass or density, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity }`.
+`layers` and `mask` come back unsigned, from 0 to 4294967295, whichever way they were given.
 The sizes are the shape's own: `size` for a box, `radius` for a sphere, `radius` and `height` for a
 capsule. `mass` if the body was given one, `density` if not, and `inertia` only if it was given one. A
 static body has no `velocity` or `angularVelocity`.
@@ -341,7 +344,9 @@ still moves the world on by exactly `dt`. Each is semi-implicit Euler, velocity 
 from the new velocity, which keeps orbits and pendulums from gaining energy the way plain Euler
 does, at the same cost. Before moving anything, a step copies [`transforms`](#world-transforms)
 into [`previous`](#world-previous). A world with no bodies costs almost nothing to step; a step
-with no forces applied doesn't look for any, and one where nothing touches runs no contact solver.
+with no forces applied doesn't look for any, one where nothing touches runs no contact solver,
+and bodies that stay within their boxes from the step before aren't looked up again; see
+[Contacts](#contacts).
 
 A lopsided body turning freely tumbles as a real one does: a book spun about its middle axis
 flips over, and spun about its longest or shortest it doesn't. What a step carries across exactly
@@ -704,9 +709,34 @@ into each other, slide no more than friction allows, and bounce as much as their
 - **Contacts start before touching.** A pair close enough to meet within the step gets its contact
   early, so a falling box is stopped at the floor rather than sinking in and being pushed back out,
   and a fast body doesn't pass through a thin one between two steps.
+- **Only what can touch is looked at.** Each body sits in a tree of nested boxes, inside a box a
+  little bigger than itself and stretched a few steps ahead along its velocity. Only a body that
+  leaves its box is looked up again, and only bodies whose boxes overlap are tested in detail, so a
+  pile at rest costs almost nothing to keep, a body flying steadily is looked up every few steps
+  rather than every step, and a world of thousands of bodies spread apart costs about what each one
+  moving does.
 - **Bounces stop.** A contact bounces only when it meets faster than a bounce that would rise no
   higher than its tolerance, √(2 g tolerance): below that, a body settles instead of bouncing for
   ever on rounding.
+
+<a id="layers"></a>
+## Layers and masks
+
+Every body is in some of 32 layers, given as the bits of [`layers`](#world-addbody), and collides
+only with the layers in its [`mask`](#world-addbody). Two bodies collide when each one's layers are
+in the other's mask, so either one can refuse the other. By default every body is in the first
+layer and its mask has all 32, so everything collides with everything.
+
+```js
+const PLAYER = 1 << 1, DEBRIS = 1 << 2;
+world.addBody({ shape: 'capsule', layers: PLAYER });
+world.addBody({ size: [0.2, 0.2, 0.2], layers: DEBRIS, mask: ~PLAYER });   // passes through players
+```
+
+Notes: either form of a 32-bit number is taken, so `~PLAYER` and `1 << 31`, which JavaScript
+makes negative, work as written; [`bodyOf`](#world-bodyof) gives them back unsigned. A change
+with [`setBody`](#world-setbody) takes effect at the next step: contacts between bodies that may no
+longer collide end there, and bodies that now may collide start to.
 
 <a id="determinism"></a>
 ## Determinism

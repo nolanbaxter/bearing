@@ -28,8 +28,10 @@ import { rotate } from './core/math.js';
 import { Slots, resized, MAX_ID, MAX_SLOTS } from './core/slots.js';
 import { volume, inertia as shapeInertia } from './shapes.js';
 import {
-  Contacts, PIXEL, find, prepare, makeSoft, warmStart, solve, restitution,
+  Contacts, PIXEL, narrow, store, prepare, makeSoft, warmStart, solve, restitution,
 } from './contact.js';
+import { Broadphase } from './broadphase.js';
+import { Pairs } from './pairs.js';
 import { Body } from './body.js';
 
 const TYPES = ['dynamic', 'static', 'kinematic'];
@@ -65,7 +67,7 @@ const STIFFNESS = 1 / 8;
 const DAMPING_RATIO = 10;
 const BODY_OPTIONS = [
   'type', 'shape', 'size', 'radius', 'height', 'density', 'mass', 'inertia',
-  'friction', 'restitution', 'damping', 'angularDamping', 'gravityScale',
+  'friction', 'restitution', 'damping', 'angularDamping', 'gravityScale', 'layers', 'mask',
   'position', 'rotation', 'velocity', 'angularVelocity',
 ];
 
@@ -81,6 +83,9 @@ const DEFAULTS = Object.freeze({
   type: 'dynamic', shape: 'box', size: [1, 1, 1], radius: 0.5, height: 2,
   density: 1000, mass: 0, massGiven: false, inertia: [0, 0, 0], inertiaGiven: false,
   friction: 0.5, restitution: 0, damping: 0, angularDamping: 0, gravityScale: 1,
+  // In the first layer, and colliding with all 32: everything collides with
+  // everything until told otherwise (rule 110).
+  layers: 1, mask: 0xffffffff,
   position: [0, 0, 0], rotation: [0, 0, 0, 1], velocity: [0, 0, 0], angularVelocity: [0, 0, 0],
 });
 
@@ -106,6 +111,8 @@ const COLUMNS = [
   ['_damping', Float64Array, 1],
   ['_angularDamping', Float64Array, 1],
   ['_gravityScale', Float64Array, 1],
+  ['_layers', Uint32Array, 1],       // which of 32 layers the body is in, as bits
+  ['_mask', Uint32Array, 1],         // which layers it collides with
   ['_invMass', Float64Array, 1],     // 1 / mass for a dynamic body, 0 for anything else
   ['_size', Float64Array, 1],        // the shape's thinnest extent, m: what its tolerances scale with
   ['_reach', Float64Array, 1],       // the farthest any point of the shape is from its centre, m
@@ -138,9 +145,12 @@ export class World {
      * or it is a repeat) and is skipped.
      */
     this._forcedSlots = [];
-    /** This step's contacts, and last step's, swapped each step so last step's impulses carry over. */
+    /** Bodies filed in trees, for finding which might touch (broadphase.js). */
+    this._broadphase = new Broadphase();
+    /** Pairs whose fat boxes overlap, kept from step to step with their impulses (pairs.js). */
+    this._pairs = new Pairs(this);
+    /** This step's manifolds, the solver's working set (contact.js). */
     this._contacts = new Contacts();
-    this._spare = new Contacts();
     this._substeps = o.substeps === undefined ? SUBSTEPS : wholeFromOne('World', 'substeps', o.substeps);
     /** Steps that ran the contact solver: for the off-means-off test, which reads it. */
     this._solverSteps = 0;
@@ -207,6 +217,8 @@ export class World {
       s = this._slots.take();
     }
     this._write(s, spec, true);
+    this._boundsOf(s, 0, 0);
+    this._broadphase.add(this, s);
     return new Body(this, this._slots.id(s));
   }
 
@@ -217,6 +229,10 @@ export class World {
     // Moving or turning a body by hand is a teleport: `previous` moves with it,
     // so interpolation doesn't draw it sliding across from where it was.
     this._write(s, spec, o.position !== undefined || o.rotation !== undefined);
+    // Anything here can change what it touches: where it is, its shape, its
+    // type, its filtering. Filed afresh, with no refresh call (rule 36).
+    this._boundsOf(s, 0, 0);
+    this._broadphase.refile(this, s);
   }
 
   bodyOf(body) {
@@ -285,17 +301,18 @@ export class World {
       for (let k = 0; k < 7; k++) prev[t7 + k] = tr[t7 + k];
     }
 
-    // A lone body has nothing to touch: no bounds, no pair search.
-    const last = this._contacts, next = this._spare;
-    next.count = 0;
-    if (n > 1) {
-      this._bounds(dt);
-      find(this, dt, last, next);
-    }
+    // Moving bodies' bounds, then the broadphase: re-file what left its fat
+    // box, offer the pairs that newly overlap, and narrow every listed pair
+    // down to its contact points. Static bodies' bounds were worked out when
+    // they were placed, and a world where nothing moves offers no pairs.
+    const next = this._contacts;
+    this._bounds(dt);
+    this._broadphase.update(this, dt);
+    this._broadphase.candidates(this, this._pairs);
+    narrow(this, this._pairs, this._broadphase, next);
     next.trim();
+    this._pairs.trim();
     const touching = next.count;
-    this._contacts = next;
-    this._spare = last;
 
     const substeps = this._substeps, h = dt / substeps;
     if (touching > 0) {
@@ -318,6 +335,7 @@ export class World {
     if (touching > 0) {
       const g = this._gravity;
       restitution(this, next, Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]));
+      store(this._pairs, next);
     }
 
     const p = this._position, q = this._rotation;
@@ -390,11 +408,19 @@ export class World {
    */
   _bounds(dt) {
     const n = this._slots.top, state = this._slots.state, type = this._type;
-    const p = this._position, q = this._rotation, v = this._velocity, w = this._angular;
-    const ax = this._axes, box = this._box, motion = this._motion, d = this._dims;
     const g = this._gravity, gl = Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
     for (let s = 0; s < n; s++) {
-      if (state[s] !== 1) continue;
+      if (state[s] !== 1 || type[s] === STATIC) continue;
+      this._boundsOf(s, dt, gl);
+    }
+  }
+
+  /** _bounds for one body: on every step for one that moves, and whenever a static one is placed. */
+  _boundsOf(s, dt, gl) {
+    const type = this._type;
+    const p = this._position, q = this._rotation, v = this._velocity, w = this._angular;
+    const ax = this._axes, box = this._box, motion = this._motion, d = this._dims;
+    {
       const s3 = s * 3, s4 = s * 4, a9 = s * 9, b6 = s * 6;
       const x = q[s4], y = q[s4 + 1], z = q[s4 + 2], qw = q[s4 + 3];
       ax[a9] = 1 - 2 * (y * y + z * z); ax[a9 + 1] = 2 * (x * y + z * qw); ax[a9 + 2] = 2 * (x * z - y * qw);
@@ -474,8 +500,9 @@ export class World {
     this._slots = new Slots();
     for (const [name, Type] of COLUMNS) this[name] = new Type(0);
     this._forcedSlots = [];
+    this._broadphase = new Broadphase();
+    this._pairs = new Pairs(this);
     this._contacts = new Contacts();
-    this._spare = new Contacts();
   }
 
   // ---- what Body calls (public, but not for users: see test/docs.test.js) ----
@@ -511,12 +538,16 @@ export class World {
     const s = this._slotOf(caller, id);
     this._position.set(xyz(caller, x, y, z), s * 3);
     this._place(s);
+    this._boundsOf(s, 0, 0);
+    this._broadphase.refile(this, s);
   }
 
   _setRotation(caller, id, q) {
     const s = this._slotOf(caller, id);
     this._rotation.set(q, s * 4);
     this._place(s);
+    this._boundsOf(s, 0, 0);
+    this._broadphase.refile(this, s);
   }
 
   _setVelocity(caller, id, name, x, y, z) {
@@ -594,6 +625,8 @@ export class World {
     this._forced[s] = 0;
     this._force.fill(0, s * 3, s * 3 + 3);
     this._torque.fill(0, s * 3, s * 3 + 3);
+    // Out of its tree now; its pairs go at the next step, which finds the body gone.
+    this._broadphase.remove(s);
     this._slots.release(s);
     // Shrink when the slots in use fall to a quarter of the storage, to the
     // power of two that growth would have chosen for them, so a world that
@@ -608,6 +641,7 @@ export class World {
       while (capacity < top) capacity *= 2;
       this._resize(capacity);
     }
+    this._broadphase.trim();
   }
 
   // ---- inside ----
@@ -632,6 +666,7 @@ export class World {
   _resize(capacity) {
     this._slots.resize(capacity);
     for (const [name, , per] of COLUMNS) this[name] = resized(this[name], capacity * per);
+    this._broadphase.resize(capacity);
   }
 
   /** A slot's full description, every size included, in option form. */
@@ -655,6 +690,8 @@ export class World {
       damping: this._damping[s],
       angularDamping: this._angularDamping[s],
       gravityScale: this._gravityScale[s],
+      layers: this._layers[s],
+      mask: this._mask[s],
       position: [this._position[s3], this._position[s3 + 1], this._position[s3 + 2]],
       rotation: [this._rotation[s4], this._rotation[s4 + 1], this._rotation[s4 + 2], this._rotation[s4 + 3]],
       velocity: [this._velocity[s3], this._velocity[s3 + 1], this._velocity[s3 + 2]],
@@ -705,6 +742,8 @@ export class World {
     this._damping[s] = spec.damping;
     this._angularDamping[s] = spec.angularDamping;
     this._gravityScale[s] = spec.gravityScale;
+    this._layers[s] = spec.layers;
+    this._mask[s] = spec.mask;
     this._position.set(spec.position, s3);
     this._rotation.set(spec.rotation, s * 4);
     this._velocity.set(spec.velocity, s3);
@@ -781,6 +820,8 @@ function resolve(caller, base, given) {
   const angularDamping = has('angularDamping')
     ? atLeastZero(caller, 'angularDamping', given.angularDamping) : base.angularDamping;
   const gravityScale = has('gravityScale') ? finite(caller, 'gravityScale', given.gravityScale) : base.gravityScale;
+  const layers = has('layers') ? bits(caller, 'layers', given.layers) : base.layers;
+  const mask = has('mask') ? bits(caller, 'mask', given.mask) : base.mask;
 
   const position = has('position') ? vec3(caller, 'position', given.position) : base.position;
   const rotation = has('rotation') ? quat(caller, 'rotation', given.rotation) : base.rotation;
@@ -797,13 +838,27 @@ function resolve(caller, base, given) {
   }
   return {
     type, shape, size, radius, height, density, mass, massGiven, inertia, inertiaGiven,
-    friction, restitution, damping, angularDamping, gravityScale,
+    friction, restitution, damping, angularDamping, gravityScale, layers, mask,
     position, rotation, velocity, angularVelocity,
   };
 }
 
 /** The material options, in the order bodyOf lists them. */
-const MATERIAL = ['friction', 'restitution', 'damping', 'angularDamping', 'gravityScale'];
+const MATERIAL = ['friction', 'restitution', 'damping', 'angularDamping', 'gravityScale', 'layers', 'mask'];
+
+/**
+ * 32 bits, given as any whole number that fits: unsigned (0 to 2^32 - 1) or
+ * signed (-2^31 to -1). JavaScript's bit operators give signed results, so
+ * `~PLAYER` and `1 << 31` are negative; refusing them would make the usual way
+ * of writing a mask throw. Nothing is clamped: the same 32 bits are kept,
+ * read back unsigned.
+ */
+function bits(caller, name, value) {
+  if (!Number.isInteger(value) || value < -0x80000000 || value > 0xffffffff) {
+    fail(caller, `${name} must be a whole number that fits in 32 bits, got ${show(value)}`);
+  }
+  return value >>> 0;
+}
 
 /** A whole number, 1 or more. */
 function wholeFromOne(caller, name, value) {
