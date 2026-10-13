@@ -23,12 +23,30 @@
 // in with it. The solver runs `substeps` small steps of `iterations` passes
 // each; see World for what those are.
 //
+// PATCHES, NOT POINTS. A contact of one or two points can't stop a body
+// turning about them: a ball spinning about the vertical turns about its one
+// point, and a ball or a capsule rolling turns about the point or the line it
+// rests on, so neither friction nor the normal push can slow it. Real contacts
+// are small flattened patches, and a patch resists both: friction across its
+// width resists spinning, and its push, leaning toward the front as the body
+// rolls over it, resists rolling. Here each contact is a patch PIXEL of the
+// rolling body's size across, the same pixel every tolerance is built from.
+// The most it can resist rolling is the push N leaning to the patch's edge,
+// N times its radius; the most it can resist spinning is friction over a
+// uniformly pressed disc, 2/3 mu N times its radius. For a ball or a capsule
+// of radius r, the patch is 2r/200, so its rolling resistance coefficient,
+// patch over radius, is 0.01 at every size: rubber on concrete, a billiard
+// ball on cloth. Contacts of three or four points already resist both through
+// their spread, and get neither. Nothing here is tuned, and there is nothing
+// to set.
+//
 // WARM STARTING. Each point starts the step with the impulse it ended the
 // last one with, matched by the narrowphase's feature ids. A resting stack
 // needs the same impulses step after step, so it starts at the answer. The
 // impulses are kept on the pair, which lasts as long as the two bodies' fat
 // boxes overlap, so nothing has to be looked up: store() writes them after
-// the solve, and the next step's carry() reads them back.
+// the solve, and the next step's carry() reads them back. A patch's rolling
+// and spinning impulse is kept the same way, as one angular impulse.
 
 import { collide, Shape, Manifold, SPHERE, CAPSULE, BOX as BOX_KIND } from './collide.js';
 import { rotate } from './core/math.js';
@@ -51,6 +69,13 @@ export const PIXEL = 1 / 200;
 // Points per manifold, and per-point numbers kept.
 const P = 4;
 
+/**
+ * The torque friction can exert across a uniformly pressed disc of radius R,
+ * as a fraction of mu N R: the integral of mu p r over the disc, with
+ * p = N / (pi R^2), is 2/3 mu N R. Derived, not chosen.
+ */
+const SPIN = 2 / 3;
+
 /** Manifolds for one step: grown by doubling, never sized in advance. */
 export class Contacts {
   constructor() {
@@ -67,6 +92,10 @@ export class Contacts {
     grow('points', Uint8Array, m);
     grow('normal', Float64Array, 3 * m); grow('t1', Float64Array, 3 * m); grow('t2', Float64Array, 3 * m);
     grow('friction', Float64Array, m); grow('restitution', Float64Array, m); grow('tolerance', Float64Array, m);
+    // Rolling and spinning (contacts of one or two points; see PATCHES above):
+    grow('patch', Float64Array, m);                       // the patch's radius, m
+    grow('rollMass1', Float64Array, m); grow('rollMass2', Float64Array, m); grow('spinMass', Float64Array, m);
+    grow('rollImpulse1', Float64Array, m); grow('rollImpulse2', Float64Array, m); grow('spinImpulse', Float64Array, m);
     grow('pid', Uint32Array, p);
     grow('separation', Float64Array, p);
     grow('point', Float64Array, 3 * p);
@@ -161,6 +190,12 @@ export function narrow(world, pairs, broadphase, next, from) {
     next.friction[m] = Math.sqrt(world._friction[a] * world._friction[b]);
     next.restitution[m] = Math.max(world._restitution[a], world._restitution[b]);
     next.tolerance[m] = tolerance;
+    // The patch is the rolling body's: a ball's is the same on any floor,
+    // however thin. Between two dynamic bodies, the smaller one's.
+    const type = world._type;
+    next.patch[m] = PIXEL * (type[a] !== DYNAMIC ? world._size[b] : type[b] !== DYNAMIC ? world._size[a]
+      : Math.min(world._size[a], world._size[b]));
+    next.rollImpulse1[m] = 0; next.rollImpulse2[m] = 0; next.spinImpulse[m] = 0;
     for (let k = 0; k < manifold.count; k++) {
       const i = m * P + k;
       next.pid[i] = manifold.ids[k];
@@ -183,6 +218,13 @@ export function narrow(world, pairs, broadphase, next, from) {
 function carry(pairs, p, next, m) {
   const remembered = pairs.points[p];
   if (remembered === 0) return;
+  if (next.points[m] <= 2) {
+    const p3 = 3 * p, m3 = 3 * m;
+    const lx = pairs.twist[p3], ly = pairs.twist[p3 + 1], lz = pairs.twist[p3 + 2];
+    next.rollImpulse1[m] = lx * next.t1[m3] + ly * next.t1[m3 + 1] + lz * next.t1[m3 + 2];
+    next.rollImpulse2[m] = lx * next.t2[m3] + ly * next.t2[m3 + 1] + lz * next.t2[m3 + 2];
+    next.spinImpulse[m] = lx * next.normal[m3] + ly * next.normal[m3 + 1] + lz * next.normal[m3 + 2];
+  }
   for (let k = 0; k < next.points[m]; k++) {
     const i = m * P + k, id = next.pid[i];
     for (let j = 0; j < remembered; j++) {
@@ -200,8 +242,12 @@ function carry(pairs, p, next, m) {
 /** After the solve: each pair remembers its points' ids and impulses, for the next step. */
 export function store(pairs, c) {
   for (let m = 0; m < c.count; m++) {
-    const p = c.pair[m], count = c.points[m];
+    const p = c.pair[m], count = c.points[m], m3 = 3 * m, p3 = 3 * p;
     pairs.points[p] = count;
+    const r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m], sp = c.spinImpulse[m];
+    pairs.twist[p3] = c.t1[m3] * r1 + c.t2[m3] * r2 + c.normal[m3] * sp;
+    pairs.twist[p3 + 1] = c.t1[m3 + 1] * r1 + c.t2[m3 + 1] * r2 + c.normal[m3 + 1] * sp;
+    pairs.twist[p3 + 2] = c.t1[m3 + 2] * r1 + c.t2[m3 + 2] * r2 + c.normal[m3 + 2] * sp;
     for (let k = 0; k < count; k++) {
       const i = m * P + k, o = p * P + k, m3 = 3 * m;
       pairs.pid[o] = c.pid[i];
@@ -212,6 +258,38 @@ export function store(pairs, c) {
       pairs.friction[3 * o + 2] = c.t1[m3 + 2] * l1 + c.t2[m3 + 2] * l2;
     }
   }
+}
+
+/**
+ * The anchor that tracks a contact through the step, in slot s's own frame,
+ * into out[o..]: the contact's offset (x, y, z) from the body's centre, moved
+ * onto the shape's core. A ball's surface touches the floor at its bottom
+ * however it turns, so the point that touched at the start of a step mustn't
+ * turn with it: rolled up and away, it would read as the ball lifting off,
+ * and the ball would drop and be caught again every step. Measured before
+ * this: a 1 cm marble rolled at 1 m/s hopped a third of its radius and lost
+ * 9% of its speed in 5 s. So a ball's anchor is its centre and a capsule's
+ * the nearest point of its axis, which move with it as they should, and a
+ * box's is the point itself, since a box's surface does turn with it.
+ * Leaves the anchor's world offset at the start in v3: for a box, the
+ * offset it was given, unchanged; a ball's, zero.
+ */
+function core(world, s, x, y, z, out, o) {
+  const shape = world._shape[s];
+  if (shape === SPHERE_SHAPE) {
+    out[o] = 0; out[o + 1] = 0; out[o + 2] = 0;
+    v3[0] = 0; v3[1] = 0; v3[2] = 0;
+    return;
+  }
+  rotate(world._rotation, s * 4, x, y, z, true, v3);
+  if (shape === BOX) {
+    out[o] = v3[0]; out[o + 1] = v3[1]; out[o + 2] = v3[2];
+    v3[0] = x; v3[1] = y; v3[2] = z;
+    return;
+  }
+  const d = world._dims, half = (d[s * 3 + 1] - 2 * d[s * 3]) * 0.5;
+  out[o] = 0; out[o + 1] = v3[1] < -half ? -half : v3[1] > half ? half : v3[1]; out[o + 2] = 0;
+  rotate(world._rotation, s * 4, 0, out[o + 1], 0, false, v3);
 }
 
 /** A body's shape, placed, into s. */
@@ -269,6 +347,12 @@ export function prepare(world, c) {
     const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3;
     const ima = invMass[a], imb = invMass[b];
     const nx = c.normal[3 * m], ny = c.normal[3 * m + 1], nz = c.normal[3 * m + 2];
+    if (c.points[m] <= 2) {
+      const m3 = 3 * m;
+      c.rollMass1[m] = turning(invI, a, b, c.t1[m3], c.t1[m3 + 1], c.t1[m3 + 2]);
+      c.rollMass2[m] = turning(invI, a, b, c.t2[m3], c.t2[m3 + 1], c.t2[m3 + 2]);
+      c.spinMass[m] = turning(invI, a, b, nx, ny, nz);
+    }
     for (let k = 0; k < c.points[m]; k++) {
       const i = m * P + k, i3 = 3 * i;
       const px = c.point[i3], py = c.point[i3 + 1], pz = c.point[i3 + 2];
@@ -276,14 +360,13 @@ export function prepare(world, c) {
       const rbx = px - p[b3], rby = py - p[b3 + 1], rbz = pz - p[b3 + 2];
       c.ra[i3] = rax; c.ra[i3 + 1] = ray; c.ra[i3 + 2] = raz;
       c.rb[i3] = rbx; c.rb[i3 + 1] = rby; c.rb[i3 + 2] = rbz;
-      rotate(q, a * 4, rax, ray, raz, true, v3);
-      c.la[i3] = v3[0]; c.la[i3 + 1] = v3[1]; c.la[i3 + 2] = v3[2];
-      rotate(q, b * 4, rbx, rby, rbz, true, v3);
-      c.lb[i3] = v3[0]; c.lb[i3 + 1] = v3[1]; c.lb[i3 + 2] = v3[2];
       // Separation as the bodies move during the step is the starting
-      // separation plus how far the two anchor points have moved apart along
-      // the normal; this is the part of that sum fixed at the start.
-      c.adjusted[i] = c.separation[i] - ((rbx - rax) * nx + (rby - ray) * ny + (rbz - raz) * nz);
+      // separation plus how far the two anchors have moved apart along the
+      // normal; this is the part of that sum fixed at the start.
+      core(world, a, rax, ray, raz, c.la, i3);
+      const cax = v3[0], cay = v3[1], caz = v3[2];
+      core(world, b, rbx, rby, rbz, c.lb, i3);
+      c.adjusted[i] = c.separation[i] - ((v3[0] - cax) * nx + (v3[1] - cay) * ny + (v3[2] - caz) * nz);
       c.normalMass[i] = mass(invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, nx, ny, nz);
       c.tangentMass1[i] = mass(invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, c.t1[3 * m], c.t1[3 * m + 1], c.t1[3 * m + 2]);
       c.tangentMass2[i] = mass(invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, c.t2[3 * m], c.t2[3 * m + 1], c.t2[3 * m + 2]);
@@ -366,7 +449,31 @@ export function warmStart(world, c) {
       const pz = c.normal[m3 + 2] * ln + c.t1[m3 + 2] * l1 + c.t2[m3 + 2] * l2;
       push(v, w, invI, invMass, a, b, c.ra, c.rb, i3, px, py, pz);
     }
+    if (c.points[m] <= 2) {
+      const m3 = 3 * m, r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m], sp = c.spinImpulse[m];
+      twist(w, invI, a, b, c.t1[m3] * r1 + c.t2[m3] * r2 + c.normal[m3] * sp,
+        c.t1[m3 + 1] * r1 + c.t2[m3 + 1] * r2 + c.normal[m3 + 1] * sp,
+        c.t1[m3 + 2] * r1 + c.t2[m3 + 2] * r2 + c.normal[m3 + 2] * sp);
+    }
   }
+}
+
+/** Equal and opposite angular impulse (lx, ly, lz): -L on a, +L on b. */
+function twist(w, invI, a, b, lx, ly, lz) {
+  turn(w, invI, a, -lx, -ly, -lz);
+  turn(w, invI, b, lx, ly, lz);
+}
+
+/** 1 / (axis · (Ia⁻¹ + Ib⁻¹) axis): how hard the pair is to turn against each other about a unit axis. */
+function turning(invI, a, b, x, y, z) {
+  const k = along(invI, a * 6, x, y, z) + along(invI, b * 6, x, y, z);
+  return k > 0 ? 1 / k : 0;
+}
+
+/** axis · I⁻¹ axis, for the inverse inertia at invI[o..]. */
+function along(invI, o, x, y, z) {
+  return invI[o] * x * x + invI[o + 3] * y * y + invI[o + 5] * z * z
+    + 2 * (invI[o + 1] * x * y + invI[o + 2] * x * z + invI[o + 4] * y * z);
 }
 
 /** Equal and opposite impulse (px, py, pz) at point i3: -P on a, +P on b. */
@@ -472,6 +579,34 @@ export function solve(world, c, h, bias) {
       const d1 = n1 - o1, d2 = n2 - o2;
       push(v, w, invI, invMass, a, b, c.ra, c.rb, i3, t1x * d1 + t2x * d2, t1y * d1 + t2y * d2, t1z * d1 + t2z * d2);
     }
+    if (count > 2) continue;
+    // Rolling and spinning (see PATCHES): the turning of b against a about
+    // the two tangents, held within the patch's push leaning to its edge, a
+    // disc as friction's cone is; then about the normal, within friction
+    // across the patch, for one point (two already resist it with their spread).
+    let pressed = 0;
+    for (let k = 0; k < count; k++) pressed += c.normalImpulse[m * P + k];
+    const most = c.patch[m] * pressed;
+    let ux = w[b3] - w[a3], uy = w[b3 + 1] - w[a3 + 1], uz = w[b3 + 2] - w[a3 + 2];
+    const r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m];
+    let n1 = r1 - c.rollMass1[m] * (ux * t1x + uy * t1y + uz * t1z);
+    let n2 = r2 - c.rollMass2[m] * (ux * t2x + uy * t2y + uz * t2z);
+    const l2 = n1 * n1 + n2 * n2;
+    if (l2 > most * most) {
+      const scale = most / Math.sqrt(l2);
+      n1 *= scale; n2 *= scale;
+    }
+    c.rollImpulse1[m] = n1; c.rollImpulse2[m] = n2;
+    const d1 = n1 - r1, d2 = n2 - r2;
+    twist(w, invI, a, b, t1x * d1 + t2x * d2, t1y * d1 + t2y * d2, t1z * d1 + t2z * d2);
+    if (count > 1) continue;
+    ux = w[b3] - w[a3]; uy = w[b3 + 1] - w[a3 + 1]; uz = w[b3 + 2] - w[a3 + 2];
+    const s0 = c.spinImpulse[m], limit = SPIN * mu * most;
+    let s1 = s0 - c.spinMass[m] * (ux * nx + uy * ny + uz * nz);
+    if (s1 > limit) s1 = limit; else if (s1 < -limit) s1 = -limit;
+    c.spinImpulse[m] = s1;
+    const ds = s1 - s0;
+    twist(w, invI, a, b, nx * ds, ny * ds, nz * ds);
   }
 }
 

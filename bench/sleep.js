@@ -10,16 +10,17 @@
 //           little: with six bodies awake a step is a few microseconds.)
 //   mixed   the same with spheres and capsules
 //
-// RESULTS (i7-1260P, Node 22, 2026-10-13), the run that closed milestone 6:
-//   towers  awake 425 ms a step; asleep 3.6 µs, about 1/118,000 of it
-//   boxes   still time and islands 0.27% of all step time, 1 ms at the
-//           slowest; all asleep at 61 s. It took that long because one
-//           column in it really was still sliding, 13 cm over a minute with
-//           sleeping off, and a heap sleeps only when all of it has stopped.
-//   mixed   0.40% of all step time; 355 of 384 still awake at 150 s. Nothing
-//           in Bearing yet slows a ball or capsule rolling on the floor, or a
-//           ball spinning in place on one point, and one touching the heap
-//           keeps all of it awake.
+// RESULTS (i7-1260P, Node 22, 2026-10-13), the runs that closed milestone 6:
+//   towers  awake 381 to 701 ms a step over the day's runs, as the laptop
+//           warmed (an A/B in one process showed no change between them);
+//           asleep 2 to 4 µs, about 1/150,000 of it
+//   boxes   still time and islands 0.2% of all step time, 1.5 ms at the
+//           slowest; all asleep at 10.7 s. (At 61 s before contacts were
+//           patches: one column was still sliding on its edges, which a
+//           patch now holds.)
+//   mixed   0.3% of all step time. Every body still on the floor asleep by
+//           60 s, the last of them balls rolled out of the heap; two balls
+//           rolled off the 200 m floor's edge and are still falling.
 
 import os from 'node:os';
 import { World } from '../src/bearing.js';

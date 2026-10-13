@@ -80,13 +80,13 @@ const DAMPING_RATIO = 10;
 //
 // SLEEP_TIME is the shortest that froze nothing about to move, measured with
 // sleeping on and off over 8 s at 60 Hz: boxes on slopes 0.25° to 2° past
-// friction's hold, which creep before they slide, and cubes 0.1° to 3° past
-// balance on an edge, which tip slowly at first. At 0.25 s the box half a
-// degree past went to sleep where it stood; at 0.5 s, Box2D's and Jolt's, the
-// cube 0.1° past did, having strayed 2.4 mm of its 5 mm in its first half
-// second; from 1 s, none did. Longer costs: a 210-box pyramid was all asleep
-// at 0.65 s with 0.5, at 1.13 s with 1, and at 2.15 s with 2. The limit that
-// comes with any such time: a body starting from rest that speeds up more
+// friction's hold, which creep before they slide, and cubes 0.5° to 3° past
+// balance on an edge, which tip slowly at first. (Closer than 0.41°, a 1 m
+// cube stands: its edge's patch holds it, see contact.js.) At 0.25 s the box
+// half a degree past friction's hold went to sleep where it stood; at 0.5 s,
+// Box2D's and Jolt's, the cube 0.5° past did; from 1 s, none did. Longer
+// costs: a 210-box pyramid was all asleep at 0.65 s with 0.5, at 1.13 s with
+// 1, and at 2.15 s with 2. The limit that comes with any such time: a body starting from rest that speeds up more
 // slowly than 2 tolerance / SLEEP_TIME², 0.01 m/s² for a 1 m box, strays less
 // than a pixel in it and can fall asleep before it moves, such as a box on a
 // slope within 0.05° of its friction angle.

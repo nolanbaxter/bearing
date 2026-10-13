@@ -57,6 +57,11 @@ All notable changes to Bearing are recorded here. The format follows
   force or impulse, `setBody`, removing or moving what it rests on, or changing `world.gravity`.
   10,000 boxes asleep step in a few microseconds. `world.sleeping` (on by default) switches it off,
   and `body.asleep` says whether a body is.
+- Balls and capsules roll and spin to a stop. Every contact is a patch as wide as its tolerance,
+  which resists rolling and spinning as a real one does: a rolling resistance of 0.01 for any ball
+  or capsule, so a ball rolled at 1 m/s rolls 7.1 m and stops, at any size. A fast-rolling ball
+  also stays on the floor: the solver now follows a ball's contact by its centre, not by a point
+  on its surface that rolled up and away.
 - `world.moved(since)`: the slots of the bodies an engine has to draw again since it last drew at
   step `since`, exact however many steps ran in between, so a world of sleeping bodies copies
   nothing. `world.stepCount` counts the steps.

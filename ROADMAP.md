@@ -230,12 +230,20 @@ boxes buzzed at 1.3 cm/s, twice the speed that counted as still, while going now
 30 s). For steady motion the two rules agree. Under it, the time a body must stay still was
 measured again: at 0.5 s a cube 0.1° past balance went to sleep instead of tipping; from 1 s,
 nothing about to move did.
-*Found, for Nolan:* nothing slows a ball or capsule rolling on a floor, or a ball spinning in
-place on one point (a single contact point can't resist turning about its normal), so one doing
-either keeps awake any heap it touches: 355 of 384 mixed shapes still awake at 150 s. Box2D 3 and
-Bullet add rolling and spinning friction; Jolt and Unity damp every body a little by default.
-And a heap sleeps only once all of it has stopped: a 384-box heap slept at 61 s, kept by one
-column that slid 13 cm over a minute.
+A heap sleeps only once all of it has stopped: a 384-box heap slept at 61 s, kept by one column
+that slid 13 cm over a minute on its edges; with the patches below, which hold such edges, at 10.7 s.
+*Closing piece, rolling and spinning* (approved 2026-10-13): nothing slowed a ball or capsule
+rolling, or a ball spinning in place on its one point, so one doing either kept awake any heap it
+touched (355 of 384 mixed shapes at 150 s). Now every contact is a patch as wide as its tolerance,
+from the rolling body's size, and resists rolling (the push leaning to its edge, N times its
+radius) and spinning (friction over it, 2/3 mu N times its radius), for contacts of one or two
+points. Derived, nothing to set: a rolling resistance of 0.01 for every ball and capsule. Held by
+eight tests in `test/contact.test.js` to within 2% of the worked-out figures, at radii from 1 cm
+to 5 m. Found on the way: the solver followed a contact through a step by a point fixed on the
+body, which on a fast-rolling ball rolled up and away, so the ball seemed to lift and was caught
+again each step: a 1 cm marble at 1 m/s hopped a third of its radius and lost 9% of its speed in
+5 s. Round shapes are now followed by their core (a ball's centre, a capsule's axis).
+SLEEP_TIME re-measured with cubes that really tip: still 1 s.
 
 **7. Benchmark ⬜**
 *Concepts:* A/B measurement; variance between runs; comparing engines fairly.
@@ -468,3 +476,6 @@ Winding's way, copied before the first one:
   of what Winding does for large loads. Graph colouring comes first and before 1.0, so the solve
   order 1.0 ships with is the one workers reproduce. Also written into 16: solver locals and
   precomputed angular terms, and refitting the tree instead of re-filing.
+- **2026-10-13.** Rolling and spinning friction added to milestone 6 as its closing piece, at
+  Nolan's word: milestone 6 found that balls and capsules rolling or spinning kept heaps awake for
+  good, and rule 35's "a ball bounces and settles" failed for any ball moving sideways.

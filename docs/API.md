@@ -790,9 +790,24 @@ into each other, slide no more than friction allows, and bounce as much as their
   pile at rest costs almost nothing to keep, a body flying steadily is looked up every few steps
   rather than every step, and a world of thousands of bodies spread apart costs about what each one
   moving does.
+- **Contacts are patches, not points.** A ball touches the floor at one point and a capsule along
+  one line, and a point can't stop a body turning about itself: rolling or spinning in place, it
+  would go on for ever. A real contact is a small flattened patch, and so is every contact here:
+  as wide as its tolerance, from the size of the body rolling on it. Its push, leaning to the
+  patch's edge as the body rolls over it, resists rolling; friction across it resists spinning.
+  For any ball or capsule, that is a rolling resistance of 0.01, about rubber on concrete or a
+  billiard ball on cloth: a ball rolled at 1 m/s rolls 7.1 m and stops, at any size. A ball spinning
+  in place at 0.8 rad/s with a 0.4 m radius stops in 3.9 s. Contacts of three or four points, a
+  box flat on something, already resist both through their spread, and get neither.
 - **Bounces stop.** A contact bounces only when it meets faster than a bounce that would rise no
   higher than its tolerance, √(2 g tolerance): below that, a body settles instead of bouncing for
   ever on rounding.
+
+Notes: a contact's patch also holds things a point contact wouldn't. A ball rests on a slope
+gentler than its rolling resistance, 0.57° (tan θ = 0.01), and rolls down a steeper one. A box
+standing on an edge stays up while its centre is within its tolerance of being over the edge: a
+1 m cube 0.41° past balance stands, and 0.45° past falls. Friction 0 leaves no friction across a
+patch, so a ball spinning in place on ice spins on, though its rolling still slows.
 
 <a id="layers"></a>
 ## Layers and masks
@@ -844,9 +859,8 @@ tune; [`world.sleeping`](#world-sleeping) switches it off.
 Notes: a body starting from rest that would only speed up very slowly, slower than twice its
 tolerance over a second squared (0.01 m/s² for a 1 m box), can fall asleep before it moves: a
 box on a slope within a twentieth of a degree of where friction holds it stays put. Nudge it, or
-switch sleeping off. Nothing in Bearing yet slows a ball or a capsule rolling on a floor, or a
-ball spinning in place on one point, so one doing either keeps awake whatever it touches until it
-is slower than a pixel a second.
+switch sleeping off. A heap sleeps only when all of it has stopped, so one slowly settling corner
+keeps the whole heap awake until it, too, comes to rest.
 
 <a id="determinism"></a>
 ## Determinism

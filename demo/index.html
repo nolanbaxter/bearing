@@ -2,6 +2,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bearing demo</title>
+<!-- No icon, said outright, so the browser doesn't ask the server for one it hasn't got. -->
+<link rel="icon" href="data:,">
 
 <!--
   Bearing's scenes, drawn by Winding.
@@ -141,7 +143,12 @@
       build(world) {
         // Spread over the whole floor and dropped from different heights:
         // thousands of bodies, but each only ever near a few, which is what
-        // the broadphase is for.
+        // the broadphase is for. A wall around the floor keeps the ones
+        // knocked rolling from rolling off it, so all of them come to rest
+        // and go to sleep.
+        for (const [x, z, sx, sz] of [[0, 30.5, 62, 1], [0, -30.5, 62, 1], [30.5, 0, 1, 60], [-30.5, 0, 1, 60]]) {
+          world.addBody({ type: 'static', size: [sx, 3, sz], position: [x, 1.5, z], color: STONE });
+        }
         for (let n = 0; n < 2000; n++) {
           const x = Math.sin(n * 12.9898) * 27, z = Math.cos(n * 78.233) * 27, y = 2 + (n % 40) * 0.6;
           world.addBody({ shape: 'sphere', radius: 0.3, restitution: 0.4, position: [x, y, z], color: [SKY, LEAF, SUN][n % 3] });

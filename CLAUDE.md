@@ -72,6 +72,11 @@ These were made with Nolan and override the rules below where they differ.
   Per-body loops walk the awake list; asleep pairs sit past `pairs.active`; `moved(since)` reads
   per-body stamps through the awake list and a log bounded by the body count. API approved:
   `world.sleeping`, `body.asleep`, `world.stepCount`, `world.moved(since)`.
+- **Contacts are patches** (2026-10-13, approved). A contact of one or two points resists rolling
+  (up to N times its patch radius) and, with one point, spinning (up to 2/3 mu N times it); the
+  patch is PIXEL of the rolling body's size, so rolling resistance is 0.01 for every ball and
+  capsule. No option. Within a step, a round shape's contact is followed by its core (centre or
+  axis), not a surface point, which on a fast-rolling ball rolled away and made it hop.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

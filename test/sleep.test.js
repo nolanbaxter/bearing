@@ -176,10 +176,11 @@ test('sleeping changes nothing that can be seen: a bounce, a slide, a slow slope
       w.addBody({ type: 'static', size: [40, 0.5, 2], rotation: tilt(a) });
       w.addBody({ position: [-Math.sin(a) * 0.75, Math.cos(a) * 0.75, 0], rotation: tilt(a) });
     },
-    // A cube on its edge, a tenth of a degree past balance: tips over, slowly at first.
+    // A cube on its edge, a degree past balance: tips over, slowly at first.
+    // (Within 0.41° its edge's patch holds it up, sleeping or not.)
     tip: (w) => {
       ground(w);
-      const a = 45.1 * deg, r = Math.SQRT1_2;
+      const a = 46 * deg, r = Math.SQRT1_2;
       w.addBody({ position: [-r * Math.sin(a - 45 * deg), r * Math.cos(a - 45 * deg), 0], rotation: tilt(a) });
     },
   };

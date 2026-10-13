@@ -223,3 +223,136 @@ test('a small pile gives the same result twice, to the bit', () => {
   const a = run(), b = run();
   assert.ok(a.every((x, i) => Object.is(x, b[i])));
 });
+
+// ---- rolling and spinning: each contact a patch a tolerance across ----
+
+const G = 9.81;
+// For a ball or a capsule of radius r the patch is 2r / 200, so the rolling
+// resistance coefficient, patch over radius, is 0.01 at any size.
+const ROLL = 0.01;
+const near = (got, want, part, what) =>
+  assert.ok(Math.abs(got - want) <= Math.abs(want) * part, `${what}: ${got}, should be ${want}`);
+
+test('a ball rolled across the floor slows and stops where rolling resistance says, then sleeps', () => {
+  for (const r of [0.01, 0.4, 5]) {
+    const world = new World();
+    ground(world, { size: [400, 1, 400] });
+    const ball = world.addBody({ shape: 'sphere', radius: r, position: [0, r, 0], velocity: [1, 0, 0], angularVelocity: [0, 0, -1 / r] });
+    // Rolling without slipping, a solid ball slows at ROLL g / (1 + 2/5).
+    const a = ROLL * G / 1.4;
+    steps(world, 20);
+    near(ball.position[0], 1 / (2 * a), 0.02, `radius ${r} m rolled`);
+    assert.ok(ball.asleep, `radius ${r} m: still awake`);
+  }
+});
+
+test('a ball rolls as far on a floor 1 cm thick as on one 1 m thick: the patch is the ball, not the floor', () => {
+  const rolled = (thickness) => {
+    const world = new World();
+    world.addBody({ type: 'static', size: [400, thickness, 400], position: [0, -thickness / 2, 0] });
+    const ball = world.addBody({ shape: 'sphere', radius: 0.4, position: [0, 0.4, 0], velocity: [1, 0, 0], angularVelocity: [0, 0, -2.5] });
+    steps(world, 20);
+    return ball.position[0];
+  };
+  near(rolled(0.01), rolled(1), 0.001, 'on the thin floor');
+});
+
+test('a ball spinning in place on its one point slows to a stop', () => {
+  const world = new World();
+  ground(world);
+  const r = 0.4, ball = world.addBody({ shape: 'sphere', radius: r, position: [0, r, 0], angularVelocity: [0, 0.8, 0] });
+  // Friction over the patch, 2/3 mu N times its radius, against I = 2/5 m r².
+  const alpha = (2 / 3) * 0.5 * G * (2 * r / 200) / (0.4 * r * r);
+  let stopped = null;
+  for (let i = 1; i <= 600 && stopped === null; i++) {
+    world.step(1 / 60);
+    if (ball.angularVelocity[1] <= 0) stopped = i / 60;
+  }
+  near(stopped, 0.8 / alpha, 0.02, 'stopped at');
+});
+
+test('a capsule rolled on its side slows and stops as a ball does, with its own inertia', () => {
+  const world = new World();
+  ground(world, { size: [400, 1, 400] });
+  const r = 0.25, turn = [0, 0, Math.SQRT1_2, Math.SQRT1_2];   // lying along x
+  const capsule = world.addBody({ shape: 'capsule', radius: r, height: 1, position: [0, r, 0], rotation: turn,
+    velocity: [0, 0, 1], angularVelocity: [1 / r, 0, 0] });
+  const I = capsule.inertia[1], m = capsule.mass;   // about its own axis, its y
+  const a = ROLL * G / (1 + I / (m * r * r));
+  steps(world, 25);
+  near(capsule.position[2], 1 / (2 * a), 0.02, 'rolled');
+});
+
+test('a ball rests on a slope gentler than its rolling resistance, and rolls down a steeper one at g (sin θ − 0.01 cos θ) / 1.4', () => {
+  const deg = Math.PI / 180;
+  const slope = (angle) => {
+    const world = new World({ sleeping: false });
+    const t = [0, 0, Math.sin(angle / 2), Math.cos(angle / 2)];
+    world.addBody({ type: 'static', size: [60, 1, 4], position: [0, -0.5, 0], rotation: t });
+    const r = 0.4, ball = world.addBody({ shape: 'sphere', radius: r, position: [-Math.sin(angle) * r, Math.cos(angle) * r, 0] });
+    return { world, ball, along: (p) => p[0] * Math.cos(angle) + p[1] * Math.sin(angle) };
+  };
+  {
+    const { world, ball } = slope(0.4 * deg);
+    const at = ball.position;
+    steps(world, 5);
+    assert.ok(Math.hypot(ball.position[0] - at[0], ball.position[1] - at[1]) < 0.4 / 100, 'rolled on a 0.4° slope');
+  }
+  {
+    const angle = 3 * deg, { world, ball, along } = slope(angle);
+    const from = along(ball.position);
+    steps(world, 3);
+    const a = G * (Math.sin(angle) - ROLL * Math.cos(angle)) / 1.4;
+    near(from - along(ball.position), a * 9 / 2, 0.02, 'rolled down a 3° slope');
+  }
+});
+
+test('friction 0 leaves a spin in place alone, while rolling resistance still stops a roll', () => {
+  const world = new World();
+  ground(world, { friction: 0 });
+  const r = 0.4;
+  const top = world.addBody({ shape: 'sphere', radius: r, friction: 0, position: [0, r, 0], angularVelocity: [0, 2, 0] });
+  const roller = world.addBody({ shape: 'sphere', radius: r, friction: 0, position: [5, r, 0], angularVelocity: [0, 0, -2] });
+  steps(world, 10);
+  assert.equal(top.angularVelocity[1], 2, 'the spin in place changed');
+  assert.ok(Math.abs(roller.angularVelocity[2]) < 1e-6, `still turning at ${roller.angularVelocity[2]} rad/s`);
+});
+
+test('rolling and spinning only ever take energy away', () => {
+  const world = new World({ sleeping: false });
+  ground(world);
+  const bodies = [
+    world.addBody({ shape: 'sphere', radius: 0.4, position: [0, 0.4, 0], velocity: [2, 0, 1], angularVelocity: [1, 3, -5] }),
+    world.addBody({ shape: 'capsule', radius: 0.25, height: 1, position: [4, 0.25, 0], rotation: [0, 0, Math.SQRT1_2, Math.SQRT1_2], velocity: [0, 0, 2], angularVelocity: [8, 1, 0] }),
+  ];
+  const energy = () => bodies.reduce((e, b) => {
+    const v = b.velocity, w = b.angularVelocity, I = b.inertia, q = b.rotation;
+    // ω in the body's own frame, where the inertia is diagonal.
+    const [x, y, z, s] = q, wx = w[0], wy = w[1], wz = w[2];
+    const tx = 2 * (y * wz - z * wy), ty = 2 * (z * wx - x * wz), tz = 2 * (x * wy - y * wx);
+    const lx = wx - s * tx + (y * tz - z * ty), ly = wy - s * ty + (z * tx - x * tz), lz = wz - s * tz + (x * ty - y * tx);
+    return e + 0.5 * b.mass * (v[0] ** 2 + v[1] ** 2 + v[2] ** 2) + 0.5 * (I[0] * lx * lx + I[1] * ly * ly + I[2] * lz * lz)
+      + b.mass * G * b.position[1];
+  }, 0);
+  let last = energy();
+  for (let i = 0; i < 600; i++) {
+    world.step(1 / 60);
+    const now = energy();
+    assert.ok(now <= last + 1e-9 * Math.abs(last), `step ${i}: energy rose from ${last} to ${now}`);
+    last = now;
+  }
+});
+
+test('a cube on its edge stands within its tolerance of balance, and tips over past it', () => {
+  // The edge's patch holds its weight leaning up to its tolerance, 5 mm for a
+  // 1 m cube: 0.41° past balance, its centre 0.707 m above the edge.
+  const deg = Math.PI / 180;
+  for (const [past, stands] of [[0.3, true], [0.6, false]]) {
+    const world = new World({ sleeping: false });
+    ground(world);
+    const a = (45 + past) * deg, r = Math.SQRT1_2;
+    const cube = world.addBody({ position: [-r * Math.sin(a - 45 * deg), r * Math.cos(a - 45 * deg), 0], rotation: [0, 0, Math.sin(a / 2), Math.cos(a / 2)] });
+    steps(world, 10);
+    assert.equal(cube.position[1] > 0.6, stands, `${past}° past balance`);
+  }
+});
