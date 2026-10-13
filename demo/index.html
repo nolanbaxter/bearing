@@ -203,14 +203,16 @@
       def.build(world, state);
       delete world.addBody;   // back to Bearing's own
 
-      const drawn = [];
+      const drawn = [], nodes = [];
       for (const { handle, desc } of pending) {
         const node = scene.add(await model(desc));
         if (desc.shape === 'box') node.setScale(desc.size[0], desc.size[1], desc.size[2]);
         else if (desc.shape === 'sphere') node.setScale(desc.radius);
         drawn.push({ handle, node });
+        nodes[handle.slot] = node;
       }
-      current = { world, scene, drawn, state, name };
+      // seen: the stepCount the nodes were last drawn at, for world.moved().
+      current = { world, scene, drawn, nodes, state, name, seen: 0 };
       globalThis.demo = current;   // for poking at from the console
       // Where the camera eases to; Winding's OrbitController moves by `desired`.
       Object.assign(orbit.desired, { target: def.look.target, distance: def.look.distance, pitch: def.look.pitch });
@@ -228,15 +230,17 @@
       stepMs += (performance.now() - t0 - stepMs) * 0.05;
     }
 
-    // Each body drawn between its last two steps, by how far this frame
-    // falls between them: positions blended straight, rotations the short way.
+    // Each body that moved drawn between its last two steps, by how far this
+    // frame falls between them: positions blended straight, rotations the
+    // short way. world.moved() lists only those, so a sleeping pile costs
+    // nothing to draw.
     const q = [0, 0, 0, 0];
     function frame(alpha, clock) {
       orbit.update(clock.realDelta);
-      const { world, drawn } = current;
+      const { world, drawn, nodes } = current;
       const t = world.transforms, p = world.previous;
-      for (const { handle, node } of drawn) {
-        const o = handle.slot * 7;
+      for (const slot of world.moved(current.seen)) {
+        const node = nodes[slot], o = slot * 7;
         node.setPosition(
           p[o] + (t[o] - p[o]) * alpha,
           p[o + 1] + (t[o + 1] - p[o + 1]) * alpha,
@@ -247,7 +251,10 @@
         const l = Math.hypot(q[0], q[1], q[2], q[3]);
         node.setRotation([q[0] / l, q[1] / l, q[2] / l, q[3] / l]);
       }
-      status.textContent = `${SCENES[current.name].label} · ${world.bodyCount} bodies · `
+      current.seen = world.stepCount;
+      let asleep = 0;
+      for (const { handle } of drawn) if (handle.asleep) asleep++;
+      status.textContent = `${SCENES[current.name].label} · ${world.bodyCount} bodies, ${asleep} asleep · `
         + `${stepMs.toFixed(2)} ms a step · drag to orbit, wheel to zoom`;
     }
 

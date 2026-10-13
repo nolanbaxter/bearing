@@ -111,15 +111,19 @@ const manifold = new Manifold();
 const v3 = new Float64Array(3);
 
 /**
- * Fills `next` with this step's manifolds, one for each pair in the pair
- * list whose shapes touch, or will within the step. A pair that no longer
- * holds (a body gone, filtered apart, or fat boxes parted) is dropped from
- * the list here. Each manifold starts from the impulses its pair remembers.
+ * Adds to `next` a manifold for each awake pair from `from` on whose shapes
+ * touch, or will within the step. A pair that no longer holds (a body gone,
+ * filtered apart, or fat boxes parted) is dropped from the list here. Each
+ * manifold starts from the impulses its pair remembers.
+ *
+ * A touch between an awake body and a sleeping one wakes the sleeper's
+ * island. Its other pairs then join the awake ones, past where this pass
+ * stops, and the world runs this again from there (see World.step), so a
+ * woken stack is held up in the very step it wakes.
  */
-export function narrow(world, pairs, broadphase, next) {
-  const box = world._box, reach = world._motion;
-  next.count = 0;
-  for (let p = 0; p < pairs.count;) {
+export function narrow(world, pairs, broadphase, next, from) {
+  const box = world._box, reach = world._motion, awake = world._awake;
+  for (let p = from; p < pairs.active;) {
     if (!pairs.holds(p, broadphase)) {
       pairs.remove(p);   // the last pair moves into p, so p is looked at again
       continue;
@@ -142,6 +146,9 @@ export function narrow(world, pairs, broadphase, next) {
       p++;
       continue;
     }
+
+    // Static bodies are never awake, and _wake leaves them be.
+    if (awake[a] !== awake[b]) world._wake(awake[a] ? b : a);
 
     const m = next.count++;
     next.ensure(next.count);
@@ -254,8 +261,9 @@ function basis(c, m) {
  */
 export function prepare(world, c) {
   const invI = world._invI, invMass = world._invMass;
-  const n = world._slots.top, state = world._slots.state;
-  for (let s = 0; s < n; s++) if (state[s] === 1) inverseInertia(world, s);
+  // Every body in a contact is awake by now, or static, whose stays zero.
+  const list = world._awakeList, n = world._awakeCount;
+  for (let i = 0; i < n; i++) inverseInertia(world, list[i]);
   const p = world._position, q = world._rotation, v = world._velocity, w = world._angular;
   for (let m = 0; m < c.count; m++) {
     const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3;

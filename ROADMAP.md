@@ -206,7 +206,7 @@ the way: a body re-filed by `setBody` was listed twice.
 refitting instead. Bearing's whole step for 10,000 bodies in a pile is about 480 ms, nearly all of
 it the solver: the broadphase is about 2% of it today.
 
-**6. Islands and sleeping ⬜**
+**6. Islands and sleeping ✅** *(approved and done 2026-10-13)*
 *Concepts:* islands as connected components (union-find); sleep thresholds; waking.
 Bodies touching are grouped into islands; an island at rest sleeps; anything that moves it, a
 touch, a push, a setter, wakes it, with no `wakeUp()`. Sleep thresholds derived. The moved-bodies
@@ -214,6 +214,28 @@ list (rule 63), exact even when a frame runs several steps *(proposal)*. `world.
 it off.
 *Done when:* a resting pile sleeps, a hit wakes it, a sleeping world steps in almost no time, and
 the moved list is exact over multi-step frames.
+*Result:* in `src/world.js` (the awake list, `_sleep`, `_wake`, `moved()`) and `src/pairs.js`
+(awake and asleep runs of the pair list), held by `test/sleep.test.js`'s 14 tests, each of which
+fails if its piece is broken. API, as approved: `world.sleeping`, `body.asleep`,
+`world.stepCount`, `world.moved(since)`. Every per-body loop walks a list of awake bodies;
+sleeping pairs sit past the awake ones, where no step looks; a body falling asleep is re-filed
+snug. Islands come from union-find over the contacts, only in steps where some body has been
+still long enough. Measured (`bench/sleep.js`, i7-1260P): 10,000 standing boxes step in 425 ms
+awake and 3.6 µs asleep; finding islands is 0.3 to 0.4% of all step time. `moved()` reads the awake
+list and a log of what stopped, kept no longer than there are bodies; tested exact over frames of
+0 to 3 steps through sleeps, wakes, teleports, adds and removes.
+Changed from the proposal, with the reason: *still* is how far a body has strayed from where it
+came to rest, not how fast it is going. A speed rule kept a 1,000-box heap awake for good: a few
+boxes buzzed at 1.3 cm/s, twice the speed that counted as still, while going nowhere (0.18 mm in
+30 s). For steady motion the two rules agree. Under it, the time a body must stay still was
+measured again: at 0.5 s a cube 0.1° past balance went to sleep instead of tipping; from 1 s,
+nothing about to move did.
+*Found, for Nolan:* nothing slows a ball or capsule rolling on a floor, or a ball spinning in
+place on one point (a single contact point can't resist turning about its normal), so one doing
+either keeps awake any heap it touches: 355 of 384 mixed shapes still awake at 150 s. Box2D 3 and
+Bullet add rolling and spinning friction; Jolt and Unity damp every body a little by default.
+And a heap sleeps only once all of it has stopped: a 384-box heap slept at 61 s, kept by one
+column that slid 13 cm over a minute.
 
 **7. Benchmark ⬜**
 *Concepts:* A/B measurement; variance between runs; comparing engines fairly.

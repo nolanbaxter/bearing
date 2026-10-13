@@ -137,8 +137,17 @@ function scene(seed, steps, check) {
 test('the pairs a step touches are exactly those checking every pair would find', () => {
   let checked = 0, touched = 0;
   scene(2, 120, (world) => {
-    const expected = brute(world, 1 / 60);
+    const all = brute(world, 1 / 60);
     world.step(1 / 60);
+    // Pairs of sleeping bodies are left out of a step on purpose; a pair counts
+    // if a body in it was awake while the step narrowed, which takes in any
+    // woken by a touch in it, and any that fell asleep at its end.
+    const slept = new Set(world._slept.subarray(0, world._sleptCount));
+    const awake = (s) => world._awake[s] === 1 || slept.has(s);
+    const expected = all.filter((key) => {
+      const [a, b] = key.split('-').map(Number);
+      return awake(a) || awake(b);
+    });
     const found = touching(world);
     assert.deepEqual(found, expected, `step ${checked}`);
     checked++;
@@ -153,8 +162,13 @@ test('every listed pair\'s fat boxes overlap, and every pair whose step boxes do
     world.step(1 / 60);
     const bp = world._broadphase, pairs = world._pairs, box = world._box;
     const listed = new Set();
+    // A body falling asleep has its box drawn in at the end of the step, and
+    // its pairs are only looked at again by the next step's narrowing (or, if
+    // asleep, when one of them wakes), so those may be listed apart until then.
+    const slept = new Set(world._slept.subarray(0, world._sleptCount));
     for (let p = 0; p < pairs.count; p++) {
-      assert.ok(bp.overlap(pairs.a[p], pairs.b[p]), `pair ${pairs.a[p]}-${pairs.b[p]} kept apart`);
+      const a = pairs.a[p], b = pairs.b[p];
+      if (p < pairs.active && !slept.has(a) && !slept.has(b)) assert.ok(bp.overlap(a, b), `pair ${a}-${b} kept apart`);
       listed.add(`${pairs.a[p]}-${pairs.b[p]}`);
     }
     // After the step, bodies have moved; bounds for the next step are what

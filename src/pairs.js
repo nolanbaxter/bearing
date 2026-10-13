@@ -8,10 +8,15 @@
 // impulses from the last step, by feature id, which is what warm starting
 // reads, and what the begin, stay and end events of milestone 10 will read.
 //
-// Pairs sit in a dense array, in the order they were found, with the last
-// one moved into a removed one's place. That order depends only on the
-// inputs, which keeps every step deterministic. A small hash table, keyed by
-// the two slots, says whether a pair is already listed.
+// Pairs sit in a dense array, in two runs: first the pairs with an awake body,
+// which the narrowphase looks at every step, then the pairs whose bodies are
+// all asleep (or static), which nothing looks at until one of them wakes. A
+// sleeping pile of 10,000 bodies keeps about 170,000 pairs, and a step that
+// walked them all would cost milliseconds for nothing. A pair moves between
+// the runs by trading places with the pair at the boundary, so no pair below
+// the boundary moves while the narrowphase is working through it. That order
+// depends only on the inputs, which keeps every step deterministic. A small
+// hash table, keyed by the two slots, says whether a pair is already listed.
 
 import { resized } from './core/slots.js';
 
@@ -23,6 +28,8 @@ export class Pairs {
   constructor(world) {
     this.world = world;
     this.count = 0;
+    /** Pairs [0, active) have an awake body; [active, count) are asleep. */
+    this.active = 0;
     this.capacity = 0;
     this.a = new Int32Array(0); this.b = new Int32Array(0);
     this.idA = new Float64Array(0); this.idB = new Float64Array(0);
@@ -123,14 +130,22 @@ export class Pairs {
     const w = this.world, type = w._type;
     if (type[x] !== DYNAMIC && type[y] !== DYNAMIC) return;
     if (!filtered(w, x, y)) return;
+    // Only a body that was re-filed asks, and a sleeping one never is; a static
+    // one is when it is added or moved by hand. One that now overlaps a
+    // sleeping body could leave it buried, so the sleeper wakes. (An awake
+    // body coming near only wakes it by touching it: see narrow().)
+    if (type[y] === STATIC) w._wake(x);
+    else if (type[x] === STATIC) w._wake(y);
     const a = x < y ? x : y, b = x < y ? y : x;
     const ida = w._slots.id(a), idb = w._slots.id(b);
     const at = this._find(a, b);
     if (at >= 0) {
       const p = this.index[at];
       if (this.idA[p] === ida && this.idB[p] === idb) return;
-      // The same slots under new bodies: the old pair is stale, so it starts over.
+      // The same slots under new bodies: the old pair is stale, so it starts
+      // over, among the awake pairs, since a new body is awake.
       this.idA[p] = ida; this.idB[p] = idb; this.points[p] = 0;
+      if (p >= this.active) this.wake(p);
       return;
     }
     const p = this.count;
@@ -138,21 +153,51 @@ export class Pairs {
     this.a[p] = a; this.b[p] = b; this.idA[p] = ida; this.idB[p] = idb; this.points[p] = 0;
     this._put(a, b, p);
     this.count++;
+    this.wake(p);
   }
 
-  /** Takes pair p off the list, moving the last pair into its place. */
+  /** Takes pair p off the list; the pairs that fill its place come from the end of each run. */
   remove(p) {
     this._delete(this._find(this.a[p], this.b[p]));
-    const last = --this.count;
-    if (p !== last) {
-      this.a[p] = this.a[last]; this.b[p] = this.b[last];
-      this.idA[p] = this.idA[last]; this.idB[p] = this.idB[last];
-      this.points[p] = this.points[last];
-      this.pid.copyWithin(p * P, last * P, last * P + P);
-      this.normalImpulse.copyWithin(p * P, last * P, last * P + P);
-      this.friction.copyWithin(p * P * 3, last * P * 3, last * P * 3 + P * 3);
-      this.index[this._find(this.a[p], this.b[p])] = p;
+    if (p < this.active) {
+      const last = --this.active;
+      if (p !== last) this._move(last, p);
+      p = last;
     }
+    const end = --this.count;
+    if (p !== end) this._move(end, p);
+  }
+
+  /** Moves asleep pair p into the awake run. Pairs below the boundary stay where they are. */
+  wake(p) {
+    this._swap(p, this.active);
+    this.active++;
+  }
+
+  /** Moves awake pair p into the asleep run; the last awake pair takes its place. */
+  sleep(p) {
+    this.active--;
+    this._swap(p, this.active);
+  }
+
+  _move(from, to) {
+    this.a[to] = this.a[from]; this.b[to] = this.b[from];
+    this.idA[to] = this.idA[from]; this.idB[to] = this.idB[from];
+    this.points[to] = this.points[from];
+    this.pid.copyWithin(to * P, from * P, from * P + P);
+    this.normalImpulse.copyWithin(to * P, from * P, from * P + P);
+    this.friction.copyWithin(to * P * 3, from * P * 3, from * P * 3 + P * 3);
+    this.index[this._find(this.a[to], this.b[to])] = to;
+  }
+
+  _swap(i, j) {
+    if (i === j) return;
+    swap(this.a, i, j, 1); swap(this.b, i, j, 1);
+    swap(this.idA, i, j, 1); swap(this.idB, i, j, 1);
+    swap(this.points, i, j, 1);
+    swap(this.pid, i, j, P); swap(this.normalImpulse, i, j, P); swap(this.friction, i, j, 3 * P);
+    this.index[this._find(this.a[i], this.b[i])] = i;
+    this.index[this._find(this.a[j], this.b[j])] = j;
   }
 
   /**
@@ -179,6 +224,15 @@ export class Pairs {
       while (s < 2 * this.count) s *= 2;
       this._rehash(s);
     }
+  }
+}
+
+/** Swaps the n values at i and j. */
+function swap(array, i, j, n) {
+  for (let k = 0; k < n; k++) {
+    const t = array[i * n + k];
+    array[i * n + k] = array[j * n + k];
+    array[j * n + k] = t;
   }
 }
 

@@ -97,6 +97,18 @@ export class Broadphase {
     this.which[s] = -1;
   }
 
+  /**
+   * A body falling asleep: its fat box drawn in snug, without the reach ahead
+   * along a velocity it no longer has, so a sleeping pile keeps no more pairs
+   * than it needs. A smaller box can't overlap anything new, so there is
+   * nothing to ask the trees.
+   */
+  settle(world, s) {
+    if (this.which[s] !== MOVING_TREE) return;
+    fat(world, s, MOVING_TREE, this.margin, 0);
+    this.trees[MOVING_TREE].move(this.leaf[s], out[0], out[1], out[2], out[3], out[4], out[5]);
+  }
+
   /** The body changed by hand (teleported, reshaped, retyped, refiltered): file it afresh. */
   refile(world, s) {
     this.remove(s);
@@ -110,15 +122,17 @@ export class Broadphase {
   }
 
   /**
-   * Re-files every moving body whose box has left its fat box. The world's
+   * Re-files every awake body whose box has left its fat box. The world's
    * _box is each body's box grown by how far it can move this step, so a body
    * is re-filed before it could reach anything its old fat box didn't cover.
+   * A sleeping body doesn't move, so it isn't even looked at.
    */
   update(world, dt) {
-    const n = world._slots.top, state = world._slots.state, box = world._box;
+    const list = world._awakeList, n = world._awakeCount, box = world._box;
     const tree = this.trees[MOVING_TREE], fb = tree.box;
-    for (let s = 0; s < n; s++) {
-      if (state[s] !== 1 || this.which[s] !== MOVING_TREE) continue;
+    for (let i = 0; i < n; i++) {
+      const s = list[i];
+      if (this.which[s] !== MOVING_TREE) continue;
       const o = 6 * this.leaf[s], b = 6 * s;
       if (box[b] >= fb[o] && box[b + 1] >= fb[o + 1] && box[b + 2] >= fb[o + 2]
           && box[b + 3] <= fb[o + 3] && box[b + 4] <= fb[o + 4] && box[b + 5] <= fb[o + 5]) continue;

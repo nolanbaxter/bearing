@@ -216,13 +216,21 @@ class Stage {
     this._box = new Float64Array(n * 6);
     this._velocity = new Float64Array(n * 3);
     this.offsets = [];
+    // Every moving body awake, as while a scene is being recorded: the
+    // broadphase walks the awake list, and nothing here sleeps.
+    this._awakeList = new Int32Array(n);
+    this._awakeCount = 0;
     const columns = Math.ceil(Math.sqrt(tiles));
     for (let t = 0; t < tiles; t++) {
       this._type.set(trace.type, t * per);
       this._size.set(trace.size, t * per);
       this.offsets.push([(t % columns) * trace.width, Math.floor(t / columns) * trace.depth]);
     }
+    for (let s = 0; s < n; s++) if (this._type[s] !== STATIC) this._awakeList[this._awakeCount++] = s;
   }
+
+  /** Nothing sleeps here, so there is nothing to wake. */
+  _wake() {}
 
   load(step) {
     const per = this.trace.n * 6, from = this.trace.boxes, box = this._box;

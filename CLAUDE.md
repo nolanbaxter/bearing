@@ -65,6 +65,13 @@ These were made with Nolan and override the rules below where they differ.
   steps of velocity) ahead; a persistent pair list (`src/pairs.js`) holding warm-start impulses.
   Layers and masks are 32 bits, and negative numbers (`~MASK`, `1 << 31`) are accepted as the same
   bits (Nolan, 2026-10-13). Re-run the bench's default after any change to the broadphase.
+- **Sleeping** (2026-10-13, milestone 6). An island sleeps when every body in it has stayed within
+  its tolerance of where it came to rest for `SLEEP_TIME`, 1 s, measured (see its comment in
+  `src/world.js`). Distance, not speed: a speed rule kept a buzzing heap awake for good. Islands
+  are rebuilt by union-find over the contacts, only once something has been still long enough.
+  Per-body loops walk the awake list; asleep pairs sit past `pairs.active`; `moved(since)` reads
+  per-body stamps through the awake list and a log bounded by the body count. API approved:
+  `world.sleeping`, `body.asleep`, `world.stepCount`, `world.moved(since)`.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

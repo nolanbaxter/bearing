@@ -51,3 +51,12 @@ All notable changes to Bearing are recorded here. The format follows
   a pile at rest costs almost nothing to keep. No world bounds and nothing to size.
 - Body options `layers` and `mask`: 32 collision layers as bits. Two bodies collide when each one's
   layers are in the other's mask; by default everything collides with everything.
+- Sleeping. Touching bodies form islands, and an island whose bodies have all stayed within a pixel
+  of where they came to rest for a second goes to sleep: left out of every step, at no cost, until
+  something disturbs it. Anything that does wakes it, with nothing to call: a touch, any setter,
+  force or impulse, `setBody`, removing or moving what it rests on, or changing `world.gravity`.
+  10,000 boxes asleep step in a few microseconds. `world.sleeping` (on by default) switches it off,
+  and `body.asleep` says whether a body is.
+- `world.moved(since)`: the slots of the bodies an engine has to draw again since it last drew at
+  step `since`, exact however many steps ran in between, so a world of sleeping bodies copies
+  nothing. `world.stepCount` counts the steps.

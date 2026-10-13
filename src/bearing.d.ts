@@ -117,6 +117,8 @@ export interface WorldOptions {
   gravity?: Vec3;
   /** Smaller steps each step is solved in, a whole number from 1, default 8. */
   substeps?: number;
+  /** Whether bodies at rest go to sleep, default true. */
+  sleeping?: boolean;
 }
 
 export class World {
@@ -127,13 +129,23 @@ export class World {
   set gravity(value: Vec3);
   /** Smaller steps each step is solved in, a whole number from 1. Assign to change it at any time. */
   substeps: number;
+  /** Whether bodies at rest go to sleep. Switching it off wakes every sleeping body. */
+  sleeping: boolean;
   /** How many bodies the world holds. */
   readonly bodyCount: number;
+  /** How many times the world has been stepped: what moved() takes. */
+  readonly stepCount: number;
   /** 7 numbers per slot: position x, y, z, then quaternion x, y, z, w. Replaced when storage resizes: don't keep it. */
   readonly transforms: Float32Array;
   /** As transforms, before the last step: blend from this to transforms to interpolate. */
   readonly previous: Float32Array;
 
+  /**
+   * The slots of bodies that moved in any step after `since` (the stepCount you
+   * last drew at), always those that moved in the last step, and any added or
+   * moved by hand since. Overwritten by the next call or step: don't keep it.
+   */
+  moved(since: number): Int32Array;
   addBody(options?: BodyOptions): Body;
   setBody(body: Body, changes: BodyChanges): void;
   bodyOf(body: Body): BodyInfo;
@@ -157,6 +169,8 @@ export class Body {
   readonly slot: number;
   /** false once removed, or once its world is destroyed. */
   readonly alive: boolean;
+  /** true while at rest and left out of steps until disturbed. Never for a static body. */
+  readonly asleep: boolean;
   /** kg. */
   readonly mass: number;
   /** kg·m² about the body's own x, y and z axes, a frozen copy. */

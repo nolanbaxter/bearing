@@ -29,8 +29,9 @@ density unless you give one), no tolerances to tune, and nothing to size in adva
 - **Contacts**: exact contact points for every pair of shapes, friction that holds a box on a slope
   until it is steep enough to slide, bounces that settle, and stacks that stand. A 210-box pyramid
   stands for as long as you like on the defaults, within 1.5 mm of where it was built.
-- **Thousands of bodies**: only bodies whose boxes overlap are tested, and a body at rest costs
-  almost nothing. 32 collision layers, with a mask per body for what it collides with.
+- **Thousands of bodies**: only bodies whose boxes overlap are tested. Bodies at rest go to sleep
+  and cost nothing until something disturbs them, and `world.moved()` lists only the bodies a
+  renderer has to draw again. 32 collision layers, with a mask per body for what it collides with.
 - **Tolerances that scale**: every tolerance comes from the size of what touches, so a 1 cm marble
   and a 50 m building behave with nothing retuned. See [Contacts](docs/API.md#contacts).
 
@@ -42,7 +43,8 @@ takes, what it returns and what it throws.
 Bearing knows nothing about drawing. After each step, every body's position and rotation is in one
 `Float32Array`, [`world.transforms`](docs/API.md#world-transforms), 7 numbers a body, so any
 engine copies them in one loop. [`world.previous`](docs/API.md#world-previous) holds the step
-before, for drawing smooth motion between fixed steps.
+before, for drawing smooth motion between fixed steps, and [`world.moved()`](docs/API.md#world-moved)
+says which bodies changed since a frame was last drawn, so only those are copied.
 
 ## The same everywhere
 
@@ -57,8 +59,9 @@ node serve.js
 ```
 
 Then open <http://localhost:8080/demo/>: a 210-box pyramid, a stack, bouncing balls, boxes on
-slopes either side of their friction, a moving platform and a mixed pile, with what each step
-costs shown live. Bearing draws nothing, so the demo is drawn by
+slopes either side of their friction, a moving platform, a mixed pile, 2,000 balls raining down
+and two colours on separate layers, with what each step costs, and how many bodies are asleep,
+shown live. Bearing draws nothing, so the demo is drawn by
 [Winding](https://github.com/nolanbaxter/winding), loaded from jsDelivr at a pinned version; it
 needs a browser with WebGPU. The demo is not part of the package, and no test needs it.
 

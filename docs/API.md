@@ -49,14 +49,14 @@ These hold everywhere, so one learned is one learned for good.
 <a id="contents"></a>
 ## Contents
 
-[World](#world-class) · [Body](#body) · [Contacts](#contacts) · [Layers and masks](#layers) · [Determinism](#determinism) · [Limits](#limits)
+[World](#world-class) · [Body](#body) · [Contacts](#contacts) · [Layers and masks](#layers) · [Sleeping](#sleeping) · [Determinism](#determinism) · [Limits](#limits)
 
 <a id="index"></a>
 ## Index
 
 Every call, setting and entry, A to Z by its name.
 
-**A** &nbsp; [`world.addBody()`](#world-addbody) · [`body.alive`](#body-alive) · [`body.angularVelocity`](#body-angularvelocity) · [`body.applyAngularImpulse()`](#body-applyangularimpulse) · [`body.applyForce()`](#body-applyforce) · [`body.applyImpulse()`](#body-applyimpulse) · [`body.applyTorque()`](#body-applytorque)
+**A** &nbsp; [`world.addBody()`](#world-addbody) · [`body.alive`](#body-alive) · [`body.angularVelocity`](#body-angularvelocity) · [`body.applyAngularImpulse()`](#body-applyangularimpulse) · [`body.applyForce()`](#body-applyforce) · [`body.applyImpulse()`](#body-applyimpulse) · [`body.applyTorque()`](#body-applytorque) · [`body.asleep`](#body-asleep)
 
 **B** &nbsp; [`world.body()`](#world-body) · [`world.bodyCount`](#world-bodycount) · [`world.bodyOf()`](#world-bodyof)
 
@@ -70,13 +70,13 @@ Every call, setting and entry, A to Z by its name.
 
 **L** &nbsp; [Layers and masks](#layers) · [Limits](#limits)
 
-**M** &nbsp; [`body.mass`](#body-mass)
+**M** &nbsp; [`body.mass`](#body-mass) · [`world.moved()`](#world-moved)
 
 **P** &nbsp; [`body.position`](#body-position) · [`world.previous`](#world-previous)
 
 **R** &nbsp; [`world.remove()`](#world-remove) · [`body.rotation`](#body-rotation)
 
-**S** &nbsp; [`body.setAngularVelocity()`](#body-setangularvelocity) · [`body.setAxisAngle()`](#body-setaxisangle) · [`world.setBody()`](#world-setbody) · [`body.setEuler()`](#body-seteuler) · [`body.setPosition()`](#body-setposition) · [`body.setRotation()`](#body-setrotation) · [`body.setVelocity()`](#body-setvelocity) · [`body.slot`](#body-slot) · [`world.step()`](#world-step) · [`world.substeps`](#world-substeps)
+**S** &nbsp; [`body.setAngularVelocity()`](#body-setangularvelocity) · [`body.setAxisAngle()`](#body-setaxisangle) · [`world.setBody()`](#world-setbody) · [`body.setEuler()`](#body-seteuler) · [`body.setPosition()`](#body-setposition) · [`body.setRotation()`](#body-setrotation) · [`body.setVelocity()`](#body-setvelocity) · [`world.sleeping`](#world-sleeping) · [Sleeping](#sleeping) · [`body.slot`](#body-slot) · [`world.step()`](#world-step) · [`world.stepCount`](#world-stepcount) · [`world.substeps`](#world-substeps)
 
 **T** &nbsp; [`world.transforms`](#world-transforms)
 
@@ -99,10 +99,11 @@ Makes an empty world, ready to step at once.
 |---|---|---|
 | `gravity` | `[0, -9.81, 0]` | Acceleration of every dynamic body, in m/s². Earth's, pointing down Y. |
 | `substeps` | `8` | How many smaller steps each step is solved in. See [`world.substeps`](#world-substeps). |
+| `sleeping` | `true` | Whether bodies at rest go to sleep. See [`world.sleeping`](#world-sleeping). |
 
 Returns: the world.
 
-Throws: `World: options must be an object, got …`; `World: unknown option '…' (did you mean '…'?)`; `World: unknown option '…' (the options are gravity, substeps)`; `World: gravity must be 3 finite numbers, got …`; `World: substeps must be a whole number, 1 or more, got …`.
+Throws: `World: options must be an object, got …`; `World: unknown option '…' (did you mean '…'?)`; `World: unknown option '…' (the options are gravity, substeps, sleeping)`; `World: gravity must be 3 finite numbers, got …`; `World: substeps must be a whole number, 1 or more, got …`; `World: sleeping must be true or false, got …`.
 
 ```js
 const world = new World();
@@ -126,7 +127,7 @@ world.gravity = [0, -9.81, 0];     // and back
 ```
 
 Notes: static and kinematic bodies are not pulled by gravity. See [`addBody`](#world-addbody)'s
-`type`.
+`type`. Changing it wakes every sleeping body, since what held one at rest may not now.
 
 <a id="world-substeps"></a>
 ### `world.substeps` → `number`
@@ -146,6 +147,23 @@ one-metre boxes within 2.5 mm of where it was built after 10 s at 60 Hz (at 7 it
 4, 9 mm). It is not there to be tuned for a correct result; raise it for unusual scenes, such as a
 heavy body resting on a much lighter one, a very tall stack, or a step much longer than 1/60 s.
 
+<a id="world-sleeping"></a>
+### `world.sleeping` → `boolean`
+
+Whether bodies at rest go to sleep: left out of steps, at no cost, until something disturbs
+them. On by default. Change it at any time; switching it off wakes every sleeping body. See
+[Sleeping](#sleeping).
+
+Throws: `sleeping: this world was destroyed`; `world.sleeping must be true or false, got …`.
+
+```js
+world.sleeping = false;   // everything stays awake, as when checking a scene by eye
+```
+
+Notes: with it off, nothing about sleeping is kept or worked out at all. Results with it on and
+off differ slightly, because a body falling asleep has its last, too-small-to-see motion stopped;
+each is deterministic.
+
 <a id="world-bodycount"></a>
 ### `world.bodyCount` → `number`
 
@@ -155,6 +173,19 @@ Throws: `bodyCount: this world was destroyed`; `world.bodyCount is read only`.
 
 ```js
 console.log(world.bodyCount);
+```
+
+<a id="world-stepcount"></a>
+### `world.stepCount` → `number`
+
+How many times the world has been [stepped](#world-step) since it was made. What
+[`moved`](#world-moved) takes. Read only.
+
+Throws: `stepCount: this world was destroyed`; `world.stepCount is read only`.
+
+```js
+world.step(1 / 60);
+console.log(world.stepCount);   // 1
 ```
 
 <a id="world-transforms"></a>
@@ -206,6 +237,37 @@ Notes: replaced along with `transforms`; do not keep it. A body moved by hand, w
 or `rotation`, has its `previous` set too, so a teleport is drawn where it lands rather than
 sliding there. Blend rotations the short way: if the two quaternions' dot product is negative,
 negate one first.
+
+<a id="world-moved"></a>
+### `world.moved(since)` → `Int32Array`
+
+The slots of every body an engine has to draw again, if it last drew at step `since`: those that
+moved in any step after it, and always those that moved in the last step, which are still between
+[`previous`](#world-previous) and [`transforms`](#world-transforms); with bodies added, or moved by
+hand, since the last step. A body asleep, or static, and untouched, is never in it, so a world of
+10,000 sleeping bodies lists none.
+
+Returns: an `Int32Array` of slots, each once, in no particular order.
+
+Throws: `moved: this world was destroyed`; `moved: since must be a whole number, 0 or more, got …`.
+
+```js
+let drawn = 0;   // the stepCount these bodies were last drawn at
+function frame(alpha) {
+  const t = world.transforms, p = world.previous;
+  for (const slot of world.moved(drawn)) {
+    const o = slot * 7;
+    // draw the body in this slot between p and t, at alpha
+  }
+  drawn = world.stepCount;
+}
+```
+
+Notes: exact however many steps run between two frames, none or several. The array is overwritten
+by the next call or step; do not keep it. Removed bodies are not listed, since you removed them.
+Asked about a step long past, it still lists every body that moved since, only less quickly: it
+keeps a short log of what stopped moving, as long as there are bodies, and past that looks at
+every body.
 
 <a id="world-addbody"></a>
 ### `world.addBody(options)` → `Body`
@@ -345,8 +407,8 @@ from the new velocity, which keeps orbits and pendulums from gaining energy the 
 does, at the same cost. Before moving anything, a step copies [`transforms`](#world-transforms)
 into [`previous`](#world-previous). A world with no bodies costs almost nothing to step; a step
 with no forces applied doesn't look for any, one where nothing touches runs no contact solver,
-and bodies that stay within their boxes from the step before aren't looked up again; see
-[Contacts](#contacts).
+bodies that stay within their boxes from the step before aren't looked up again (see
+[Contacts](#contacts)), and sleeping bodies cost nothing at all (see [Sleeping](#sleeping)).
 
 A lopsided body turning freely tumbles as a real one does: a book spun about its middle axis
 flips over, and spun about its longest or shortest it doesn't. What a step carries across exactly
@@ -430,6 +492,19 @@ Throws: `body.alive is read only`.
 
 ```js
 if (ball.alive) ball.setVelocity(0, 5, 0);
+```
+
+<a id="body-asleep"></a>
+### `body.asleep` → `boolean`
+
+`true` while the body is asleep: at rest, and left out of steps until something disturbs it. A
+static body never is. Read only: a body is woken by whatever disturbs it, never by hand. See
+[Sleeping](#sleeping).
+
+Throws: `asleep: this world was destroyed`; `asleep: this body was removed`; `body.asleep is read only`.
+
+```js
+if (crate.asleep) console.log('the crate has settled');
 ```
 
 <a id="body-mass"></a>
@@ -737,6 +812,41 @@ Notes: either form of a 32-bit number is taken, so `~PLAYER` and `1 << 31`, whic
 makes negative, work as written; [`bodyOf`](#world-bodyof) gives them back unsigned. A change
 with [`setBody`](#world-setbody) takes effect at the next step: contacts between bodies that may no
 longer collide end there, and bodies that now may collide start to.
+
+<a id="sleeping"></a>
+## Sleeping
+
+A body that has stopped is put to sleep: left out of every step, at no cost, until something
+disturbs it. A pile at rest then costs nothing, which is most of what makes a large world fast:
+in a game, most things are at rest most of the time. There is nothing to call, and nothing to
+tune; [`world.sleeping`](#world-sleeping) switches it off.
+
+- **Islands sleep together.** Bodies touching each other form an island, and an island sleeps
+  only when every body in it has stopped, and wakes all at once. If the bottom box of a stack
+  slept while the top one still moved, the top one would push on a body that couldn't answer.
+  Static and kinematic bodies join no island, or everything on one floor would be one island.
+- **Stopped means gone nowhere you could see.** A body counts as stopped while no point of it
+  strays more than its contact tolerance, about a pixel, from where it came to rest. Moving
+  steadily, that is under 5 mm/s for a 1 m box and 0.05 mm/s for a 1 cm marble; buzzing in place,
+  as a body deep in a pile can, it is stopped however fast it buzzes. An island sleeps once all
+  its bodies have been stopped for a second, and its velocities are then set to exactly zero. A
+  second is measured, the shortest that put nothing to sleep that was about to move: a box
+  creeping on a slope a quarter of a degree past where friction holds it, and a cube a tenth of a
+  degree past balance on its edge, tipping slowly at first.
+- **Anything that disturbs a body wakes its island.** A touch from an awake body; any setter,
+  force or impulse; [`setBody`](#world-setbody); removing a body it rests on or that rests on it;
+  moving or changing a static body it touches; changing [`world.gravity`](#world-gravity). A
+  stack woken by a touch is held up in that same step.
+- **What it costs.** A sleeping body is not moved, bounded, filed or solved, and its contacts are
+  not looked at. A world whose bodies are all asleep steps in a few microseconds, whatever its
+  size.
+
+Notes: a body starting from rest that would only speed up very slowly, slower than twice its
+tolerance over a second squared (0.01 m/s² for a 1 m box), can fall asleep before it moves: a
+box on a slope within a twentieth of a degree of where friction holds it stays put. Nudge it, or
+switch sleeping off. Nothing in Bearing yet slows a ball or a capsule rolling on a floor, or a
+ball spinning in place on one point, so one doing either keeps awake whatever it touches until it
+is slower than a pixel a second.
 
 <a id="determinism"></a>
 ## Determinism

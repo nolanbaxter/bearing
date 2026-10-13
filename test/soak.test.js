@@ -26,6 +26,8 @@ async function collect() {
   }
 }
 const heap = () => process.memoryUsage().heapUsed + process.memoryUsage().arrayBuffers;
+/** Rounds run before memory is measured: see the colliding pile's test. */
+const WARM = 10;
 
 /** Everything the broadphase holds: tree nodes in use and allotted, and pairs listed. */
 const held = (world) => {
@@ -105,12 +107,15 @@ await test('a colliding pile built and cleared 50 times: contact storage and mem
   const world = new World();
   world.addBody({ type: 'static', size: [100, 1, 100], position: [0, -0.5, 0] });
   world.step(1 / 60);
-  // The first round is a warm-up and isn't measured: it is when V8 first
-  // compiles the narrowphase and the solver, and compiled code lives in the
-  // heap too. A leak grows with every round after it; compiled code doesn't.
+  // The first rounds are a warm-up and aren't measured: V8 compiles the
+  // narrowphase, the solver and the sleep pass, then recompiles the hottest
+  // of them as they warm, over several rounds, and compiled code lives in the
+  // heap too. Measured from round 1, growth wandered from 422 KB at 25 rounds
+  // to 17 KB at 100 and below zero at 200: code, not a leak, which would
+  // grow with every round.
   let before = 0;
   for (let round = 0; round < 50; round++) {
-    if (round === 1) {
+    if (round === WARM) {
       await collect();
       before = heap();
     }
@@ -124,6 +129,39 @@ await test('a colliding pile built and cleared 50 times: contact storage and mem
     world.step(1 / 60);
     assert.equal(world._contacts.capacity, 0, `round ${round}: contact storage kept`);
     assert.deepEqual(held(world), { nodes: 1, treeCapacity: 32, pairs: 0, pairCapacity: 16 }, `round ${round}: broadphase storage kept`);
+  }
+  await collect();
+  const grown = heap() - before;
+  assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
+});
+
+await test('stacks put to sleep, woken and cleared 30 times: the awake list, the asleep pairs and the moved log come back', async () => {
+  const world = new World();
+  const floor = world.addBody({ type: 'static', size: [100, 1, 100], position: [0, -0.5, 0] });
+  world.step(1 / 60);
+  let before = 0;
+  for (let round = 0; round < 30; round++) {
+    if (round === WARM) {
+      await collect();
+      before = heap();
+    }
+    const boxes = [];
+    for (let k = 0; k < 60; k++) boxes.push(world.addBody({ position: [(k % 12) * 2 - 12, 0.5 + Math.floor(k / 12), round % 2] }));
+    let n = 0;
+    while (world._awakeCount > 0 && n++ < 600) world.step(1 / 60);
+    assert.equal(world._awakeCount, 0, `round ${round}: never slept`);
+    assert.ok(world._pairs.count > world._pairs.active, `round ${round}: no pair asleep`);
+    world.moved(world.stepCount);
+    // Woken from beneath, then cleared away.
+    floor.setPosition(0, -0.6, round % 2);
+    world.step(1 / 60);
+    assert.equal(world._awakeCount, 60, `round ${round}: not all woken`);
+    for (const b of boxes) world.remove(b);
+    world.step(1 / 60);
+    assert.equal(world._awakeCount, 0);
+    assert.deepEqual(held(world), { nodes: 1, treeCapacity: 32, pairs: 0, pairCapacity: 16 }, `round ${round}: broadphase storage kept`);
+    assert.ok(world._logSlots.length <= 16, `round ${round}: a moved log of ${world._logSlots.length} kept`);
+    floor.setPosition(0, -0.5, 0);
   }
   await collect();
   const grown = heap() - before;

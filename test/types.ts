@@ -18,6 +18,11 @@ export function examples(): void {
   const debris = world.addBody({ layers: 1 << 2, mask: ~(1 << 1) });
   const bits: number = world.bodyOf(debris).layers & world.bodyOf(debris).mask;
   world.substeps = 16;
+  world.sleeping = false;
+  const quiet = new World({ sleeping: true });
+  const settled: boolean = debris.asleep;
+  let drawn: number = quiet.stepCount;
+  for (const slot of world.moved(drawn)) drawn += slot;
   const substeps: number = new World({ substeps: 4 }).substeps;
   const bounce: number = world.bodyOf(ground).restitution;
   void [substeps, bounce];

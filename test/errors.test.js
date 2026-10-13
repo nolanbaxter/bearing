@@ -50,9 +50,17 @@ const OPTIONS = 'type, shape, size, radius, height, density, mass, inertia, fric
 const cases = [
   ['world', () => new World(5), 'World: options must be an object, got 5'],
   ['world', () => new World({ gravty: [0, 0, 0] }), "World: unknown option 'gravty' (did you mean 'gravity'?)"],
-  ['world', () => new World({ wind: 1 }), "World: unknown option 'wind' (the options are gravity, substeps)"],
+  ['world', () => new World({ wind: 1 }), "World: unknown option 'wind' (the options are gravity, substeps, sleeping)"],
   ['world', () => new World({ gravity: [0, -9.81] }), 'World: gravity must be 3 finite numbers, got 0,-9.81'],
   ['world', () => new World({ substeps: 0 }), 'World: substeps must be a whole number, 1 or more, got 0'],
+  ['world', () => new World({ sleeping: 0 }), 'World: sleeping must be true or false, got 0'],
+  ['world-sleeping', () => gone().world.sleeping, 'sleeping: this world was destroyed'],
+  ['world-sleeping', () => { fresh().world.sleeping = 'no'; }, "world.sleeping must be true or false, got 'no'"],
+  ['world-stepcount', () => gone().world.stepCount, 'stepCount: this world was destroyed'],
+  ['world-stepcount', () => { fresh().world.stepCount = 0; }, 'world.stepCount is read only'],
+  ['world-moved', () => gone().world.moved(0), 'moved: this world was destroyed'],
+  ['world-moved', () => fresh().world.moved(-1), 'moved: since must be a whole number, 0 or more, got -1'],
+  ['world-moved', () => fresh().world.moved(), 'moved: since must be a whole number, 0 or more, got undefined'],
   ['world-substeps', () => gone().world.substeps, 'substeps: this world was destroyed'],
   ['world-substeps', () => { fresh().world.substeps = 2.5; }, 'world.substeps must be a whole number, 1 or more, got 2.5'],
 
@@ -125,7 +133,9 @@ const cases = [
   ['world-step', () => gone().world.step(1 / 60), 'step: this world was destroyed'],
   ['world-step', () => fresh().world.step(0), 'step: dt must be a positive number of seconds, got 0'],
 
-  ...['id', 'slot', 'world', 'alive'].map((p) => [`body-${p}`, () => { fresh().body[p] = 1; }, `body.${p} is read only`]),
+  ...['id', 'slot', 'world', 'alive', 'asleep'].map((p) => [`body-${p}`, () => { fresh().body[p] = 1; }, `body.${p} is read only`]),
+  ['body-asleep', () => gone().body.asleep, 'asleep: this world was destroyed'],
+  ['body-asleep', () => dead().body.asleep, 'asleep: this body was removed'],
   ...[['mass', 'setBody(body, { mass })'], ['inertia', 'setBody(body, { inertia })'],
     ['position', 'setPosition(x, y, z)'], ['rotation', 'setRotation(q)'],
     ['velocity', 'setVelocity(x, y, z)'], ['angularVelocity', 'setAngularVelocity(x, y, z)']].flatMap(([p, hint]) => [

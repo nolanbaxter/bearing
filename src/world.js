@@ -42,7 +42,7 @@ const BOX = 0, SPHERE = 1, CAPSULE = 2;
 /** Which sizes each shape has; giving one another shape has throws. */
 const SHAPE_SIZES = { box: ['size'], sphere: ['radius'], capsule: ['radius', 'height'] };
 
-const WORLD_OPTIONS = ['gravity', 'substeps'];
+const WORLD_OPTIONS = ['gravity', 'substeps', 'sleeping'];
 
 // THE SOLVER'S SHAPE, all measured with bench/solver.js (i7-1260P, Node 22),
 // on a 1 m box dropped flat, a 10-box stack and a 210-box pyramid, 10 s at
@@ -65,6 +65,32 @@ const STIFFNESS = 1 / 8;
 // How damped that spring is. Ratios 1, 3 and 10 measured within a millimetre of
 // each other; 10 settled the pyramid stillest, and it is Box2D 3's.
 const DAMPING_RATIO = 10;
+
+// SLEEPING. A body is still while no point of it has strayed more than its
+// own tolerance, about a pixel, from where it was when it last came to rest:
+// freezing it there can't be seen. An island sleeps once every body in it has
+// been still for SLEEP_TIME. Moving steadily, that is any speed under its
+// tolerance over SLEEP_TIME, 5 mm/s for a 1 m box and 0.05 mm/s for a 1 cm marble.
+//
+// It is how far the body has gone that counts, not how fast it is going. A
+// heap of 1,000 boxes measured with a speed rule had 909 still awake after
+// 40 s: a few boxes buzzed at 1.3 cm/s, twice the speed that counts as still,
+// while going nowhere (one strayed 0.18 mm in 30 s), and kept the whole heap
+// awake. Going by distance, a buzz in place is still, and a real creep isn't.
+//
+// SLEEP_TIME is the shortest that froze nothing about to move, measured with
+// sleeping on and off over 8 s at 60 Hz: boxes on slopes 0.25° to 2° past
+// friction's hold, which creep before they slide, and cubes 0.1° to 3° past
+// balance on an edge, which tip slowly at first. At 0.25 s the box half a
+// degree past went to sleep where it stood; at 0.5 s, Box2D's and Jolt's, the
+// cube 0.1° past did, having strayed 2.4 mm of its 5 mm in its first half
+// second; from 1 s, none did. Longer costs: a 210-box pyramid was all asleep
+// at 0.65 s with 0.5, at 1.13 s with 1, and at 2.15 s with 2. The limit that
+// comes with any such time: a body starting from rest that speeds up more
+// slowly than 2 tolerance / SLEEP_TIME², 0.01 m/s² for a 1 m box, strays less
+// than a pixel in it and can fall asleep before it moves, such as a box on a
+// slope within 0.05° of its friction angle.
+const SLEEP_TIME = 1;
 const BODY_OPTIONS = [
   'type', 'shape', 'size', 'radius', 'height', 'density', 'mass', 'inertia',
   'friction', 'restitution', 'damping', 'angularDamping', 'gravityScale', 'layers', 'mask',
@@ -129,6 +155,22 @@ const COLUMNS = [
   ['_forced', Uint8Array, 1],        // 1 while the slot is in _forcedSlots
   ['_transforms', Float32Array, 7],
   ['_previous', Float32Array, 7],
+  // Sleeping (see SLEEP_TIME and _sleep):
+  ['_awake', Uint8Array, 1],         // 1 while awake; never for a static body
+  ['_awakeList', Int32Array, 1],     // the awake bodies, dense: what every per-body loop walks
+  ['_inAwake', Int32Array, 1],       // a body's place in _awakeList, plus 1; 0 when not in it
+  ['_still', Float64Array, 1],       // how long it has been still, s
+  ['_rest', Float64Array, 7],        // where it was when it last came to rest: position, rotation
+  ['_island', Int32Array, 1],        // asleep: its island's first body, plus 1; 0 when awake
+  ['_islandNext', Int32Array, 1],    // asleep: the next body of its island, plus 1; 0 at the end
+  ['_parent', Int32Array, 1],        // union-find, while islands are found
+  ['_least', Float64Array, 1],       // at an island's root, while islands are found: its least still time
+  ['_slept', Int32Array, 1],         // the bodies that fell asleep in the last step, dense
+  ['_staticMoved', Uint8Array, 1],   // 1 for a static body moved or changed since the last step
+  // The moved list (see moved()):
+  ['_movedAt', Float64Array, 1],     // the step it last moved in; stepCount + 1 if set by hand since
+  ['_seen', Uint32Array, 1],         // for moved(), so a body is listed once
+  ['_movedOut', Int32Array, 1],      // what moved() returns a view of
 ];
 
 export class World {
@@ -154,7 +196,35 @@ export class World {
     this._substeps = o.substeps === undefined ? SUBSTEPS : wholeFromOne('World', 'substeps', o.substeps);
     /** Steps that ran the contact solver: for the off-means-off test, which reads it. */
     this._solverSteps = 0;
+    this._sleeping = o.sleeping === undefined ? true : flag('World', 'sleeping', o.sleeping);
+    this._stepCount = 0;
+    this._reset();
+    /** Steps that looked for islands: for the off-means-off test, which reads it. */
+    this._islandSteps = 0;
     this._destroyed = false;
+  }
+
+  /** The state that isn't a column: fresh at creation, and again when destroyed. */
+  _reset() {
+    this._awakeCount = 0;
+    this._sleptCount = 0;
+    /** Something woke, or a body was removed or a static one moved: _syncPairs has work to do. */
+    this._wakePending = false;
+    /** Static bodies with _staticMoved set, to clear once the step has seen them. */
+    this._movedStatics = [];
+    /** dt while a step is running, so a body woken mid-step gets its bounds for it; 0 between steps. */
+    this._stepDt = 0;
+    // The moved log: a body's slot goes here whenever its stamp changes other
+    // than by moving in a step while awake, and whenever it leaves the awake
+    // list, with a stamp at least its own. moved() reads the awake list and
+    // the end of this, instead of every body. See moved() and _log().
+    this._logSlots = new Int32Array(0);
+    this._logAt = new Float64Array(0);
+    this._logCount = 0;
+    this._logLast = 0;
+    /** Entries stamped this or earlier were dropped: moved() asked about older steps reads every body. */
+    this._logFloor = 0;
+    this._seenMark = 0;
   }
 
   // ---- settings and state ----
@@ -182,7 +252,36 @@ export class World {
   set gravity(value) {
     this._live('gravity');
     this._gravity = vec3(null, 'world.gravity', value);
+    // What held a body at rest may not now: every sleeping body wakes (rule 36).
+    this._wakeAll();
   }
+
+  /**
+   * Whether bodies at rest go to sleep: left out of steps until something
+   * disturbs them. Switching it off wakes every sleeping body.
+   */
+  get sleeping() {
+    this._live('sleeping');
+    return this._sleeping;
+  }
+
+  set sleeping(value) {
+    this._live('sleeping');
+    this._sleeping = flag(null, 'world.sleeping', value);
+    if (!value) {
+      this._wakeAll();
+    } else {
+      // Still times stopped counting while it was off; they start again from now.
+      for (let i = 0; i < this._awakeCount; i++) this._settle(this._awakeList[i]);
+    }
+  }
+
+  get stepCount() {
+    this._live('stepCount');
+    return this._stepCount;
+  }
+
+  set stepCount(_) { readOnly('world.stepCount'); }
 
   get bodyCount() {
     this._live('bodyCount');
@@ -219,6 +318,8 @@ export class World {
     this._write(s, spec, true);
     this._boundsOf(s, 0, 0);
     this._broadphase.add(this, s);
+    if (this._type[s] !== STATIC) this._awaken(s);
+    this._stamp(s);
     return new Body(this, this._slots.id(s));
   }
 
@@ -226,9 +327,21 @@ export class World {
     const s = this._slotOfBody('setBody', body);
     const o = options('setBody', changes, 'changes');
     const spec = resolve('setBody', this._spec(s), o);
+    // Any change can change what holds it, so its island wakes first (rule 36).
+    this._wake(s);
     // Moving or turning a body by hand is a teleport: `previous` moves with it,
     // so interpolation doesn't draw it sliding across from where it was.
-    this._write(s, spec, o.position !== undefined || o.rotation !== undefined);
+    const placed = o.position !== undefined || o.rotation !== undefined;
+    this._write(s, spec, placed);
+    if (this._type[s] === STATIC) {
+      this._unawaken(s);
+      // Whatever slept against it may no longer be held, or may be buried.
+      this._markStatic(s);
+      this._start.set(this._position.subarray(s * 3, s * 3 + 3), s * 3);
+    } else {
+      this._awaken(s);
+    }
+    if (placed) this._stamp(s);
     // Anything here can change what it touches: where it is, its shape, its
     // type, its filtering. Filed afresh, with no refresh call (rule 36).
     this._boundsOf(s, 0, 0);
@@ -256,6 +369,47 @@ export class World {
 
   remove(body) {
     this._remove('remove', body);
+  }
+
+  /**
+   * The slots of the bodies that moved in any step after step `since`, and
+   * always of those that moved in the last one, since they are still between
+   * `previous` and `transforms`; with bodies added, or moved by hand, since
+   * the last step. Pass the `stepCount` you last drew at, and only these need
+   * drawing again. A view the next call or step overwrites.
+   */
+  moved(since) {
+    this._live('moved');
+    if (!Number.isInteger(since) || since < 0) {
+      fail('moved', `since must be a whole number, 0 or more, got ${show(since)}`);
+    }
+    const after = Math.min(since, this._stepCount - 1);
+    const at = this._movedAt, state = this._slots.state, top = this._slots.top, out = this._movedOut;
+    let k = 0;
+    if (after < this._logFloor) {
+      // Asked about steps the log no longer covers: every body, by its stamp.
+      // As exact, just not as quick; Winding's renderer falls back the same way.
+      for (let s = 0; s < top; s++) if (state[s] === 1 && at[s] > after) out[k++] = s;
+      return out.subarray(0, k);
+    }
+    let mark = ++this._seenMark;
+    if (mark > 0xffffffff) {
+      this._seen.fill(0);
+      mark = this._seenMark = 1;
+    }
+    const seen = this._seen, list = this._awakeList;
+    for (let i = 0; i < this._awakeCount; i++) {
+      const s = list[i];
+      if (at[s] > after) { seen[s] = mark; out[k++] = s; }
+    }
+    // Every other body with a newer stamp left the awake list, or was stamped
+    // by hand, since then, and so has an entry at least that new.
+    const slots = this._logSlots, stamps = this._logAt;
+    for (let i = this._logCount - 1; i >= 0 && stamps[i] > after; i--) {
+      const s = slots[i];
+      if (s < top && state[s] === 1 && at[s] > after && seen[s] !== mark) { seen[s] = mark; out[k++] = s; }
+    }
+    return out.subarray(0, k);
   }
 
   body(id) {
@@ -288,36 +442,67 @@ export class World {
     if (typeof dt !== 'number' || !(dt > 0) || dt === Infinity) {
       fail('step', `dt must be a positive number of seconds, got ${show(dt)}`);
     }
-    const n = this._slots.top, state = this._slots.state, type = this._type;
+    const step = ++this._stepCount;
+    const state = this._slots.state, list = this._awakeList, at = this._movedAt;
     const tr = this._transforms, prev = this._previous;
 
     if (this._forcedSlots.length > 0) this._applyForces(dt);
+    // What a setter woke since the last step, or a removal or a static body
+    // moved by hand disturbed, brings its pairs back among the awake ones.
+    if (this._wakePending) this._syncPairs();
+    if (this._movedStatics.length > 0) this._clearStatics();
 
-    // Static bodies never move in a step, and their `previous` already equals
-    // their transform, so they cost one compare here and none below.
-    for (let s = 0; s < n; s++) {
-      if (state[s] !== 1 || type[s] === STATIC) continue;
-      const t7 = s * 7;
+    // Only awake bodies move in a step; static and sleeping ones' `previous`
+    // already equals their transform. A body that fell asleep at the end of
+    // the last step moved in it, so it gets this once more, and counts as
+    // moved once more.
+    for (let i = 0; i < this._awakeCount; i++) {
+      const t7 = list[i] * 7;
       for (let k = 0; k < 7; k++) prev[t7 + k] = tr[t7 + k];
     }
+    for (let i = 0; i < this._sleptCount; i++) {
+      const s = this._slept[i];
+      if (state[s] !== 1) continue;
+      const t7 = s * 7;
+      for (let k = 0; k < 7; k++) prev[t7 + k] = tr[t7 + k];
+      at[s] = step;
+      this._log(s);
+    }
+    this._sleptCount = 0;
 
-    // Moving bodies' bounds, then the broadphase: re-file what left its fat
-    // box, offer the pairs that newly overlap, and narrow every listed pair
+    // Awake bodies' bounds, then the broadphase: re-file what left its fat
+    // box, offer the pairs that newly overlap, and narrow every awake pair
     // down to its contact points. Static bodies' bounds were worked out when
-    // they were placed, and a world where nothing moves offers no pairs.
-    const next = this._contacts;
+    // they were placed, and sleeping ones' when they fell asleep.
+    this._stepDt = dt;
+    const next = this._contacts, pairs = this._pairs, broadphase = this._broadphase;
     this._bounds(dt);
-    this._broadphase.update(this, dt);
-    this._broadphase.candidates(this, this._pairs);
-    narrow(this, this._pairs, this._broadphase, next);
+    broadphase.update(this, dt);
+    broadphase.candidates(this, pairs);
+    // A touch that wakes an island brings its pairs into the awake run, past
+    // where the pass stopped, and they are narrowed in turn until nothing
+    // more wakes: a woken stack is held in the step it wakes, rather than
+    // dropping a step's worth of gravity before its contacts come back.
+    next.count = 0;
+    let from = 0;
+    do {
+      if (this._wakePending) this._syncPairs();
+      narrow(this, pairs, broadphase, next, from);
+      from = pairs.active;
+    } while (this._wakePending);
     next.trim();
-    this._pairs.trim();
+    pairs.trim();
     const touching = next.count;
 
     const substeps = this._substeps, h = dt / substeps;
     if (touching > 0) {
       this._solverSteps++;
-      this._start.set(this._position.subarray(0, n * 3));
+      // Static and sleeping bodies don't move, so theirs stays where it was set.
+      const p = this._position, start = this._start;
+      for (let i = 0; i < this._awakeCount; i++) {
+        const s3 = list[i] * 3;
+        start[s3] = p[s3]; start[s3 + 1] = p[s3 + 1]; start[s3 + 2] = p[s3 + 2];
+      }
       prepare(this, next);
       makeSoft(STIFFNESS / h, DAMPING_RATIO, h);
     }
@@ -339,22 +524,248 @@ export class World {
     }
 
     const p = this._position, q = this._rotation;
-    for (let s = 0; s < n; s++) {
-      if (state[s] !== 1 || type[s] === STATIC) continue;
-      const t7 = s * 7, s3 = s * 3, s4 = s * 4;
+    for (let i = 0; i < this._awakeCount; i++) {
+      const s = list[i], t7 = s * 7, s3 = s * 3, s4 = s * 4;
       tr[t7] = p[s3]; tr[t7 + 1] = p[s3 + 1]; tr[t7 + 2] = p[s3 + 2];
       tr[t7 + 3] = q[s4]; tr[t7 + 4] = q[s4 + 1]; tr[t7 + 5] = q[s4 + 2]; tr[t7 + 6] = q[s4 + 3];
+      at[s] = step;
+    }
+    this._stepDt = 0;
+    if (this._sleeping) this._sleep(dt);
+  }
+
+  /**
+   * Counts how long each awake body has been still, and puts to sleep every
+   * island whose bodies all have been for SLEEP_TIME, at the end of a step.
+   *
+   * Islands are found afresh, and only in a step where some body has been
+   * still long enough, so a scene still settling does no island work at all.
+   * They are found by union-find: every awake body starts as its own island,
+   * and each contact between two dynamic bodies joins theirs. Static and
+   * kinematic bodies join nothing, or everything on one floor would be one
+   * island. ponytail: rebuilt from the contacts each time, which costs a pass
+   * over the awake bodies and the contacts; Box2D 3 keeps islands from step
+   * to step instead, worth it only if this ever measures as a real share of
+   * a step.
+   */
+  _sleep(dt) {
+    const list = this._awakeList, p = this._position, q = this._rotation, rest = this._rest, still = this._still;
+    const size = this._size, reach = this._reach;
+    let ready = false;
+    for (let i = 0; i < this._awakeCount; i++) {
+      const s = list[i], s3 = s * 3, s4 = s * 4, r7 = s * 7;
+      const dx = p[s3] - rest[r7], dy = p[s3 + 1] - rest[r7 + 1], dz = p[s3 + 2] - rest[r7 + 2];
+      // How far its farthest point has swung: the turn from rest is
+      // q conj(rest), whose vector part is sin(θ/2) long, and a point at
+      // distance r turned by θ moves 2 r sin(θ/2), a chord, with no trigonometry.
+      const qx = q[s4], qy = q[s4 + 1], qz = q[s4 + 2], qw = q[s4 + 3];
+      const ax = rest[r7 + 3], ay = rest[r7 + 4], az = rest[r7 + 5], aw = rest[r7 + 6];
+      const tx = aw * qx - qw * ax - (qy * az - qz * ay);
+      const ty = aw * qy - qw * ay - (qz * ax - qx * az);
+      const tz = aw * qz - qw * az - (qx * ay - qy * ax);
+      const strayed = Math.sqrt(dx * dx + dy * dy + dz * dz) + 2 * reach[s] * Math.sqrt(tx * tx + ty * ty + tz * tz);
+      if (strayed < size[s] * PIXEL) {
+        still[s] += dt;
+        if (still[s] >= SLEEP_TIME) ready = true;
+      } else {
+        this._settle(s);
+      }
+    }
+    if (!ready) return;
+    this._islandSteps++;
+
+    const parent = this._parent, type = this._type, c = this._contacts, n = this._awakeCount;
+    for (let i = 0; i < n; i++) parent[list[i]] = list[i];
+    for (let m = 0; m < c.count; m++) {
+      const a = c.a[m], b = c.b[m];
+      if (type[a] !== DYNAMIC || type[b] !== DYNAMIC) continue;
+      // The lower slot becomes the root, so islands depend only on the inputs.
+      const ra = root(parent, a), rb = root(parent, b);
+      if (ra < rb) parent[rb] = ra;
+      else if (rb < ra) parent[ra] = rb;
+    }
+    const least = this._least;
+    for (let i = 0; i < n; i++) least[list[i]] = Infinity;
+    for (let i = 0; i < n; i++) {
+      const s = list[i], r = root(parent, s);
+      if (still[s] < least[r]) least[r] = still[s];
+    }
+    // Backwards, since a body falling asleep leaves the list and the last one
+    // takes its place, and that one has already been seen.
+    let slept = false;
+    for (let i = n - 1; i >= 0; i--) {
+      const s = list[i], r = root(parent, s);
+      if (least[r] < SLEEP_TIME) continue;
+      this._fallAsleep(s, r);
+      slept = true;
+    }
+    if (!slept) return;
+    // Pairs with no awake body left go to the asleep run, where no step looks.
+    const pairs = this._pairs, awake = this._awake;
+    for (let p = 0; p < pairs.active;) {
+      if (awake[pairs.a[p]] === 0 && awake[pairs.b[p]] === 0) pairs.sleep(p);
+      else p++;
     }
   }
 
-  /** Gravity, scaled per body, and damping, over h, for every dynamic body. */
+  /** Slot s falls asleep, into the island whose first body is r. */
+  _fallAsleep(s, r) {
+    const s3 = s * 3;
+    // Stopped exactly, so it can't creep while asleep or wake with a drift.
+    this._velocity.fill(0, s3, s3 + 3);
+    this._angular.fill(0, s3, s3 + 3);
+    this._unawaken(s);
+    this._island[s] = r + 1;
+    if (s !== r) {
+      this._islandNext[s] = this._islandNext[r];
+      this._islandNext[r] = s + 1;
+    }
+    this._boundsOf(s, 0, 0);
+    this._broadphase.settle(this, s);
+    this._slept[this._sleptCount++] = s;
+  }
+
+  /** Puts slot s on the awake list, if it isn't already. */
+  _awaken(s) {
+    if (this._inAwake[s] !== 0) return;
+    this._awakeList[this._awakeCount] = s;
+    this._inAwake[s] = ++this._awakeCount;
+    this._awake[s] = 1;
+    this._settle(s);
+  }
+
+  /** Slot s starts counting still time again, from where it is now. */
+  _settle(s) {
+    this._still[s] = 0;
+    this._rest.set(this._position.subarray(s * 3, s * 3 + 3), s * 7);
+    this._rest.set(this._rotation.subarray(s * 4, s * 4 + 4), s * 7 + 3);
+  }
+
+  /** Takes slot s off the awake list, if it is on it; the last body takes its place. */
+  _unawaken(s) {
+    const i = this._inAwake[s] - 1;
+    if (i < 0) return;
+    const last = this._awakeList[--this._awakeCount];
+    this._awakeList[i] = last;
+    this._inAwake[last] = i + 1;
+    this._inAwake[s] = 0;
+    this._awake[s] = 0;
+    // It may have moved in steps a later moved() asks about.
+    this._log(s);
+  }
+
+  /**
+   * Wakes slot s's island, if s is asleep: every way of disturbing a sleeping
+   * body comes here. A static or awake body is left as it is.
+   */
+  _wake(s) {
+    if (this._island[s] === 0) return;
+    const dt = this._stepDt, g = this._gravity;
+    const gl = dt > 0 ? Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]) : 0;
+    for (let b = this._island[s] - 1; b >= 0;) {
+      const next = this._islandNext[b] - 1;
+      this._island[b] = 0;
+      this._islandNext[b] = 0;
+      this._awaken(b);
+      // Woken by a touch in the middle of a step: its bounds for the rest of it.
+      if (dt > 0) this._boundsOf(b, dt, gl);
+      b = next;
+    }
+    this._wakePending = true;
+  }
+
+  _wakeAll() {
+    for (let s = 0; s < this._slots.top; s++) if (this._island[s] !== 0) this._wake(s);
+  }
+
+  /** A static body moved or changed by hand: what slept against it is woken at the next step. */
+  _markStatic(s) {
+    if (this._staticMoved[s] === 1) return;
+    this._staticMoved[s] = 1;
+    this._movedStatics.push(s);
+    this._wakePending = true;
+  }
+
+  _clearStatics() {
+    for (const s of this._movedStatics) this._staticMoved[s] = 0;
+    this._movedStatics.length = 0;
+  }
+
+  /**
+   * Brings into the awake run every asleep pair that now has an awake body,
+   * and wakes what a removed body, or a static one moved by hand, leaves
+   * unsupported or buried. Waking can wake more, so it goes round until
+   * nothing does. Its cost is a pass over the asleep pairs, and it runs only
+   * after something woke or changed.
+   */
+  _syncPairs() {
+    const pairs = this._pairs, awake = this._awake, moved = this._staticMoved, slots = this._slots;
+    while (this._wakePending) {
+      this._wakePending = false;
+      for (let p = pairs.active; p < pairs.count; p++) {
+        const a = pairs.a[p], b = pairs.b[p];
+        const goneA = slots.slotOf(pairs.idA[p]) !== a, goneB = slots.slotOf(pairs.idB[p]) !== b;
+        if ((goneA || moved[a] === 1) && !goneB) this._wake(b);
+        if ((goneB || moved[b] === 1) && !goneA) this._wake(a);
+        // A pair with a body gone joins too, so the next narrowing drops it.
+        if (goneA || goneB || awake[a] === 1 || awake[b] === 1) pairs.wake(p);
+      }
+    }
+  }
+
+  /** Marks slot s as moved by hand, or added, since the last step. */
+  _stamp(s) {
+    this._movedAt[s] = this._stepCount + 1;
+    this._log(s);
+  }
+
+  /**
+   * Notes slot s in the moved log. Entries go in stamp order, each at least
+   * the body's own stamp, so moved() can read back from the end and stop.
+   *
+   * The log is cut whenever it holds more entries than there are bodies:
+   * past that, reading every body's stamp is as quick as reading the log.
+   * The older half goes, and moved() asked about a step that old reads every
+   * body instead. Amortized, each entry is copied at most once.
+   */
+  _log(s) {
+    let n = this._logCount;
+    if (n === this._logSlots.length) {
+      const length = Math.max(16, n * 2);
+      this._logSlots = resized(this._logSlots, length);
+      this._logAt = resized(this._logAt, length);
+    }
+    const stamp = Math.max(this._movedAt[s], this._logLast);
+    this._logSlots[n] = s;
+    this._logAt[n] = stamp;
+    this._logLast = stamp;
+    this._logCount = ++n;
+    if (n <= this._slots.count) return;
+    const floor = this._logAt[(n - 1) >> 1];
+    let from = (n - 1) >> 1;
+    while (from < n && this._logAt[from] <= floor) from++;
+    this._logSlots.copyWithin(0, from, n);
+    this._logAt.copyWithin(0, from, n);
+    this._logCount = n - from;
+    this._logFloor = floor;
+    // The world's quarter rule, so a burst of bodies leaves no log behind.
+    if (this._logSlots.length > 16 && this._logCount <= this._logSlots.length / 4) {
+      let length = 16;
+      while (length < this._logCount) length *= 2;
+      this._logSlots = resized(this._logSlots, length);
+      this._logAt = resized(this._logAt, length);
+    }
+  }
+
+  /** Gravity, scaled per body, and damping, over h, for every awake dynamic body. */
   _accelerate(h) {
-    const n = this._slots.top, state = this._slots.state, type = this._type;
+    const list = this._awakeList, n = this._awakeCount, type = this._type;
     const v = this._velocity, w = this._angular, scale = this._gravityScale;
     const gx = this._gravity[0] * h, gy = this._gravity[1] * h, gz = this._gravity[2] * h;
     const damping = this._damping, angularDamping = this._angularDamping;
-    for (let s = 0; s < n; s++) {
-      if (state[s] !== 1 || type[s] !== DYNAMIC) continue;
+    for (let i = 0; i < n; i++) {
+      const s = list[i];
+      if (type[s] !== DYNAMIC) continue;
       const s3 = s * 3, g = scale[s];
       v[s3] += gx * g; v[s3 + 1] += gy * g; v[s3 + 2] += gz * g;
       // dv/dt = -c v, taken implicitly: v / (1 + c h). Exact operations only
@@ -371,14 +782,13 @@ export class World {
     }
   }
 
-  /** Positions and rotations on by h, for every body that moves. */
+  /** Positions and rotations on by h, for every awake body. */
   _move(h) {
-    const n = this._slots.top, state = this._slots.state, type = this._type;
+    const list = this._awakeList, n = this._awakeCount, type = this._type;
     const p = this._position, q = this._rotation, v = this._velocity, w = this._angular, I = this._inertia;
     const half = h * 0.5;
-    for (let s = 0; s < n; s++) {
-      if (state[s] !== 1 || type[s] === STATIC) continue;
-      const s3 = s * 3, s4 = s * 4;
+    for (let i = 0; i < n; i++) {
+      const s = list[i], s3 = s * 3, s4 = s * 4;
       p[s3] += v[s3] * h; p[s3 + 1] += v[s3 + 1] * h; p[s3 + 2] += v[s3 + 2] * h;
       const wx = w[s3], wy = w[s3 + 1], wz = w[s3 + 2];
       const turning = wx !== 0 || wy !== 0 || wz !== 0;
@@ -407,15 +817,12 @@ export class World {
    * two nearer get speculative points out to it (see collide.js).
    */
   _bounds(dt) {
-    const n = this._slots.top, state = this._slots.state, type = this._type;
+    const list = this._awakeList, n = this._awakeCount;
     const g = this._gravity, gl = Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
-    for (let s = 0; s < n; s++) {
-      if (state[s] !== 1 || type[s] === STATIC) continue;
-      this._boundsOf(s, dt, gl);
-    }
+    for (let i = 0; i < n; i++) this._boundsOf(list[i], dt, gl);
   }
 
-  /** _bounds for one body: on every step for one that moves, and whenever a static one is placed. */
+  /** _bounds for one body: every step for an awake one, and whenever a body is placed, changed or falls asleep. */
   _boundsOf(s, dt, gl) {
     const type = this._type;
     const p = this._position, q = this._rotation, v = this._velocity, w = this._angular;
@@ -503,6 +910,7 @@ export class World {
     this._broadphase = new Broadphase();
     this._pairs = new Pairs(this);
     this._contacts = new Contacts();
+    this._reset();
   }
 
   // ---- what Body calls (public, but not for users: see test/docs.test.js) ----
@@ -534,18 +942,30 @@ export class World {
     return this._mass[this._slotOf(caller, id)];
   }
 
+  _asleepOf(caller, id) {
+    return this._island[this._slotOf(caller, id)] !== 0;
+  }
+
   _setPosition(caller, id, x, y, z) {
     const s = this._slotOf(caller, id);
-    this._position.set(xyz(caller, x, y, z), s * 3);
-    this._place(s);
-    this._boundsOf(s, 0, 0);
-    this._broadphase.refile(this, s);
+    const value = xyz(caller, x, y, z);
+    this._wake(s);
+    this._position.set(value, s * 3);
+    this._moved(s);
   }
 
   _setRotation(caller, id, q) {
     const s = this._slotOf(caller, id);
+    this._wake(s);
     this._rotation.set(q, s * 4);
+    this._moved(s);
+  }
+
+  /** After a teleport: drawn there, stamped, filed afresh, and what a static body held woken. */
+  _moved(s) {
     this._place(s);
+    this._stamp(s);
+    if (this._type[s] === STATIC) this._markStatic(s);
     this._boundsOf(s, 0, 0);
     this._broadphase.refile(this, s);
   }
@@ -554,6 +974,7 @@ export class World {
     const s = this._slotOf(caller, id);
     const value = xyz(caller, x, y, z);
     if (this._type[s] === STATIC) fail(caller, `a static body has no ${name}`);
+    this._wake(s);
     (name === 'velocity' ? this._velocity : this._angular).set(value, s * 3);
   }
 
@@ -568,6 +989,7 @@ export class World {
     const f = vec3(caller, 'force', force);
     const at = point === undefined ? null : vec3(caller, 'point', point);
     if (this._type[s] !== DYNAMIC) return;
+    this._wake(s);
     const s3 = s * 3;
     this._force[s3] += f[0]; this._force[s3 + 1] += f[1]; this._force[s3 + 2] += f[2];
     if (at) {
@@ -583,6 +1005,7 @@ export class World {
     const s = this._slotOf(caller, id);
     const t = vec3(caller, 'torque', torque);
     if (this._type[s] !== DYNAMIC) return;
+    this._wake(s);
     const s3 = s * 3;
     this._torque[s3] += t[0]; this._torque[s3 + 1] += t[1]; this._torque[s3 + 2] += t[2];
     this._queueForce(s);
@@ -593,6 +1016,7 @@ export class World {
     const j = vec3(caller, 'impulse', impulse);
     const at = point === undefined ? null : vec3(caller, 'point', point);
     if (this._type[s] !== DYNAMIC) return;
+    this._wake(s);
     const s3 = s * 3, m = this._mass[s];
     this._velocity[s3] += j[0] / m; this._velocity[s3 + 1] += j[1] / m; this._velocity[s3 + 2] += j[2] / m;
     if (at) {
@@ -605,6 +1029,7 @@ export class World {
     const s = this._slotOf(caller, id);
     const l = vec3(caller, 'impulse', impulse);
     if (this._type[s] !== DYNAMIC) return;
+    this._wake(s);
     this._turn(s, l[0], l[1], l[2]);
   }
 
@@ -625,6 +1050,11 @@ export class World {
     this._forced[s] = 0;
     this._force.fill(0, s * 3, s * 3 + 3);
     this._torque.fill(0, s * 3, s * 3 + 3);
+    // What it was holding up, or resting on, wakes: its own island now, and
+    // anything asleep against it at the next step, which finds it gone.
+    this._wake(s);
+    this._unawaken(s);
+    this._wakePending = true;
     // Out of its tree now; its pairs go at the next step, which finds the body gone.
     this._broadphase.remove(s);
     this._slots.release(s);
@@ -730,6 +1160,9 @@ export class World {
     // far its surface reaches from its centre, which bounds how far a spin
     // can carry any point of it.
     this._invMass[s] = spec.type === 'dynamic' ? 1 / this._mass[s] : 0;
+    // The solver works out awake bodies' world inverse inertia each step; a
+    // static one's must stay zero, even if it was dynamic before.
+    if (spec.type === 'static') this._invI.fill(0, s * 6, s * 6 + 6);
     if (shape === BOX) {
       this._size[s] = Math.min(spec.size[0], spec.size[1], spec.size[2]);
       this._reach[s] = 0.5 * Math.sqrt(spec.size[0] * spec.size[0] + spec.size[1] * spec.size[1] + spec.size[2] * spec.size[2]);
@@ -759,7 +1192,25 @@ export class World {
     tr[t7 + 3] = this._rotation[s4]; tr[t7 + 4] = this._rotation[s4 + 1];
     tr[t7 + 5] = this._rotation[s4 + 2]; tr[t7 + 6] = this._rotation[s4 + 3];
     this._previous.set(tr.subarray(t7, t7 + 7), t7);
+    // Where the solver measures this step's movement from, for a body that
+    // won't be moving in it (static, or asleep) until something wakes it.
+    this._start.set(this._position.subarray(s3, s3 + 3), s3);
   }
+}
+
+/** The root of s's island, halving the path on the way so the next look is quicker. */
+function root(parent, s) {
+  while (parent[s] !== s) {
+    parent[s] = parent[parent[s]];
+    s = parent[s];
+  }
+  return s;
+}
+
+/** true or false, and nothing else: a 0 or a 'false' is more likely a mistake than a choice. */
+function flag(caller, name, value) {
+  if (typeof value !== 'boolean') fail(caller, `${name} must be true or false, got ${show(value)}`);
+  return value;
 }
 
 /**

@@ -39,6 +39,13 @@ export class Body {
   get alive() { return this.#world._alive(this.#id); }
   set alive(_) { readOnly('body.alive'); }
 
+  /**
+   * true while the body is asleep: at rest, and left out of steps until
+   * something disturbs it. A static body never is.
+   */
+  get asleep() { return this.#world._asleepOf('asleep', this.#id); }
+  set asleep(_) { readOnly('body.asleep'); }
+
   /** kg. */
   get mass() { return this.#world._massOf('mass', this.#id); }
   set mass(_) { readOnly('body.mass', "setBody(body, { mass })"); }
