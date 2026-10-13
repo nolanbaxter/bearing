@@ -121,13 +121,23 @@ machine.
 Inertia from every shape; tumbling that keeps angular momentum exactly; forces, torques and
 impulses.
 
-**3. Narrowphase 🔨** *(approved 2026-10-13)*
+**3. Narrowphase ✅** *(approved and done 2026-10-13)*
 Contacts between every pair of sphere, box and capsule: exact per-pair methods, separating axes and
 clipping for boxes, up to 4 points, feature ids, speculative points out to a margin. Internal, no
-public API.
+public API (`src/collide.js`).
 *Done when:* hand-worked cases for every pair; thousands of random pairs agree with a brute-force
 reference built only from support functions; normal, symmetry, continuity and determinism
 invariants hold; cost per pair recorded.
+*Result:* `test/collide.test.js` — 33 hand-worked cases; 3,600 random pairs against a reference
+that searches the whole sphere of directions, every kink circle and every crossing of two; points
+never outside either shape. Found and fixed on the way: boxes apart and nearest at their corners
+got no speculative contact (now the true closest points); crossed capsules reported end points
+that weren't touching (now kept only within the tolerance of the normal); an edge axis could beat a
+face on rounding alone inside a capsule–box overlap (now faces win ties, as between boxes).
+Cost per pair on the i7-1260P, Node 22, from `bench/collide.js`: spheres 0.03–0.12 µs,
+capsule–capsule 0.4 µs, capsule–box 1.4 µs, box–box 1.6 µs. Box–box is the one to watch: a
+10,000-box pile has about 30,000 touching pairs, about 48 ms a step. Caching each pair's separating
+axis from the step before is the known remedy; it is milestone 16's to measure.
 
 **4. Contact solver and materials ⬜**
 Bodies collide and rest. Sequential impulses with warm starting, and Box2D v3's soft step with
