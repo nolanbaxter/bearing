@@ -13,11 +13,12 @@ These were made with Nolan and override the rules below where they differ.
 - **Work to `ROADMAP.md`** (2026-10-13). It holds the goals, what 1.0 has to be, and every
   milestone with what "done" means. Update its status in the same commit that finishes a
   milestone; change the plan there first, with Nolan's OK, and log why.
-- **Bearing never draws** (2026-10-13). No canvas, WebGL, WebGPU, DOM, demo page or debug
-  renderer, not even as a development tool in this repository. Checks are numeric tests;
-  benchmark pages print numbers; `debugLines()` returns data; engine examples live in the docs,
-  not as code in the package. Anything that needs to be seen is drawn by an engine, in that
-  engine's repository.
+- **Nothing in `src/` draws** (2026-10-13, Nolan: "Nothing in the core or src/ can do any
+  visuals"). No canvas, WebGL, WebGPU, DOM or debug renderer in the package; `debugLines()`
+  returns data; engine examples in the docs are examples, not package code. Demos may draw:
+  they live in `demo/` (drawn with Winding from a pinned CDN URL), are never published, never
+  imported by `src/`, and never needed by a test. Tests decide; demos show. Benchmark pages
+  print numbers.
 - **Engine-neutral, not built for Winding** (2026-10-12). Bearing copies Winding's naming and
   conventions, but it is not built around Winding. Every engine — Three.js, Babylon.js,
   PlayCanvas, Pixi, a plain canvas, Winding — is an equal user. Section 8 describes one consumer,

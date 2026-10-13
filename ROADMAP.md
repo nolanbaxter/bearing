@@ -26,16 +26,16 @@ met and measured.
    name the call, the option, the rule and the value; one API reference with every call in it;
    the same units, axes and naming.
 5. **Any engine, and no rendering.** Bearing takes shapes and transforms and gives back
-   transforms, contacts and query results as data. It never draws, never touches the DOM, and
-   imports nothing from any engine. Three.js, Babylon.js, PlayCanvas, Pixi, a plain canvas and
+   transforms, contacts and query results as data. Nothing in it draws or touches the DOM, and
+   it imports nothing from any engine. Three.js, Babylon.js, PlayCanvas, Pixi, a plain canvas and
    Winding are equal users.
 
 ### What Bearing never does
 
-- **Draw anything.** No canvas, no WebGL or WebGPU, no demo pages, no debug renderer, not even as
-  a development tool in this repository. `world.debugLines()` returns numbers for an engine to
-  draw. Benchmark pages print numbers. When something needs to be seen, an engine draws it, in
-  that engine's own repository.
+- **Draw anything in the package.** Nothing in `src/` touches a canvas, WebGL, WebGPU or the DOM,
+  and there is no debug renderer: `world.debugLines()` returns numbers for an engine to draw.
+  Demos are separate (see [Demos](#demos)): they live in `demo/`, draw with an engine, and are
+  never published, never imported by `src/`, and never needed by a test.
 - **Own the loop, the clock, input, or the user's objects.** `world.step(dt)` takes the step it's
   given.
 - **Depend on anything**, at run time or for its tests, except Node's own modules. CI may fetch
@@ -252,6 +252,25 @@ early whether npm accepts the name.
 
 ---
 
+## Demos
+
+Seeing it matters as much as testing it: a stack that passes its test can still look wrong.
+From milestone 4, each milestone that changes what bodies do adds or updates a scene in `demo/`:
+a page that steps a world and draws it with an engine.
+
+- **Outside the package.** `demo/` is not in `package.json`'s `files`, so it is never published.
+  Nothing in `src/` imports it, and no test needs it: demos show, tests decide.
+- **Drawn by Winding**, loaded from jsDelivr at a pinned version. It is Nolan's engine and the
+  first real user, so the demo doubles as the first check of how an engine reads `transforms`.
+  This is the demo's choice, not the package's: Bearing still imports nothing from Winding.
+- **What the scenes show** grows with the milestones: the stack and pyramid (4), a pile of
+  thousands (5), sleeping bodies tinted (6), rays (8), a level mesh (9), a character walking it
+  (11), a chain and a ragdoll (12), bullets against thin walls (13).
+- **Needs Nolan:** WebGPU in the browser, since Winding draws with it; a `serve.js` like Winding's
+  serves the page, because modules don't load over `file://`.
+
+---
+
 ## Releases
 
 There is no public release before 1.0. Milestones land on `develop`, privately, and 1.0 is the
@@ -263,5 +282,5 @@ first version anyone else installs. After 1.0, planned sets of changes are relea
 ## Log
 
 - **2026-10-13.** Roadmap written, at Nolan's request: fixed goals and a whole plan instead of one
-  step at a time. Milestones 1 and 2 were already done. Bearing never draws, not even as a
-  development tool: a "visual demo" proposed for the solver was withdrawn.
+  step at a time. Milestones 1 and 2 were already done. Nolan's line on drawing: nothing in the
+  core or `src/` draws; demos may, in `demo/`, outside the package.
