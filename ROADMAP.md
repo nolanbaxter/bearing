@@ -233,12 +233,10 @@ the docs, showing how Three.js, Babylon.js, PlayCanvas, Pixi and Winding copy `t
 They are examples, not code in the package.
 *Done when:* every example in every doc runs in a test.
 
-**18. Release 1.0 ⬜**
-Release workflow with npm trusted publishing; the determinism hash checked on Bun as well as Node
-in CI; the repository made public; 1.0 published.
-*Needs Nolan:* go-ahead for each public step. The `bearing-physics` name can be claimed with a
-0.0.0 placeholder any time before this, by Nolan (it needs his 2FA), and should be, to find out
-early whether npm accepts the name.
+**18. 1.0 ⬜**
+Every goal above met and measured; the determinism hash checked on Bun as well as Node in CI;
+1.0.0 released (see [Versions and releases](#versions-and-releases)).
+*Needs Nolan:* the go-ahead for the release.
 
 ### After 1.0
 
@@ -271,11 +269,71 @@ a page that steps a world and draws it with an engine.
 
 ---
 
-## Releases
+## Versions and releases
 
-There is no public release before 1.0. Milestones land on `develop`, privately, and 1.0 is the
-first version anyone else installs. After 1.0, planned sets of changes are released together
-(rule 6), each with Nolan's go-ahead.
+Bearing is developed in the open and released as it goes, as Winding was: public from its first
+release, through a quick run of 0.x versions, to 1.0 once the goals above are met. Every release,
+and making the repository public, still waits for Nolan's go-ahead (rule 8); this section is the
+plan, not permission.
+
+### Version numbers
+
+`vMAJOR.MINOR.PATCH`, measured against `docs/API.md`, with Winding's rules:
+
+| Change | Before 1.0 | From 1.0 |
+|---|---|---|
+| Breaks code written against the API reference | `0.x.0` | `x.0.0` (major) |
+| Adds to the API: a call, an option, a feature | `0.x.0` | `1.x.0` (minor) |
+| Reworks existing code without changing the API: a fix, a speed-up, a docs correction | `0.x.y` | `1.x.y` (patch) |
+
+Winding did exactly this: 0.2.0 removed five exports and was a minor, while 0.1.1, a correctness
+pass that changed no API, was a patch. A rename keeps the old name working, throwing with
+directions, for one minor version (rule 47).
+
+### Planned versions
+
+Each milestone that adds API is a minor version. Fixes between them are patches.
+
+| Version | Milestones | What it brings |
+|---|---|---|
+| 0.1.0 | 1, 2 | Bodies: add, set, read, remove; mass and inertia; forces; tumbling. Nothing collides yet. |
+| 0.2.0 | 3, 4 | Things collide, rest and stack: contacts, the solver, materials. |
+| 0.3.0 | 5 | Thousands of bodies: the broadphase, layers and masks. |
+| 0.4.0 | 6 | Sleeping, and the moved-bodies list. |
+| — | 7 | The benchmark changes no package code, so it releases nothing by itself. |
+| 0.5.0 | 8 | Queries. |
+| 0.6.0 | 9 | Triangle meshes, heightfields, `.glb`. |
+| 0.7.0 | 10 | Contact events and sensors. |
+| 0.8.0 | 11 | The character controller and rotation locks. |
+| 0.9.0 | 12 | Joints. |
+| 0.10.0 | 13 | Continuous collision. |
+| 0.11.0 | 14 | Convex hulls and compound shapes. |
+| 0.12.0 | 15 | Save, load and debug lines. |
+| 0.12.x | 16, 17 | The performance pass and the docs: reworks, so patches. |
+| 1.0.0 | 18 | Every goal met and measured. |
+
+### How a release is made
+
+Winding's way, copied before the first one:
+
+1. On `develop`, one commit titled `Release x.y.z: <theme>` sets the version in `package.json` and
+   moves `## [Unreleased]` in the CHANGELOG under `## [x.y.z] - <date>`, opening with a short
+   plain-English paragraph on what it brings.
+2. A pull request from `develop` into `main`; `main` takes nothing else.
+3. Merging it runs `.github/workflows/release.yml`, which tags `vx.y.z`, writes the GitHub release
+   from that CHANGELOG section, and publishes to npm with trusted publishing: no token stored
+   anywhere. `.github/release-notes.js` refuses to release a version the CHANGELOG doesn't
+   describe, so "bumped" and "written up" are one event.
+
+### Before the first release
+
+- `release.yml` and `release-notes.js`, adapted from Winding's.
+- `package.json` loses `"private": true`.
+- The `bearing-physics` name exists on npm. npm can only trust a workflow for a package that already
+  exists, so the very first publish is by hand, by Nolan, since it needs his 2FA: either a 0.0.0
+  placeholder or 0.1.0 itself.
+- What Winding has for a public repository: `CONTRIBUTING.md` (branches, tests, what a change
+  includes, versions), `SECURITY.md`, `CODE_OF_CONDUCT.md`, and issue and pull request templates.
 
 ---
 
@@ -284,3 +342,7 @@ first version anyone else installs. After 1.0, planned sets of changes are relea
 - **2026-10-13.** Roadmap written, at Nolan's request: fixed goals and a whole plan instead of one
   step at a time. Milestones 1 and 2 were already done. Nolan's line on drawing: nothing in the
   core or `src/` draws; demos may, in `demo/`, outside the package.
+- **2026-10-13.** "No public release before 1.0" replaced with Winding's way, at Nolan's word:
+  Bearing can be public, as Winding was the whole time, and is released as it goes, 0.x first.
+  Versions follow Winding's rules, written out in [Version numbers](#version-numbers), with a
+  planned version for each milestone.

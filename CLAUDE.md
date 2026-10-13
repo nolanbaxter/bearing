@@ -57,8 +57,14 @@ These were made with Nolan and override the rules below where they differ.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks
   every message in `docs/API.md`'s Throws lines both ways; `test/docs.test.js` runs every example
   in the docs and README. Types are checked in CI only (`npx -p typescript@7`), as in Winding.
+- **Developed in the open and released as it goes, as Winding was** (2026-10-13). Bearing can be
+  public; 0.x versions are released along the way, not held for 1.0. Versions follow Winding's
+  rules: before 1.0, a breaking or additive change is `0.x.0` and a rework of existing code (fix,
+  speed-up, docs) is `0.x.y`; from 1.0, major breaks, minor adds, patch reworks. Releases are made
+  Winding's way (`ROADMAP.md`, "Versions and releases"). Still: never release, tag, publish or
+  change the repo's visibility without Nolan's go-ahead for that specific action.
 - **GitHub: Nolan's personal account only** (2026-10-12). The repo is `nolanbaxter/bearing`,
-  private until Nolan says otherwise. Commits are authored as
+  private until Nolan flips it. Commits are authored as
   `LmnTrtl <294360573+nolanbaxter@users.noreply.github.com>` (set in this repo's git config), and
   every `gh` call runs as the personal account (`GH_TOKEN=$(gh auth token --user NolanLT)`). The
   work account and work email never appear anywhere in this project.
