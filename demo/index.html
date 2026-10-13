@@ -1,0 +1,246 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bearing demo</title>
+
+<!--
+  Bearing's scenes, drawn by Winding.
+
+  Bearing draws nothing: it hands back every body's position and rotation as
+  numbers, and an engine draws them. This page uses Winding, loaded from
+  jsDelivr at a pinned version, and Bearing from this repository, so it always
+  shows the code next to it. The demo is not part of the package, nothing in
+  src/ imports it, and no test needs it: tests decide, this shows.
+
+  RUN IT WITH A SERVER, since modules don't load over file://:
+
+      node serve.js
+      open http://localhost:8080/demo/
+
+  It needs a browser with WebGPU (Chrome or Edge 113+, Safari 26+, Firefox on
+  Windows), because Winding draws with it.
+-->
+
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0f1115; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; }
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; display: flex; flex-wrap: wrap; gap: 6px; padding: 10px;
+    font: 13px/1.4 system-ui, sans-serif;
+  }
+  button {
+    font: inherit; color: #e6e8ec; background: #1d2027cc; border: 1px solid #343a46;
+    border-radius: 6px; padding: 6px 10px; cursor: pointer;
+  }
+  button[aria-pressed="true"] { background: #2f6f4e; border-color: #3f8f66; }
+  #status {
+    position: fixed; left: 0; right: 0; bottom: 0; margin: 0; padding: 8px 12px;
+    font: 12px/1.5 ui-monospace, Consolas, monospace; color: #8b93a1; background: #14161acc;
+  }
+  #status.bad { color: #ff9a9a; }
+</style>
+
+<canvas id="view"></canvas>
+<nav id="scenes"></nav>
+<p id="status">loading…</p>
+
+<script type="module">
+  import { Winding, Camera, OrbitController } from 'https://cdn.jsdelivr.net/npm/winding-engine@1.7.0/src/winding.js';
+  import { World } from '../src/bearing.js';
+  import { box, sphere, capsule } from './models.js';
+
+  const status = document.getElementById('status');
+  const canvas = document.getElementById('view');
+
+  // Colours, linear, as Winding's 3D view takes them.
+  const STONE = [0.2, 0.21, 0.23], WOOD = [0.55, 0.32, 0.14], CLAY = [0.62, 0.2, 0.12];
+  const SKY = [0.12, 0.32, 0.62], LEAF = [0.18, 0.45, 0.2], SUN = [0.85, 0.6, 0.1];
+
+  // Each scene builds a world and says where to look. `tick` runs every step.
+  const SCENES = {
+    pyramid: {
+      label: 'Pyramid: 210 boxes',
+      look: { target: [0, 9, 0], distance: 50, pitch: 0.25 },
+      build(world) {
+        for (let row = 0; row < 20; row++) {
+          for (let k = 0; k < 20 - row; k++) {
+            world.addBody({ position: [k - (19 - row) / 2, 0.5 + row, 0], color: row % 2 ? WOOD : CLAY });
+          }
+        }
+      },
+    },
+    stack: {
+      label: 'Stack of 10',
+      look: { target: [0, 4, 0], distance: 16, pitch: 0.2 },
+      build(world) {
+        for (let k = 0; k < 10; k++) world.addBody({ position: [0, 0.5 + k, 0], color: k % 2 ? WOOD : SKY });
+      },
+    },
+    bounce: {
+      label: 'Bouncing balls',
+      look: { target: [0, 2, 0], distance: 14, pitch: 0.15 },
+      build(world) {
+        [0, 0.3, 0.6, 0.8, 0.95].forEach((restitution, k) => {
+          world.addBody({ shape: 'sphere', radius: 0.4, position: [(k - 2) * 1.5, 5, 0], restitution, color: [SKY, LEAF, SUN, CLAY, WOOD][k] });
+        });
+      },
+    },
+    slope: {
+      label: 'Friction on slopes',
+      look: { target: [0, 3, 0], distance: 22, pitch: 0.3 },
+      build(world) {
+        // Friction 0.5 holds a box up to about 26.6°: the left slope is 20°, the right 35°.
+        for (const [degrees, x] of [[20, -6], [35, 6]]) {
+          const t = (degrees * Math.PI) / 180, tilt = [0, 0, Math.sin(t / 2), Math.cos(t / 2)];
+          world.addBody({ type: 'static', size: [12, 0.5, 4], position: [x, 3, 0], rotation: tilt, color: STONE });
+          const up = [-Math.sin(t), Math.cos(t)];
+          world.addBody({ position: [x + up[0] * 0.75 + Math.cos(t) * 3, 3 + up[1] * 0.75 + Math.sin(t) * 3, 0], rotation: tilt, color: degrees < 26.6 ? LEAF : CLAY });
+        }
+      },
+    },
+    platform: {
+      label: 'Moving platform',
+      look: { target: [0, 2, 0], distance: 16, pitch: 0.35 },
+      build(world, scene) {
+        const platform = world.addBody({ type: 'kinematic', size: [4, 0.4, 4], position: [-4, 1.5, 0], velocity: [2, 0, 0], color: STONE });
+        for (let k = 0; k < 3; k++) world.addBody({ size: [0.8, 0.8, 0.8], position: [-4 + (k - 1) * 1.1, 2.1, 0], color: [WOOD, SKY, SUN][k] });
+        world.addBody({ shape: 'capsule', radius: 0.3, height: 1.4, position: [-4, 3.1, 1], color: LEAF });
+        scene.tick = () => {
+          const x = platform.position[0];
+          if (x > 4 && platform.velocity[0] > 0) platform.setVelocity(-2, 0, 0);
+          if (x < -4 && platform.velocity[0] < 0) platform.setVelocity(2, 0, 0);
+        };
+      },
+    },
+    pile: {
+      label: 'Mixed pile',
+      look: { target: [0, 2, 0], distance: 18, pitch: 0.35 },
+      build(world) {
+        // Dropped from a loose cloud, each one offset and turned a little
+        // differently (the same way every time), so they tumble into a heap.
+        let n = 0;
+        for (let layer = 0; layer < 6; layer++) {
+          for (let x = -2; x <= 2; x++) {
+            for (let z = -1; z <= 1; z++) {
+              const kind = n++ % 3, jx = Math.sin(n * 12.9898) * 0.35, jz = Math.cos(n * 78.233) * 0.35;
+              const at = [x * 1.25 + jx, 1.5 + layer * 1.4, z * 1.25 + jz];
+              const axis = [Math.sin(n), Math.cos(n * 1.7), Math.sin(n * 2.3)], l = Math.hypot(...axis), turn = n * 0.9;
+              const rotation = [...axis.map((v) => (v / l) * Math.sin(turn / 2)), Math.cos(turn / 2)];
+              if (kind === 0) world.addBody({ size: [0.9, 0.6, 0.7], position: at, rotation, color: WOOD });
+              else if (kind === 1) world.addBody({ shape: 'sphere', radius: 0.4, position: at, color: SKY });
+              else world.addBody({ shape: 'capsule', radius: 0.25, height: 1, position: at, rotation, color: LEAF });
+            }
+          }
+        }
+      },
+    },
+  };
+
+  try {
+    const engine = await Winding.create(canvas);
+    const camera = new Camera({ fovY: Math.PI / 4, near: 0.1 });
+    const orbit = new OrbitController(camera, canvas, { distance: 30 });
+
+    // Models, made once per shape and colour (and per size, for capsules).
+    const models = new Map();
+    async function model(desc) {
+      const key = JSON.stringify([desc.shape, desc.shape === 'capsule' ? [desc.radius, desc.height] : 0, desc.color]);
+      if (!models.has(key)) {
+        const bytes = desc.shape === 'sphere' ? sphere(desc.color)
+          : desc.shape === 'capsule' ? capsule(desc.radius, desc.height, desc.color) : box(desc.color);
+        models.set(key, engine.load(bytes));
+      }
+      return models.get(key);
+    }
+
+    let current = null;
+    async function show(name) {
+      const def = SCENES[name];
+      const world = new World();
+      const scene = engine.createScene();
+      scene.addLight({ type: 'directional', direction: [-0.4, -0.9, -0.3], intensity: 3, castShadow: true });
+      const pending = [];
+      // Bodies are added through this, which notes how to draw each; the
+      // colour is the demo's, not Bearing's, so it is taken off first.
+      const add = world.addBody.bind(world);
+      world.addBody = (options) => {
+        const { color = STONE, ...body } = options;
+        const handle = add(body);
+        const desc = world.bodyOf(handle);
+        pending.push({ handle, desc: { ...desc, color } });
+        return handle;
+      };
+      world.addBody({ type: 'static', size: [60, 1, 60], position: [0, -0.5, 0], color: STONE });
+      const state = { tick: null };
+      def.build(world, state);
+      delete world.addBody;   // back to Bearing's own
+
+      const drawn = [];
+      for (const { handle, desc } of pending) {
+        const node = scene.add(await model(desc));
+        if (desc.shape === 'box') node.setScale(desc.size[0], desc.size[1], desc.size[2]);
+        else if (desc.shape === 'sphere') node.setScale(desc.radius);
+        drawn.push({ handle, node });
+      }
+      current = { world, scene, drawn, state, name };
+      globalThis.demo = current;   // for poking at from the console
+      // Where the camera eases to; Winding's OrbitController moves by `desired`.
+      Object.assign(orbit.desired, { target: def.look.target, distance: def.look.distance, pitch: def.look.pitch });
+      for (const b of nav.children) b.setAttribute('aria-pressed', String(b.dataset.scene === name));
+      engine.run(scene, camera, { update, frame });
+    }
+
+    let stepMs = 0;
+    function update(dt) {
+      const { world, state } = current;
+      state.tick?.();
+      const t0 = performance.now();
+      world.step(dt);
+      // A running average of what a step costs, shown below.
+      stepMs += (performance.now() - t0 - stepMs) * 0.05;
+    }
+
+    // Each body drawn between its last two steps, by how far this frame
+    // falls between them: positions blended straight, rotations the short way.
+    const q = [0, 0, 0, 0];
+    function frame(alpha, clock) {
+      orbit.update(clock.realDelta);
+      const { world, drawn } = current;
+      const t = world.transforms, p = world.previous;
+      for (const { handle, node } of drawn) {
+        const o = handle.slot * 7;
+        node.setPosition(
+          p[o] + (t[o] - p[o]) * alpha,
+          p[o + 1] + (t[o + 1] - p[o + 1]) * alpha,
+          p[o + 2] + (t[o + 2] - p[o + 2]) * alpha);
+        const dot = p[o + 3] * t[o + 3] + p[o + 4] * t[o + 4] + p[o + 5] * t[o + 5] + p[o + 6] * t[o + 6];
+        const s = dot < 0 ? -1 : 1;
+        for (let k = 0; k < 4; k++) q[k] = p[o + 3 + k] * s + (t[o + 3 + k] - p[o + 3 + k] * s) * alpha;
+        const l = Math.hypot(q[0], q[1], q[2], q[3]);
+        node.setRotation([q[0] / l, q[1] / l, q[2] / l, q[3] / l]);
+      }
+      status.textContent = `${SCENES[current.name].label} · ${world.bodyCount} bodies · `
+        + `${stepMs.toFixed(2)} ms a step · drag to orbit, wheel to zoom`;
+    }
+
+    const nav = document.getElementById('scenes');
+    for (const [name, def] of Object.entries(SCENES)) {
+      const b = document.createElement('button');
+      b.textContent = def.label;
+      b.dataset.scene = name;
+      b.onclick = () => { engine.stop(); show(name); };
+      nav.append(b);
+    }
+    const restart = document.createElement('button');
+    restart.textContent = 'Restart';
+    restart.onclick = () => { engine.stop(); show(current.name); };
+    nav.append(restart);
+
+    await show('pyramid');
+  } catch (e) {
+    status.className = 'bad';
+    status.textContent = `${e.message}`;
+    console.error(e);
+  }
+</script>

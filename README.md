@@ -48,6 +48,18 @@ The same inputs give bit-identical results on every machine, browser and runtime
 defines its arithmetic exactly, and Bearing never calls the few functions, such as `Math.sin`, that
 each engine may round its own way. See [Determinism](docs/API.md#determinism).
 
+## Demo
+
+```bash
+node serve.js
+```
+
+Then open <http://localhost:8080/demo/>: a 210-box pyramid, a stack, bouncing balls, boxes on
+slopes either side of their friction, a moving platform and a mixed pile, with what each step
+costs shown live. Bearing draws nothing, so the demo is drawn by
+[Winding](https://github.com/nolanbaxter/winding), loaded from jsDelivr at a pinned version; it
+needs a browser with WebGPU. The demo is not part of the package, and no test needs it.
+
 ## Tests
 
 ```bash
