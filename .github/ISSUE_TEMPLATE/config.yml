@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: API reference
+    url: https://github.com/nolanbaxter/bearing/blob/develop/docs/API.md
+    about: Every call, option and setting, with what it throws.
+  - name: Roadmap
+    url: https://github.com/nolanbaxter/bearing/blob/develop/ROADMAP.md
+    about: What Bearing is for, and what is being built now.
+  - name: Security issue
+    url: https://github.com/nolanbaxter/bearing/security/advisories/new
+    about: Report privately, not in a public issue.

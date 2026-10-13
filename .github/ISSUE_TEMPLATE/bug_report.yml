@@ -1,0 +1,39 @@
+name: Bug report
+description: Something throws, simulates wrong, or doesn't do what docs/API.md says.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: What you did, what you expected, and what happened instead. Positions or velocities that look wrong, printed, help more than a screenshot.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: The smallest code that shows it
+      description: A few lines that make the world, add the bodies and step it until it goes wrong. Bearing is deterministic, so the same code shows the same thing on any machine.
+      render: js
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Bearing version, or commit
+      placeholder: "0.2.0, or a commit on develop"
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Where it runs
+      placeholder: Chrome 154, Node 22, Deno 2, Bun 1.3...
+    validations:
+      required: true
+  - type: textarea
+    id: console
+    attributes:
+      label: Error output
+      description: The full message and stack of anything it threw.
+      render: text
