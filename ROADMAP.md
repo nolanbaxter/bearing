@@ -269,11 +269,31 @@ hull contacts pass the same reference tests as boxes.
 as line segments in a `Float32Array` *(proposal)*.
 *Done when:* a saved world, loaded and stepped, matches the original to the bit.
 
-**16. Performance pass ⬜**
-*Concepts:* profiling; cache behaviour; writing JavaScript the JIT optimises well.
+**16. Performance pass and workers ⬜**
+*Concepts:* profiling; cache behaviour; writing JavaScript the JIT optimises well; graph colouring;
+shared memory and a parallel-for.
 Profile every benchmark scene on both machines; every change made for speed comes with its A/B
-measurement and a test that results didn't change.
-*Done when:* the speed goals are met, or the gap is stated plainly with the reason.
+measurement and a test that results didn't change. Measured candidates, from milestone 4's cost
+to watch and from Winding's own ledger: the solver keeping a pair's velocities in locals and
+working out its angular terms once a step instead of at every push; a re-filed body's leaf grown
+and its ancestors refitted instead of being removed and reinserted, with `FAT` and `AHEAD`
+measured again after.
+Then workers, as Winding's job system does them (`src/core/jobs.js` there): a parallel-for over
+chunks claimed from one atomic cursor, the main thread working too, and the plain loop instead
+wherever shared memory is missing, the workers aren't ready yet, or the work is under a measured
+size. The same function runs either way, so results are bit-identical with and without workers,
+and a test proves the parallel path actually ran. Bounds, the narrowphase and moving bodies split
+as they are, since each body or pair is independent. The solver doesn't: each push changes the
+velocities the next contact reads. It needs graph colouring first (Box2D 3): contacts grouped so
+no two in a group share a moving body, each group solvable in any order, the groups solved in
+turn. Colouring changes the solve order on one thread too, so it is measured against the stack and
+pyramid before anything else, and lands before 1.0, so 1.0's results are the ones workers
+reproduce. In a browser, shared memory needs cross-origin isolation; without it everything still
+runs, on one thread. No `init()` and no async factory: until the workers report ready, steps run
+on one thread *(proposal for any setting this needs)*.
+*Done when:* the speed goals are met, or the gap is stated plainly with the reason. With workers,
+a large world steps faster on both machines than on one thread, to the same bits, and a small one
+costs no more than before.
 
 **17. Documentation ⬜**
 *Concepts:* writing reference documentation people can learn from.
@@ -293,8 +313,6 @@ Every goal above met and measured; the determinism hash checked on Bun as well a
 
 - **2D**, as a separate module with the same conventions (rule 106). *Needs Nolan first:* pixel
   units with y down, as Winding's 2D view has, or metres with y up (rule 50).
-- **Workers**, switching on by themselves where the page allows, with identical results either way
-  (rule 113).
 - **Vehicles and ragdoll helpers**, built on joints.
 - Not planned: soft bodies, cloth and fluids. They are different solvers, and would be a different
   package.
@@ -360,7 +378,7 @@ Each milestone that adds API is a minor version. Fixes between them are patches.
 | 0.10.0 | 13 | Continuous collision. |
 | 0.11.0 | 14 | Convex hulls and compound shapes. |
 | 0.12.0 | 15 | Save, load and debug lines. |
-| 0.12.x | 16, 17 | The performance pass and the docs: reworks, so patches. |
+| 0.12.x | 16, 17 | The performance pass, workers and the docs: reworks, so patches. A setting for workers would be an addition, and 0.13.0. |
 | 1.0.0 | 18 | Every goal met and measured. |
 
 ### How a release is made
@@ -404,3 +422,7 @@ Winding's way, copied before the first one:
   Bearing can be public, as Winding was the whole time, and is released as it goes, 0.x first.
   Versions follow Winding's rules, written out in [Version numbers](#version-numbers), with a
   planned version for each milestone.
+- **2026-10-13.** Workers moved from "After 1.0" into milestone 16, at Nolan's word, after a survey
+  of what Winding does for large loads. Graph colouring comes first and before 1.0, so the solve
+  order 1.0 ships with is the one workers reproduce. Also written into 16: solver locals and
+  precomputed angular terms, and refitting the tree instead of re-filing.
