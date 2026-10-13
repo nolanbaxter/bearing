@@ -63,6 +63,10 @@ These were made with Nolan and override the rules below where they differ.
   speed-up, docs) is `0.x.y`; from 1.0, major breaks, minor adds, patch reworks. Releases are made
   Winding's way (`ROADMAP.md`, "Versions and releases"). Still: never release, tag, publish or
   change the repo's visibility without Nolan's go-ahead for that specific action.
+- **CI runs only what a change reaches** (2026-10-13, Nolan: "I *definitely* want that"). Port
+  Winding's `.github/affected.js` (the Node-suite part: imports and `new URL()` reads, followed
+  down) and its test before the first release. This overrides rule 95's "once the suite is big
+  enough". Winding's local checkout is `..\3D concept`; read it for how Winding did anything.
 - **GitHub: Nolan's personal account only** (2026-10-12). The repo is `nolanbaxter/bearing`,
   private until Nolan flips it. Commits are authored as
   `LmnTrtl <294360573+nolanbaxter@users.noreply.github.com>` (set in this repo's git config), and

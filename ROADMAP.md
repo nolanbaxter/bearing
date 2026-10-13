@@ -328,6 +328,13 @@ Winding's way, copied before the first one:
 ### Before the first release
 
 - `release.yml` and `release-notes.js`, adapted from Winding's.
+- **CI runs only the tests a change reaches**, as Winding's does: `.github/affected.js` follows
+  each suite's imports, and the files it reads through `new URL(…, import.meta.url)`, down to
+  every file it depends on, and runs only the suites a changed file is in. The types check runs
+  only when the declarations or `test/types.ts` change. A change to CI, `package.json` or the
+  planner itself runs everything; a change to `ROADMAP.md` or the CHANGELOG runs nothing. It
+  comes with its own test, as Winding's `test/affected.test.js`. Nolan wants this in the release
+  flow without fail.
 - `package.json` loses `"private": true`.
 - The `bearing-physics` name exists on npm. npm can only trust a workflow for a package that already
   exists, so the very first publish is by hand, by Nolan, since it needs his 2FA: either a 0.0.0
