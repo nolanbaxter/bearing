@@ -3,23 +3,34 @@
 A physics engine in plain JavaScript, for any renderer. No dependencies, no build step — ES modules,
 used as they are.
 
-**In development, and not released.** Nothing is on npm yet. Bodies move, fall and turn, but don't
-collide yet: collision is the next piece being built.
+**In development, and not released.** Nothing is on npm yet. Bodies fall, tumble, collide, rest,
+stack, slide and bounce; see the [roadmap](ROADMAP.md) for what comes next.
 
 ```js
 import { World } from 'bearing-physics';
 
 const world = new World();
 world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
-const ball = world.addBody({ shape: 'sphere', radius: 0.5, position: [0, 4, 0] });
+const ball = world.addBody({ shape: 'sphere', position: [0, 4, 0], restitution: 0.7 });
 
 function update(dt) {   // your loop's fixed step, such as 1 / 60 s
   world.step(dt);
 }
 ```
 
-That is the whole setup. There is no `init()`, no broadphase to choose, no mass to work out (it
-comes from the shape and water's density unless you give one), and nothing to size in advance.
+That is the whole setup: the ball falls, bounces lower each time, and rests on the ground. There is
+no `init()`, no broadphase to choose, no mass to work out (it comes from the shape and water's
+density unless you give one), no tolerances to tune, and nothing to size in advance.
+
+## What it does
+
+- **Bodies**: dynamic, static and kinematic; boxes, spheres and capsules, with mass and inertia
+  from the shape. Lopsided bodies tumble as real ones do, keeping their angular momentum exactly.
+- **Contacts**: exact contact points for every pair of shapes, friction that holds a box on a slope
+  until it is steep enough to slide, bounces that settle, and stacks that stand. A 210-box pyramid
+  stands for as long as you like on the defaults, within 1.5 mm of where it was built.
+- **Tolerances that scale**: every tolerance comes from the size of what touches, so a 1 cm marble
+  and a 50 m building behave with nothing retuned. See [Contacts](docs/API.md#contacts).
 
 **Every call, option and setting is in the [API reference](docs/API.md)**: what it does, what it
 takes, what it returns and what it throws.

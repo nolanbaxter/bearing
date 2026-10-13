@@ -13,7 +13,12 @@ export function examples(): void {
   const g: readonly [number, number, number] = world.gravity;
   const count: number = world.bodyCount;
 
-  const ground = world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
+  const ground = world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0], friction: 0.8 });
+  world.addBody({ shape: 'sphere', restitution: 0.7, damping: 0.1, angularDamping: 0.2, gravityScale: 0.5 });
+  world.substeps = 16;
+  const substeps: number = new World({ substeps: 4 }).substeps;
+  const bounce: number = world.bodyOf(ground).restitution;
+  void [substeps, bounce];
   const marble = world.addBody({ shape: 'sphere', radius: 0.01, density: 2500, position: [0, 1, 0] });
   const player = world.addBody({ shape: 'capsule', radius: 0.3, height: 1.8, mass: 80 });
   const crate: Body = world.addBody();
@@ -70,6 +75,10 @@ export function mistakes(world: World, body: Body): void {
   new Body();
   // @ts-expect-error three numbers, not two
   body.setPosition(1, 2);
+  // @ts-expect-error a misspelt material
+  world.addBody({ resitution: 0.5 });
+  // @ts-expect-error substeps is a number
+  world.substeps = '8';
   // @ts-expect-error a force is a vector, not three numbers
   body.applyForce(0, 100, 0);
   // @ts-expect-error inertia is read only: use setBody

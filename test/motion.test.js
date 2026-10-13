@@ -98,7 +98,7 @@ test('a force off the centre turns the body by r × F, and a torque turns it dir
   const dt = 0.1;
   const a = world.addBody({ size: [1, 2, 3], position: [1, 1, 1] });
   a.applyForce([0, 0, 10], [1.5, 1, 1]);   // r = (0.5, 0, 0): torque (0, -5, 0)
-  const b = world.addBody({ size: [1, 2, 3] });
+  const b = world.addBody({ size: [1, 2, 3], position: [10, 0, 0] });
   b.applyTorque([0, -5, 0]);
   world.step(dt);
   const inv = 1 / a.inertia[1];
@@ -150,13 +150,13 @@ test('a removed body\'s waiting force never reaches the body that gets its slot'
 
 test('off means off: with no force applied, the force pass never runs', () => {
   const world = new World();
-  for (let i = 0; i < 100; i++) world.addBody({});
+  for (let i = 0; i < 100; i++) world.addBody({ position: [2 * i, 0, 0] });
   let runs = 0;
   const pass = world._applyForces;
   world._applyForces = function (dt) { runs++; return pass.call(this, dt); };
   for (let i = 0; i < 10; i++) world.step(1 / 60);
   assert.equal(runs, 0);
-  world.body(world.addBody({}).id).applyForce([1, 0, 0]);
+  world.body(world.addBody({ position: [-5, 0, 0] }).id).applyForce([1, 0, 0]);
   world.step(1 / 60);
   world.step(1 / 60);
   assert.equal(runs, 1);
@@ -167,7 +167,7 @@ test('off means off: with no force applied, the force pass never runs', () => {
 test('a spinning sphere or cube keeps its angular velocity to the bit', () => {
   const world = new World({ gravity: [0, 0, 0] });
   const cube = world.addBody({ angularVelocity: [0.3, 2, -1] });
-  const ball = world.addBody({ shape: 'sphere', angularVelocity: [0.3, 2, -1] });
+  const ball = world.addBody({ shape: 'sphere', position: [5, 0, 0], angularVelocity: [0.3, 2, -1] });
   for (let i = 0; i < 600; i++) world.step(1 / 60);
   assert.deepEqual(cube.angularVelocity, [0.3, 2, -1]);
   assert.deepEqual(ball.angularVelocity, [0.3, 2, -1]);
@@ -179,7 +179,7 @@ test('a lopsided body tumbling freely keeps its angular momentum, and never gain
   // a few ulps a step over 7,200 steps is about 1e-12, and 1e-11 leaves room.
   // Energy may only fall; how far is what the method costs, measured when it
   // was chosen (see tumble() in src/world.js) and held here so it can't grow.
-  const cases = [[5, 0.9995], [20, 0.935], [50, 0.89]];
+  const cases = [[5, 0.99999], [20, 0.9998], [50, 0.993]];
   for (const [spin, kept] of cases) {
     const world = new World({ gravity: [0, 0, 0] });
     const body = world.addBody({ size: [1, 2, 3], angularVelocity: [spin / 100, spin, spin / 100] });

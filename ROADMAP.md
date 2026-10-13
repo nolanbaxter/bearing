@@ -110,18 +110,25 @@ green on Node 20, 22 and 24 and on the types.
 
 Status: ✅ done · 🔨 in progress · ⬜ not started
 
+Each milestone names the **concepts** it is built from, as Winding's design document did:
+Bearing is also how to learn what goes into a physics engine, and these are the ideas to read
+up on, in the order the engine needs them.
+
 ### Part one: bodies and collision
 
 **1. Foundations ✅**
+*Concepts:* struct-of-arrays storage; generational handles; why floating point can be deterministic in JavaScript; amortized growth.
 World and Body handles; add, set, read and remove; 53-bit generational ids; Float64 columns,
 measured; storage that grows and shrinks; errors, docs, types, soak; bit-identical on every
 machine.
 
 **2. Rotation and forces ✅**
+*Concepts:* the inertia tensor; angular momentum against angular velocity; the intermediate axis theorem; symplectic integration.
 Inertia from every shape; tumbling that keeps angular momentum exactly; forces, torques and
 impulses.
 
 **3. Narrowphase ✅** *(approved and done 2026-10-13)*
+*Concepts:* broadphase against narrowphase; contact manifolds; the separating axis theorem; polygon clipping; closest points between segments; speculative contacts; feature ids.
 Contacts between every pair of sphere, box and capsule: exact per-pair methods, separating axes and
 clipping for boxes, up to 4 points, feature ids, speculative points out to a margin. Internal, no
 public API (`src/collide.js`).
@@ -139,7 +146,8 @@ capsule–capsule 0.4 µs, capsule–box 1.4 µs, box–box 1.6 µs. Box–box i
 10,000-box pile has about 30,000 touching pairs, about 48 ms a step. Caching each pair's separating
 axis from the step before is the known remedy; it is milestone 16's to measure.
 
-**4. Contact solver and materials ⬜**
+**4. Contact solver and materials ✅** *(approved and done 2026-10-13)*
+*Concepts:* impulses; effective mass; Gauss-Seidel iteration (sequential impulses); warm starting; soft constraints as springs; substepping; the Coulomb friction cone; restitution.
 Bodies collide and rest. Sequential impulses with warm starting, and Box2D v3's soft step with
 substeps, both built and run against the stack and pyramid scenes; the better one is kept and the
 measurement recorded. Friction, restitution, contact tolerance and the speed below which bounces
@@ -149,8 +157,28 @@ such, until milestone 5.
 *Done when:* every scene in the correctness list that doesn't need sleeping or CCD passes with the
 defaults: the box rests, the 10-stack and the pyramid stand, the ball settles, elastic collisions
 conserve within tolerance, the marble and the building both behave.
+*Result:* `src/contact.js`, held by `test/contact.test.js`'s 13 scenes. The solver is the soft
+step: substeps of one solving and one relaxing pass, with soft contacts. Sequential impulses
+couldn't hold a 10-box stack at 4 or 8 passes, and every substepped shape could; the table is in
+`bench/solver.js`. Measured, not chosen: 8 substeps (the fewest keeping the 210-box pyramid
+within 2.5 mm, against 3 mm at 7), contact stiffness an eighth of the substep rate (a quarter rang),
+damping ratio 10. Results on the defaults: the pyramid strays 1.5 mm and sinks 8 mm over 20 rows;
+the 10-stack strays 0.5 mm; a box on a slope holds at 20° and slides at exactly
+g (sin θ − μ cos θ) at 35°; elastic collisions keep momentum to rounding and energy to 1e-9;
+bounces keep e² of their height to within 3%; the platform's lag is exactly v²/2μg.
+Found and fixed on the way: a box dropped flat slid 7.6 mm, because one solver sweep let the first
+corner it visited stop the fall alone and tip the box (now one sweep a point, over a face's points
+together: 0.000 mm); bounces came back low, measured from the closing speed at the start of the
+step (now at the first push); contact storage never shrank (now the quarter rule). Stated plainly
+in the docs: a resting contact sags by g/ω², 0.07 mm at the defaults whatever the body's size,
+which is 0.7% of a 1 cm marble.
+*Cost to watch:* about 23 ms a step for the pyramid's 211 bodies, two thirds of it the solve loop
+itself, which reads and writes each body's velocity per point and multiplies by its inverse
+inertia on every push. Box2D keeps a pair's velocities in locals and precomputes the angular parts
+once a step; milestone 16 measures doing the same.
 
 **5. Broadphase and filtering ⬜**
+*Concepts:* bounding volumes; dynamic AABB trees; sweep-and-prune; pair caches; collision filtering with bit masks.
 A dynamic AABB tree and sweep-and-prune, both built and timed on 1,000 and 10,000 boxes; the
 better one kept. Pairs found incrementally, with no world bounds. Collision layers and masks: a
 32-bit membership and filter per body, everything colliding with everything by default
@@ -159,6 +187,7 @@ better one kept. Pairs found incrementally, with no world bounds. Collision laye
 ways; the tree is ready for queries.
 
 **6. Islands and sleeping ⬜**
+*Concepts:* islands as connected components (union-find); sleep thresholds; waking.
 Bodies touching are grouped into islands; an island at rest sleeps; anything that moves it, a
 touch, a push, a setter, wakes it, with no `wakeUp()`. Sleep thresholds derived. The moved-bodies
 list (rule 63), exact even when a frame runs several steps *(proposal)*. `world.sleeping` to switch
@@ -167,6 +196,7 @@ it off.
 the moved list is exact over multi-step frames.
 
 **7. Benchmark ⬜**
+*Concepts:* A/B measurement; variance between runs; comparing engines fairly.
 `bench/compare.html`: the benchmark scenes through Bearing, Rapier, Jolt and cannon-es, in one
 page, taking turns, printing numbers only. Run on both machines. The speed goals above are
 confirmed or reset with these numbers.
@@ -178,12 +208,14 @@ confirmed or reset with Nolan.
 ### Part two: querying and level content
 
 **8. Queries ⬜**
+*Concepts:* ray–shape intersection; GJK; shape casts by conservative advancement; tree traversal.
 `world.raycast` (nearest hit), all hits along a ray, shape casts and overlap tests, through the
 broadphase tree; results as plain data or `null` *(proposal)*. GJK arrives here for shape casts.
 *Done when:* every query matches a brute-force answer on random scenes; 10,000 rays a step are
 timed.
 
 **9. Triangle meshes and heightfields ⬜**
+*Concepts:* triangle BVHs; heightfields; internal edges and ghost collisions; the glTF binary format.
 Static level geometry: a triangle mesh with its own BVH, and a heightfield. Every primitive
 against triangles, with internal edges handled so a sliding box doesn't catch on the seams between
 triangles. Meshes read straight from a `.glb`, with no dependency *(proposal)*.
@@ -191,6 +223,7 @@ triangles. Meshes read straight from a `.glb`, with no dependency *(proposal)*.
 sphere rolls over a heightfield; a `.glb` loads.
 
 **10. Contact events and sensors ⬜**
+*Concepts:* contact lifecycles (begin, stay, end); triggers; why callbacks from inside a solver cause re-entrancy bugs.
 `world.contacts()`: begin, stay and end after each step, as plain data. Sensors: shapes that
 report overlaps and push nothing.
 *Needs Nolan:* the choice in rule 65, read after the step rather than callbacks. Recommended:
@@ -201,24 +234,28 @@ its end events; no event fires twice.
 ### Part three: gameplay
 
 **11. Character controller and rotation locks ⬜**
+*Concepts:* kinematic character movement; move-and-slide; ground detection; step offsets and slope limits.
 A kinematic capsule that walks, slides along walls, climbs steps and slopes up to a limit, stays
 on the ground going down them, and rides moving platforms. Rotation locks, for upright dynamic
 characters and 2.5D games *(proposal)*.
 *Done when:* scripted walks over a test level end where hand-worked answers say.
 
 **12. Joints ⬜**
+*Concepts:* constraints and their Jacobians; degrees of freedom; limits and motors; mass ratios.
 `world.addJoint`, `setJoint`, `jointOf`, `remove`: fixed, ball, hinge, slider, and distance/spring,
 with limits and motors *(proposal)*. No joints means the joint solver doesn't run.
 *Done when:* a pendulum keeps its period; a 100-link chain hangs without stretching; limits hold;
 motors reach their speed; a ragdoll is added to the benchmark.
 
 **13. Continuous collision ⬜**
+*Concepts:* tunnelling; time of impact; conservative advancement; swept volumes.
 Time of impact for fast bodies, switched on where speed against size calls for it, from a derived
 threshold rather than a setting the user must find *(proposal)*.
 *Done when:* a 1 cm ball at 500 m/s hits a 1 cm wall, every time; CCD costs nothing when nothing
 is fast.
 
 **14. Convex hulls and compound shapes ⬜**
+*Concepts:* quickhull; mass properties of polyhedra; compound shapes; centres of mass apart from the origin.
 Hulls built from points (quickhull), reusing milestone 3's separating axes and clipping; compound
 bodies of several shapes, with a centre of mass apart from the body's origin *(proposal)*.
 *Done when:* hull inertia matches integration; a compound tumbles about its true centre of mass;
@@ -227,16 +264,19 @@ hull contacts pass the same reference tests as boxes.
 ### Part four: 1.0
 
 **15. Save, load and debug lines ⬜**
+*Concepts:* serialisation; exact floating-point round trips; replays.
 `world.save()` to plain data and `World.load(data)` back, exact to the bit; `world.debugLines()`
 as line segments in a `Float32Array` *(proposal)*.
 *Done when:* a saved world, loaded and stepped, matches the original to the bit.
 
 **16. Performance pass ⬜**
+*Concepts:* profiling; cache behaviour; writing JavaScript the JIT optimises well.
 Profile every benchmark scene on both machines; every change made for speed comes with its A/B
 measurement and a test that results didn't change.
 *Done when:* the speed goals are met, or the gap is stated plainly with the reason.
 
 **17. Documentation ⬜**
+*Concepts:* writing reference documentation people can learn from.
 The README with the measured comparison, its method and machines; `docs/SIDE-BY-SIDE.md`, the same
 small program in Bearing, Rapier and cannon-es, each run to check it works; and engine examples in
 the docs, showing how Three.js, Babylon.js, PlayCanvas, Pixi and Winding copy `transforms` in.
@@ -244,6 +284,7 @@ They are examples, not code in the package.
 *Done when:* every example in every doc runs in a test.
 
 **18. 1.0 ⬜**
+*Concepts:* release engineering; trusted publishing; checking determinism across JavaScript engines.
 Every goal above met and measured; the determinism hash checked on Bun as well as Node in CI;
 1.0.0 released (see [Versions and releases](#versions-and-releases)).
 *Needs Nolan:* the go-ahead for the release.

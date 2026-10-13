@@ -21,6 +21,7 @@ test('addBody({}) makes a 1 m box of water at rest at the origin', () => {
   assert.equal(body.mass, 1000);
   assert.deepEqual(world.bodyOf(body), {
     type: 'dynamic', shape: 'box', size: [1, 1, 1], density: 1000,
+    friction: 0.5, restitution: 0, damping: 0, angularDamping: 0, gravityScale: 1,
     position: [0, 0, 0], rotation: [0, 0, 0, 1], velocity: [0, 0, 0], angularVelocity: [0, 0, 0],
   });
   assert.deepEqual(world.addBody().position, [0, 0, 0]);
@@ -119,14 +120,24 @@ test('setAxisAngle and setEuler agree with each other and with the formulas', ()
   close(c.rotation, expected, 1e-15, 'euler');
 });
 
-test('free fall follows semi-implicit Euler exactly', () => {
+test('free fall follows semi-implicit Euler over the substeps exactly', () => {
   const world = new World();
   const body = world.addBody({ position: [0, 100, 0] });
-  const dt = 1 / 60, n = 120;
+  const dt = 1 / 60, n = 120, h = dt / world.substeps, N = n * world.substeps;
   for (let i = 0; i < n; i++) world.step(dt);
-  // v_n = g n dt; x_n = x_0 + g dt^2 n (n + 1) / 2
-  close(body.velocity, [0, -9.81 * n * dt, 0], 1e-12, 'velocity');
-  close(body.position, [0, 100 - 9.81 * dt * dt * n * (n + 1) / 2, 0], 1e-11, 'position');
+  // N substeps of h: v_N = g N h; x_N = x_0 + g h^2 N (N + 1) / 2
+  close(body.velocity, [0, -9.81 * N * h, 0], 1e-12, 'velocity');
+  close(body.position, [0, 100 - 9.81 * h * h * N * (N + 1) / 2, 0], 1e-11, 'position');
+});
+
+test('substeps can be set, at any time, to any whole number from 1', () => {
+  const world = new World({ substeps: 2 });
+  assert.equal(world.substeps, 2);
+  const body = world.addBody({ position: [0, 100, 0] });
+  world.substeps = 1;
+  world.step(0.5);
+  // One substep is plain semi-implicit Euler over the whole step.
+  close(body.position, [0, 100 - 9.81 * 0.25, 0], 1e-12, 'one substep');
 });
 
 test('gravity can change at any time, and the next step uses it', () => {

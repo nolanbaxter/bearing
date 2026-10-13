@@ -44,14 +44,17 @@ const gone = () => {
   return { world, body };
 };
 
-const OPTIONS = 'type, shape, size, radius, height, density, mass, inertia, position, rotation, velocity, angularVelocity';
+const OPTIONS = 'type, shape, size, radius, height, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, position, rotation, velocity, angularVelocity';
 
 /** [entry, the call, the exact message]. */
 const cases = [
   ['world', () => new World(5), 'World: options must be an object, got 5'],
   ['world', () => new World({ gravty: [0, 0, 0] }), "World: unknown option 'gravty' (did you mean 'gravity'?)"],
-  ['world', () => new World({ wind: 1 }), "World: unknown option 'wind' (the options are gravity)"],
+  ['world', () => new World({ wind: 1 }), "World: unknown option 'wind' (the options are gravity, substeps)"],
   ['world', () => new World({ gravity: [0, -9.81] }), 'World: gravity must be 3 finite numbers, got 0,-9.81'],
+  ['world', () => new World({ substeps: 0 }), 'World: substeps must be a whole number, 1 or more, got 0'],
+  ['world-substeps', () => gone().world.substeps, 'substeps: this world was destroyed'],
+  ['world-substeps', () => { fresh().world.substeps = 2.5; }, 'world.substeps must be a whole number, 1 or more, got 2.5'],
 
   ['world-gravity', () => { const { world } = gone(); return world.gravity; }, 'gravity: this world was destroyed'],
   ['world-gravity', () => { fresh().world.gravity = [0, NaN, 0]; }, 'world.gravity must be 3 finite numbers, got 0,NaN,0'],
@@ -86,6 +89,11 @@ const cases = [
       [e, run({ mass: 1, density: 1 }), `${call}: give mass or density, not both`],
       [e, run({ mass: 0 }), `${call}: mass must be a positive number, got 0`],
       [e, run({ density: Infinity }), `${call}: density must be a positive number, got Infinity`],
+      [e, run({ friction: -0.1 }), `${call}: friction must be 0 or more, got -0.1`],
+      [e, run({ restitution: 1.2 }), `${call}: restitution must be from 0 to 1, got 1.2`],
+      [e, run({ damping: NaN }), `${call}: damping must be 0 or more, got NaN`],
+      [e, run({ angularDamping: Infinity }), `${call}: angularDamping must be 0 or more, got Infinity`],
+      [e, run({ gravityScale: '1' }), `${call}: gravityScale must be a finite number, got '1'`],
       [e, run({ inertia: [1, 0, 1] }), `${call}: inertia must be 3 positive numbers, or null to follow the shape, got 1,0,1`],
       [e, run({ position: { x: 1, y: 2, z: 3 } }), `${call}: position must be 3 finite numbers, got an object`],
       [e, run({ rotation: [0, 0, 0, 0] }), `${call}: rotation must be 4 finite numbers, not all zero, got 0,0,0,0`],

@@ -22,11 +22,14 @@
 // use fall to a quarter of it. Nothing is sized in advance.
 
 import {
-  fail, show, positive, positive3, vec3, xyz, quat, oneOf, options, known, readOnly,
+  fail, show, finite, positive, positive3, vec3, xyz, quat, oneOf, options, known, readOnly,
 } from './core/check.js';
 import { rotate } from './core/math.js';
 import { Slots, resized, MAX_ID, MAX_SLOTS } from './core/slots.js';
 import { volume, inertia as shapeInertia } from './shapes.js';
+import {
+  Contacts, PIXEL, find, prepare, makeSoft, warmStart, solve, restitution,
+} from './contact.js';
 import { Body } from './body.js';
 
 const TYPES = ['dynamic', 'static', 'kinematic'];
@@ -37,19 +40,47 @@ const BOX = 0, SPHERE = 1, CAPSULE = 2;
 /** Which sizes each shape has; giving one another shape has throws. */
 const SHAPE_SIZES = { box: ['size'], sphere: ['radius'], capsule: ['radius', 'height'] };
 
-const WORLD_OPTIONS = ['gravity'];
+const WORLD_OPTIONS = ['gravity', 'substeps'];
+
+// THE SOLVER'S SHAPE, all measured with bench/solver.js (i7-1260P, Node 22),
+// on a 1 m box dropped flat, a 10-box stack and a 210-box pyramid, 10 s at
+// 60 Hz each; the full tables are in ROADMAP.md's milestone 4.
+//
+// Substeps, each one pass and one relaxing pass (Box2D 3's soft step), beat
+// passes within a single step (sequential impulses) outright: one substep of
+// four or eight passes let the 10-box stack fall, where every substepped
+// shape held it. SUBSTEPS is the fewest that kept the pyramid within half a
+// box's contact tolerance (2.5 mm): 1.47 mm at 8, against 3.02 at 7 and 9.49
+// at 4, with the top sinking 8 mm over 20 rows.
+const SUBSTEPS = 8;
+// How stiff a contact's spring is, as a fraction of the substep rate. A
+// quarter is the most the integrator can follow (ωh = π/2, inside semi-implicit
+// Euler's ωh < 2), but with one pass a substep the solver can't keep up and the
+// pyramid rang at 0.13 m/s after 10 s; an eighth let it settle to 0.0001 m/s.
+// An eighth is also Box2D 3's own effective default: 30 Hz over 4 substeps at
+// 60 Hz.
+const STIFFNESS = 1 / 8;
+// How damped that spring is. Ratios 1, 3 and 10 measured within a millimetre of
+// each other; 10 settled the pyramid stillest, and it is Box2D 3's.
+const DAMPING_RATIO = 10;
 const BODY_OPTIONS = [
   'type', 'shape', 'size', 'radius', 'height', 'density', 'mass', 'inertia',
+  'friction', 'restitution', 'damping', 'angularDamping', 'gravityScale',
   'position', 'rotation', 'velocity', 'angularVelocity',
 ];
 
 // Defaults from real things (rule 32): Earth's gravity, water's density, and
 // a metre for size. A capsule's 2 m of height over a 0.5 m radius is Godot's
-// default capsule, roughly a person.
+// default capsule, roughly a person. Friction 0.5 is the middle of everyday
+// dry materials, about 0.3 to 0.8 (wood on wood 0.3-0.5, rubber on concrete
+// about 0.7): there is no one real value for an unnamed material, and Nolan
+// chose the middle knowingly. Restitution 0, so piles and stacks don't bounce
+// as they land; a ball that should bounce is given its bounce.
 const GRAVITY = [0, -9.81, 0];
 const DEFAULTS = Object.freeze({
   type: 'dynamic', shape: 'box', size: [1, 1, 1], radius: 0.5, height: 2,
   density: 1000, mass: 0, massGiven: false, inertia: [0, 0, 0], inertiaGiven: false,
+  friction: 0.5, restitution: 0, damping: 0, angularDamping: 0, gravityScale: 1,
   position: [0, 0, 0], rotation: [0, 0, 0, 1], velocity: [0, 0, 0], angularVelocity: [0, 0, 0],
 });
 
@@ -70,6 +101,20 @@ const COLUMNS = [
   ['_invInertia', Float64Array, 3],
   ['_force', Float64Array, 3],       // applied since the last step, cleared by it
   ['_torque', Float64Array, 3],
+  ['_friction', Float64Array, 1],
+  ['_restitution', Float64Array, 1],
+  ['_damping', Float64Array, 1],
+  ['_angularDamping', Float64Array, 1],
+  ['_gravityScale', Float64Array, 1],
+  ['_invMass', Float64Array, 1],     // 1 / mass for a dynamic body, 0 for anything else
+  ['_size', Float64Array, 1],        // the shape's thinnest extent, m: what its tolerances scale with
+  ['_reach', Float64Array, 1],       // the farthest any point of the shape is from its centre, m
+  // Worked out by the step, for the step:
+  ['_axes', Float64Array, 9],        // the body's own axes in world space
+  ['_box', Float64Array, 6],         // its bounding box, grown by how far it can move: min, max
+  ['_motion', Float64Array, 1],      // how far any point of it can move this step, m
+  ['_invI', Float64Array, 6],        // world-space inverse inertia, xx xy xz yy yz zz
+  ['_start', Float64Array, 3],       // its position when the step began
   ['_type', Uint8Array, 1],
   ['_shape', Uint8Array, 1],
   ['_massGiven', Uint8Array, 1],
@@ -93,10 +138,30 @@ export class World {
      * or it is a repeat) and is skipped.
      */
     this._forcedSlots = [];
+    /** This step's contacts, and last step's, swapped each step so last step's impulses carry over. */
+    this._contacts = new Contacts();
+    this._spare = new Contacts();
+    this._substeps = o.substeps === undefined ? SUBSTEPS : wholeFromOne('World', 'substeps', o.substeps);
+    /** Steps that ran the contact solver: for the off-means-off test, which reads it. */
+    this._solverSteps = 0;
     this._destroyed = false;
   }
 
   // ---- settings and state ----
+
+  /**
+   * How many smaller steps each step is solved in. More hold tall stacks
+   * stiffer, at a cost; the default is measured, not a guess (see SUBSTEPS).
+   */
+  get substeps() {
+    this._live('substeps');
+    return this._substeps;
+  }
+
+  set substeps(value) {
+    this._live('substeps');
+    this._substeps = wholeFromOne(null, 'world.substeps', value);
+  }
 
   /** m/s². A copy; assign a new value to change it. */
   get gravity() {
@@ -163,6 +228,7 @@ export class World {
     if (spec.massGiven) out.mass = spec.mass;
     else out.density = spec.density;
     if (spec.inertiaGiven) out.inertia = [...spec.inertia];
+    for (const k of MATERIAL) out[k] = spec[k];
     out.position = [...spec.position];
     out.rotation = [...spec.rotation];
     if (spec.type !== 'static') {
@@ -195,38 +261,107 @@ export class World {
    * instead of spiralling out as explicit Euler's does, at the same cost.
    *
    * In order: forces and torques applied since the last step act for this
-   * one and are cleared; gravity; then positions and rotations move, a
-   * lopsided spinning body carrying its angular momentum (see tumble()).
+   * one and are cleared; the pairs that touch, or will within the step, are
+   * found; then the step runs as `substeps` smaller steps, each one gravity
+   * and damping, the contact solver's passes, positions and rotations moving
+   * (a lopsided spinning body carrying its angular momentum, see tumble()),
+   * and the solver's relaxing passes. Bounces come last.
    */
   step(dt) {
     this._live('step');
     if (typeof dt !== 'number' || !(dt > 0) || dt === Infinity) {
       fail('step', `dt must be a positive number of seconds, got ${show(dt)}`);
     }
-    const n = this._slots.top;
-    const state = this._slots.state;
-    const type = this._type;
-    const p = this._position, q = this._rotation, v = this._velocity, w = this._angular;
-    const I = this._inertia;
+    const n = this._slots.top, state = this._slots.state, type = this._type;
     const tr = this._transforms, prev = this._previous;
-    const gx = this._gravity[0] * dt, gy = this._gravity[1] * dt, gz = this._gravity[2] * dt;
-    const half = dt * 0.5;
 
     if (this._forcedSlots.length > 0) this._applyForces(dt);
 
+    // Static bodies never move in a step, and their `previous` already equals
+    // their transform, so they cost one compare here and none below.
     for (let s = 0; s < n; s++) {
-      // Free slots are state 0. Static bodies never move in a step, and their
-      // `previous` already equals their transform, so they cost one compare.
       if (state[s] !== 1 || type[s] === STATIC) continue;
       const t7 = s * 7;
       for (let k = 0; k < 7; k++) prev[t7 + k] = tr[t7 + k];
+    }
 
-      const s3 = s * 3, s4 = s * 4;
-      if (type[s] === DYNAMIC) {
-        v[s3] += gx; v[s3 + 1] += gy; v[s3 + 2] += gz;
+    // A lone body has nothing to touch: no bounds, no pair search.
+    const last = this._contacts, next = this._spare;
+    next.count = 0;
+    if (n > 1) {
+      this._bounds(dt);
+      find(this, dt, last, next);
+    }
+    next.trim();
+    const touching = next.count;
+    this._contacts = next;
+    this._spare = last;
+
+    const substeps = this._substeps, h = dt / substeps;
+    if (touching > 0) {
+      this._solverSteps++;
+      this._start.set(this._position.subarray(0, n * 3));
+      prepare(this, next);
+      makeSoft(STIFFNESS / h, DAMPING_RATIO, h);
+    }
+    for (let sub = 0; sub < substeps; sub++) {
+      this._accelerate(h);
+      if (touching > 0) {
+        warmStart(this, next);
+        solve(this, next, h, true);
       }
-      p[s3] += v[s3] * dt; p[s3 + 1] += v[s3 + 1] * dt; p[s3 + 2] += v[s3 + 2] * dt;
+      this._move(h);
+      if (touching > 0) {
+        solve(this, next, h, false);
+      }
+    }
+    if (touching > 0) {
+      const g = this._gravity;
+      restitution(this, next, Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]));
+    }
 
+    const p = this._position, q = this._rotation;
+    for (let s = 0; s < n; s++) {
+      if (state[s] !== 1 || type[s] === STATIC) continue;
+      const t7 = s * 7, s3 = s * 3, s4 = s * 4;
+      tr[t7] = p[s3]; tr[t7 + 1] = p[s3 + 1]; tr[t7 + 2] = p[s3 + 2];
+      tr[t7 + 3] = q[s4]; tr[t7 + 4] = q[s4 + 1]; tr[t7 + 5] = q[s4 + 2]; tr[t7 + 6] = q[s4 + 3];
+    }
+  }
+
+  /** Gravity, scaled per body, and damping, over h, for every dynamic body. */
+  _accelerate(h) {
+    const n = this._slots.top, state = this._slots.state, type = this._type;
+    const v = this._velocity, w = this._angular, scale = this._gravityScale;
+    const gx = this._gravity[0] * h, gy = this._gravity[1] * h, gz = this._gravity[2] * h;
+    const damping = this._damping, angularDamping = this._angularDamping;
+    for (let s = 0; s < n; s++) {
+      if (state[s] !== 1 || type[s] !== DYNAMIC) continue;
+      const s3 = s * 3, g = scale[s];
+      v[s3] += gx * g; v[s3 + 1] += gy * g; v[s3 + 2] += gz * g;
+      // dv/dt = -c v, taken implicitly: v / (1 + c h). Exact operations only
+      // (Math.exp is not), never overshoots past zero however large c h is,
+      // and Box2D's form.
+      if (damping[s] !== 0) {
+        const k = 1 / (1 + h * damping[s]);
+        v[s3] *= k; v[s3 + 1] *= k; v[s3 + 2] *= k;
+      }
+      if (angularDamping[s] !== 0) {
+        const k = 1 / (1 + h * angularDamping[s]);
+        w[s3] *= k; w[s3 + 1] *= k; w[s3 + 2] *= k;
+      }
+    }
+  }
+
+  /** Positions and rotations on by h, for every body that moves. */
+  _move(h) {
+    const n = this._slots.top, state = this._slots.state, type = this._type;
+    const p = this._position, q = this._rotation, v = this._velocity, w = this._angular, I = this._inertia;
+    const half = h * 0.5;
+    for (let s = 0; s < n; s++) {
+      if (state[s] !== 1 || type[s] === STATIC) continue;
+      const s3 = s * 3, s4 = s * 4;
+      p[s3] += v[s3] * h; p[s3 + 1] += v[s3 + 1] * h; p[s3 + 2] += v[s3 + 2] * h;
       const wx = w[s3], wy = w[s3 + 1], wz = w[s3 + 2];
       const turning = wx !== 0 || wy !== 0 || wz !== 0;
       // A lopsided dynamic body tumbles; see tumble(). A sphere or a cube has
@@ -234,15 +369,64 @@ export class World {
       // its angular momentum over one number, constant, so the plain update
       // below is already exact. A kinematic body turns as it is told.
       if (turning && type[s] === DYNAMIC && (I[s3] !== I[s3 + 1] || I[s3 + 1] !== I[s3 + 2])) {
-        tumble(q, s4, I, this._invInertia, s3, w, dt);
+        tumble(q, s4, I, this._invInertia, s3, w, h);
       } else if (turning) {
-        // q += dt/2 (ω, 0) q, with ω in world space, then back to unit length.
+        // q += h/2 (ω, 0) q, with ω in world space, then back to unit length.
         // Not turning skips this and leaves the rotation exactly as it was,
-        // rather than renormalizing it every step for nothing.
+        // rather than renormalizing it every substep for nothing.
         advance(q, s4, wx, wy, wz, half, q, s4);
       }
-      tr[t7] = p[s3]; tr[t7 + 1] = p[s3 + 1]; tr[t7 + 2] = p[s3 + 2];
-      tr[t7 + 3] = q[s4]; tr[t7 + 4] = q[s4 + 1]; tr[t7 + 5] = q[s4 + 2]; tr[t7 + 6] = q[s4 + 3];
+    }
+  }
+
+  /**
+   * Each body's axes, how far it can move this step, and its bounding box
+   * grown by that and its tolerance: what the pair search reads.
+   *
+   * How far it can move is its speed, plus what gravity adds over the step,
+   * plus its spin times its reach, all over dt. Two bodies further apart than
+   * the sum of theirs can't meet this step, so no contact is made for them;
+   * two nearer get speculative points out to it (see collide.js).
+   */
+  _bounds(dt) {
+    const n = this._slots.top, state = this._slots.state, type = this._type;
+    const p = this._position, q = this._rotation, v = this._velocity, w = this._angular;
+    const ax = this._axes, box = this._box, motion = this._motion, d = this._dims;
+    const g = this._gravity, gl = Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+    for (let s = 0; s < n; s++) {
+      if (state[s] !== 1) continue;
+      const s3 = s * 3, s4 = s * 4, a9 = s * 9, b6 = s * 6;
+      const x = q[s4], y = q[s4 + 1], z = q[s4 + 2], qw = q[s4 + 3];
+      ax[a9] = 1 - 2 * (y * y + z * z); ax[a9 + 1] = 2 * (x * y + z * qw); ax[a9 + 2] = 2 * (x * z - y * qw);
+      ax[a9 + 3] = 2 * (x * y - z * qw); ax[a9 + 4] = 1 - 2 * (x * x + z * z); ax[a9 + 5] = 2 * (y * z + x * qw);
+      ax[a9 + 6] = 2 * (x * z + y * qw); ax[a9 + 7] = 2 * (y * z - x * qw); ax[a9 + 8] = 1 - 2 * (x * x + y * y);
+
+      let m = 0;
+      if (type[s] !== STATIC) {
+        const speed = Math.sqrt(v[s3] * v[s3] + v[s3 + 1] * v[s3 + 1] + v[s3 + 2] * v[s3 + 2])
+          + (type[s] === DYNAMIC ? gl * Math.abs(this._gravityScale[s]) * dt : 0)
+          + Math.sqrt(w[s3] * w[s3] + w[s3 + 1] * w[s3 + 1] + w[s3 + 2] * w[s3 + 2]) * this._reach[s];
+        m = speed * dt;
+      }
+      motion[s] = m;
+
+      // Half the box's extent along each world axis.
+      let ex, ey, ez;
+      const shape = this._shape[s];
+      if (shape === BOX) {
+        const hx = d[s3] * 0.5, hy = d[s3 + 1] * 0.5, hz = d[s3 + 2] * 0.5;
+        ex = Math.abs(ax[a9]) * hx + Math.abs(ax[a9 + 3]) * hy + Math.abs(ax[a9 + 6]) * hz;
+        ey = Math.abs(ax[a9 + 1]) * hx + Math.abs(ax[a9 + 4]) * hy + Math.abs(ax[a9 + 7]) * hz;
+        ez = Math.abs(ax[a9 + 2]) * hx + Math.abs(ax[a9 + 5]) * hy + Math.abs(ax[a9 + 8]) * hz;
+      } else if (shape === SPHERE) {
+        ex = ey = ez = d[s3];
+      } else {
+        const r = d[s3], hl = (d[s3 + 1] - 2 * r) * 0.5;
+        ex = Math.abs(ax[a9 + 3]) * hl + r; ey = Math.abs(ax[a9 + 4]) * hl + r; ez = Math.abs(ax[a9 + 5]) * hl + r;
+      }
+      const grow = m + this._size[s] * PIXEL;
+      box[b6] = p[s3] - ex - grow; box[b6 + 1] = p[s3 + 1] - ey - grow; box[b6 + 2] = p[s3 + 2] - ez - grow;
+      box[b6 + 3] = p[s3] + ex + grow; box[b6 + 4] = p[s3 + 1] + ey + grow; box[b6 + 5] = p[s3 + 2] + ez + grow;
     }
   }
 
@@ -290,6 +474,8 @@ export class World {
     this._slots = new Slots();
     for (const [name, Type] of COLUMNS) this[name] = new Type(0);
     this._forcedSlots = [];
+    this._contacts = new Contacts();
+    this._spare = new Contacts();
   }
 
   // ---- what Body calls (public, but not for users: see test/docs.test.js) ----
@@ -464,6 +650,11 @@ export class World {
       massGiven: this._massGiven[s] === 1,
       inertia: [this._inertia[s3], this._inertia[s3 + 1], this._inertia[s3 + 2]],
       inertiaGiven: this._inertiaGiven[s] === 1,
+      friction: this._friction[s],
+      restitution: this._restitution[s],
+      damping: this._damping[s],
+      angularDamping: this._angularDamping[s],
+      gravityScale: this._gravityScale[s],
       position: [this._position[s3], this._position[s3 + 1], this._position[s3 + 2]],
       rotation: [this._rotation[s4], this._rotation[s4 + 1], this._rotation[s4 + 2], this._rotation[s4 + 3]],
       velocity: [this._velocity[s3], this._velocity[s3 + 1], this._velocity[s3 + 2]],
@@ -497,6 +688,23 @@ export class World {
     if (spec.inertiaGiven) this._inertia.set(spec.inertia, s3);
     else this._inertia.set(shapeInertia(spec, this._mass[s], v3), s3);
     for (let k = 0; k < 3; k++) this._invInertia[s3 + k] = 1 / this._inertia[s3 + k];
+    // What contacts use: how much a push moves it (nothing, unless it is
+    // dynamic), its thinnest size, which its tolerances scale with, and how
+    // far its surface reaches from its centre, which bounds how far a spin
+    // can carry any point of it.
+    this._invMass[s] = spec.type === 'dynamic' ? 1 / this._mass[s] : 0;
+    if (shape === BOX) {
+      this._size[s] = Math.min(spec.size[0], spec.size[1], spec.size[2]);
+      this._reach[s] = 0.5 * Math.sqrt(spec.size[0] * spec.size[0] + spec.size[1] * spec.size[1] + spec.size[2] * spec.size[2]);
+    } else {
+      this._size[s] = 2 * spec.radius;
+      this._reach[s] = shape === CAPSULE ? spec.height * 0.5 : spec.radius;
+    }
+    this._friction[s] = spec.friction;
+    this._restitution[s] = spec.restitution;
+    this._damping[s] = spec.damping;
+    this._angularDamping[s] = spec.angularDamping;
+    this._gravityScale[s] = spec.gravityScale;
     this._position.set(spec.position, s3);
     this._rotation.set(spec.rotation, s * 4);
     this._velocity.set(spec.velocity, s3);
@@ -559,6 +767,21 @@ function resolve(caller, base, given) {
     inertiaGiven = true;
   }
 
+  const friction = has('friction') ? atLeastZero(caller, 'friction', given.friction) : base.friction;
+  let restitution = base.restitution;
+  if (has('restitution')) {
+    const r = given.restitution;
+    // Past 1 a bounce would come back faster than it hit: energy from nowhere.
+    if (typeof r !== 'number' || !(r >= 0 && r <= 1)) {
+      fail(caller, `restitution must be from 0 to 1, got ${show(r)}`);
+    }
+    restitution = r;
+  }
+  const damping = has('damping') ? atLeastZero(caller, 'damping', given.damping) : base.damping;
+  const angularDamping = has('angularDamping')
+    ? atLeastZero(caller, 'angularDamping', given.angularDamping) : base.angularDamping;
+  const gravityScale = has('gravityScale') ? finite(caller, 'gravityScale', given.gravityScale) : base.gravityScale;
+
   const position = has('position') ? vec3(caller, 'position', given.position) : base.position;
   const rotation = has('rotation') ? quat(caller, 'rotation', given.rotation) : base.rotation;
   let velocity, angularVelocity;
@@ -574,8 +797,25 @@ function resolve(caller, base, given) {
   }
   return {
     type, shape, size, radius, height, density, mass, massGiven, inertia, inertiaGiven,
+    friction, restitution, damping, angularDamping, gravityScale,
     position, rotation, velocity, angularVelocity,
   };
+}
+
+/** The material options, in the order bodyOf lists them. */
+const MATERIAL = ['friction', 'restitution', 'damping', 'angularDamping', 'gravityScale'];
+
+/** A whole number, 1 or more. */
+function wholeFromOne(caller, name, value) {
+  if (!Number.isInteger(value) || value < 1) fail(caller, `${name} must be a whole number, 1 or more, got ${show(value)}`);
+  return value;
+}
+
+function atLeastZero(caller, name, value) {
+  if (typeof value !== 'number' || !(value >= 0) || value === Infinity) {
+    fail(caller, `${name} must be 0 or more, got ${show(value)}`);
+  }
+  return value;
 }
 
 /**
@@ -597,11 +837,12 @@ function resolve(caller, base, given) {
  * ω, turn the body by the angular velocity L gives at the half step, and
  * read the new ω back from L at the end. Angular momentum is then conserved
  * to rounding by construction. Energy can only drift down, and can never run
- * away, since with |L| fixed it is at most |L|² / 2 I_min. Measured at 60 Hz
- * over 120 s: 0.04% lost flipping at 5 rad/s, 6% at 20 rad/s, 11% at 50 rad/s,
- * where a step turns the body most of a radian. It is always on, costs six
- * quaternion rotations a lopsided spinning body a step, and has nothing to
- * tune. test/motion.test.js holds it to these numbers.
+ * away, since with |L| fixed it is at most |L|² / 2 I_min. Measured over
+ * 120 s of 60 Hz steps, each of the 8 substeps: under 0.001% lost flipping at
+ * 5 rad/s, 0.02% at 20 rad/s, 0.6% at 50 rad/s. (Taken whole, with no
+ * substeps, the same cost 0.04%, 6% and 11%: what a step's size costs.) It is
+ * always on, costs six quaternion rotations a lopsided spinning body a
+ * substep, and has nothing to tune. test/motion.test.js holds it to these.
  *
  * Reads the rotation at q[s4..] and ω at w[s3..]; writes both.
  */

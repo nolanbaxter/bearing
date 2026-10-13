@@ -34,3 +34,15 @@ All notable changes to Bearing are recorded here. The format follows
 - Forces and impulses: `body.applyForce(force, point)` and `body.applyTorque(torque)` act for the
   next step; `body.applyImpulse(impulse, point)` and `body.applyAngularImpulse(impulse)` act at
   once. Static and kinematic bodies are not moved by them.
+- Collision. Every pair of box, sphere and capsule gets exact contact points, found before the
+  shapes touch, and a soft-step solver keeps them apart: bodies rest, stack, slide and bounce. A
+  210-box pyramid stands within 1.5 mm of where it was built; a box on a slope holds until tan θ
+  passes its friction and then slides at exactly g (sin θ − μ cos θ); balls with restitution 1 keep
+  their momentum and energy. Kinematic bodies push dynamic ones and carry what stands on them.
+- Body options `friction` (0.5), `restitution` (0), `damping`, `angularDamping` and `gravityScale`.
+  Friction mixes as a geometric mean, restitution as the larger.
+- `world.substeps` (8), the one solver setting, measured rather than chosen: the fewest that keep
+  the pyramid within half a box's tolerance.
+- Every contact tolerance comes from the size of the bodies touching (a two-hundredth of the
+  smaller one's thinnest size, about a pixel), so a 1 cm marble and a 50 m building both settle
+  with nothing retuned.

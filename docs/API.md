@@ -49,7 +49,7 @@ These hold everywhere, so one learned is one learned for good.
 <a id="contents"></a>
 ## Contents
 
-[World](#world-class) · [Body](#body) · [Determinism](#determinism) · [Limits](#limits)
+[World](#world-class) · [Body](#body) · [Contacts](#contacts) · [Determinism](#determinism) · [Limits](#limits)
 
 <a id="index"></a>
 ## Index
@@ -59,6 +59,8 @@ Every call, setting and entry, A to Z by its name.
 **A** &nbsp; [`world.addBody()`](#world-addbody) · [`body.alive`](#body-alive) · [`body.angularVelocity`](#body-angularvelocity) · [`body.applyAngularImpulse()`](#body-applyangularimpulse) · [`body.applyForce()`](#body-applyforce) · [`body.applyImpulse()`](#body-applyimpulse) · [`body.applyTorque()`](#body-applytorque)
 
 **B** &nbsp; [`world.body()`](#world-body) · [`world.bodyCount`](#world-bodycount) · [`world.bodyOf()`](#world-bodyof)
+
+**C** &nbsp; [Contacts](#contacts)
 
 **D** &nbsp; [`body.destroy()`](#body-destroy) · [`world.destroy()`](#world-destroy) · [Determinism](#determinism)
 
@@ -74,7 +76,7 @@ Every call, setting and entry, A to Z by its name.
 
 **R** &nbsp; [`world.remove()`](#world-remove) · [`body.rotation`](#body-rotation)
 
-**S** &nbsp; [`body.setAngularVelocity()`](#body-setangularvelocity) · [`body.setAxisAngle()`](#body-setaxisangle) · [`world.setBody()`](#world-setbody) · [`body.setEuler()`](#body-seteuler) · [`body.setPosition()`](#body-setposition) · [`body.setRotation()`](#body-setrotation) · [`body.setVelocity()`](#body-setvelocity) · [`body.slot`](#body-slot) · [`world.step()`](#world-step)
+**S** &nbsp; [`body.setAngularVelocity()`](#body-setangularvelocity) · [`body.setAxisAngle()`](#body-setaxisangle) · [`world.setBody()`](#world-setbody) · [`body.setEuler()`](#body-seteuler) · [`body.setPosition()`](#body-setposition) · [`body.setRotation()`](#body-setrotation) · [`body.setVelocity()`](#body-setvelocity) · [`body.slot`](#body-slot) · [`world.step()`](#world-step) · [`world.substeps`](#world-substeps)
 
 **T** &nbsp; [`world.transforms`](#world-transforms)
 
@@ -96,10 +98,11 @@ Makes an empty world, ready to step at once.
 | Option | Default | Meaning |
 |---|---|---|
 | `gravity` | `[0, -9.81, 0]` | Acceleration of every dynamic body, in m/s². Earth's, pointing down Y. |
+| `substeps` | `8` | How many smaller steps each step is solved in. See [`world.substeps`](#world-substeps). |
 
 Returns: the world.
 
-Throws: `World: options must be an object, got …`; `World: unknown option '…' (did you mean '…'?)`; `World: unknown option '…' (the options are gravity)`; `World: gravity must be 3 finite numbers, got …`.
+Throws: `World: options must be an object, got …`; `World: unknown option '…' (did you mean '…'?)`; `World: unknown option '…' (the options are gravity, substeps)`; `World: gravity must be 3 finite numbers, got …`; `World: substeps must be a whole number, 1 or more, got …`.
 
 ```js
 const world = new World();
@@ -124,6 +127,24 @@ world.gravity = [0, -9.81, 0];     // and back
 
 Notes: static and kinematic bodies are not pulled by gravity. See [`addBody`](#world-addbody)'s
 `type`.
+
+<a id="world-substeps"></a>
+### `world.substeps` → `number`
+
+How many smaller steps each [`step`](#world-step) is solved in. Contacts are solved and bodies
+moved once per substep, so more substeps hold tall stacks and heavy piles stiffer, and cost about
+that much more. Change it at any time.
+
+Throws: `substeps: this world was destroyed`; `world.substeps must be a whole number, 1 or more, got …`.
+
+```js
+world.substeps = 16;   // a very tall tower, held stiffer
+```
+
+Notes: the default, 8, is measured rather than chosen: the fewest that kept a pyramid of 210
+one-metre boxes within 2.5 mm of where it was built after 10 s at 60 Hz (at 7 it strayed 3 mm, at
+4, 9 mm). It is not there to be tuned for a correct result; raise it for unusual scenes, such as a
+heavy body resting on a much lighter one, a very tall stack, or a step much longer than 1/60 s.
 
 <a id="world-bodycount"></a>
 ### `world.bodyCount` → `number`
@@ -202,6 +223,11 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 | `density` | `1000` | kg/m³; water's. The mass is the density times the shape's volume. |
 | `mass` | from `density` | kg. Give this instead of `density` for a body of a known weight. |
 | `inertia` | from the shape and mass | The moments of inertia `[x, y, z]` about the body's own axes, in kg·m²: how hard it is to turn about each. Worked out for a solid shape; give it for one that isn't, such as a hollow ball. `null` goes back to working it out. |
+| `friction` | `0.5` | How much sideways push a contact can resist for each newton pressing it together: 0 is ice. The middle of everyday dry materials, about 0.3 to 0.8. |
+| `restitution` | `0` | How much of the speed it hits at comes back as a bounce, from 0 (none) to 1 (all of it). |
+| `damping` | `0` | Velocity lost per second, as air drag would take it, in 1/s. 0 is none. |
+| `angularDamping` | `0` | The same, for its spin, in 1/s. |
+| `gravityScale` | `1` | Multiplies the world's gravity, for this body: 0 floats, -1 rises. |
 | `position` | `[0, 0, 0]` | Where the body's centre is, in metres. |
 | `rotation` | `[0, 0, 0, 1]` | A quaternion `[x, y, z, w]`, normalized as it comes in. |
 | `velocity` | `[0, 0, 0]` | m/s. Not for a static body. |
@@ -209,7 +235,7 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 
 Returns: a [`Body`](#body).
 
-Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, inertia, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `addBody: shape must be 'box', 'sphere' or 'capsule', got …`; `addBody: a <shape> has no <option>`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a static body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
+Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `addBody: shape must be 'box', 'sphere' or 'capsule', got …`; `addBody: a <shape> has no <option>`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `addBody: friction must be 0 or more, got …`; `addBody: restitution must be from 0 to 1, got …`; `addBody: damping must be 0 or more, got …`; `addBody: angularDamping must be 0 or more, got …`; `addBody: gravityScale must be a finite number, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a static body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
 
 ```js
 const ground = world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
@@ -220,7 +246,7 @@ const player = world.addBody({ shape: 'capsule', radius: 0.3, height: 1.8, mass:
 Notes: a size option the shape doesn't have throws rather than being ignored, so
 `addBody({ radius: 0.5 })`, which forgot `shape: 'sphere'`, says `a box has no radius` instead of
 quietly making a 1 m box. A capsule whose height is exactly twice its radius is a sphere, and is
-allowed. Bodies don't collide yet: collision arrives in a later version.
+allowed. Bodies collide as soon as they are added; see [Contacts](#contacts).
 
 <a id="world-setbody"></a>
 ### `world.setBody(body, changes)`
@@ -228,7 +254,7 @@ allowed. Bodies don't collide yet: collision arrives in a later version.
 Changes any of the options [`addBody`](#world-addbody) took, with the same names, defaults and
 checks, and leaves the rest as they are.
 
-Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, inertia, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `setBody: shape must be 'box', 'sphere' or 'capsule', got …`; `setBody: a <shape> has no <option>`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a static body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
+Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `setBody: shape must be 'box', 'sphere' or 'capsule', got …`; `setBody: a <shape> has no <option>`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `setBody: friction must be 0 or more, got …`; `setBody: restitution must be from 0 to 1, got …`; `setBody: damping must be 0 or more, got …`; `setBody: angularDamping must be 0 or more, got …`; `setBody: gravityScale must be a finite number, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a static body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
 
 ```js
 world.setBody(crate, { size: [2, 1, 1] });           // twice as long, and twice as heavy
@@ -250,7 +276,7 @@ A copy of the body's options as they are now, in the form [`addBody`](#world-add
 `world.addBody(world.bodyOf(body))` makes a copy of it. Changing the result changes nothing; pass
 it to [`setBody`](#world-setbody) for that.
 
-Returns: `{ type, shape, …sizes, mass or density, inertia, position, rotation, velocity, angularVelocity }`.
+Returns: `{ type, shape, …sizes, mass or density, inertia, friction, restitution, damping, angularDamping, gravityScale, position, rotation, velocity, angularVelocity }`.
 The sizes are the shape's own: `size` for a box, `radius` for a sphere, `radius` and `height` for a
 capsule. `mass` if the body was given one, `density` if not, and `inertia` only if it was given one. A
 static body has no `velocity` or `angularVelocity`.
@@ -296,11 +322,11 @@ console.log(again.id === crate.id);   // true
 <a id="world-step"></a>
 ### `world.step(dt)`
 
-Moves the world on by `dt` seconds, exactly: there is no hidden accumulator and no substepping, so
-call it from your loop's fixed update, once per step. A dynamic body is pulled by gravity and
-moves at its velocity and turns at its angular velocity, after any forces and torques applied
-since the last step have acted; a kinematic body moves and turns as its velocities say; a static
-body stays put.
+Moves the world on by `dt` seconds, exactly: there is no hidden accumulator, so call it from
+your loop's fixed update, once per step. A dynamic body is pulled by gravity, pushed by whatever
+it touches, and moves and turns at its velocities, after any forces and torques applied since the
+last step have acted; a kinematic body moves and turns as its velocities say; a static body stays
+put.
 
 Throws: `step: this world was destroyed`; `step: dt must be a positive number of seconds, got …`.
 
@@ -310,18 +336,19 @@ function update(dt) {   // called at a fixed rate, such as 60 times a second
 }
 ```
 
-Notes: the integration is semi-implicit Euler, velocity first and position from the new velocity.
-It keeps orbits and pendulums from gaining energy the way plain Euler does, at the same cost.
-Before moving anything, a step copies [`transforms`](#world-transforms) into
-[`previous`](#world-previous). A world with no bodies costs almost nothing to step, and a step with
-no forces applied doesn't look for any. Bodies don't collide yet.
+Notes: a step is solved as [`substeps`](#world-substeps) smaller steps of `dt / substeps` each; it
+still moves the world on by exactly `dt`. Each is semi-implicit Euler, velocity first and position
+from the new velocity, which keeps orbits and pendulums from gaining energy the way plain Euler
+does, at the same cost. Before moving anything, a step copies [`transforms`](#world-transforms)
+into [`previous`](#world-previous). A world with no bodies costs almost nothing to step; a step
+with no forces applied doesn't look for any, and one where nothing touches runs no contact solver.
 
 A lopsided body turning freely tumbles as a real one does: a book spun about its middle axis
 flips over, and spun about its longest or shortest it doesn't. What a step carries across exactly
 is the body's angular momentum, so a tumbling body keeps it to rounding. Its energy can drift
 down a little where the real motion keeps it all: measured over 120 s at 60 Hz, a 1 × 2 × 3 m box
-flipping at 5 rad/s keeps 99.96% of it, at 20 rad/s 94%, and at 50 rad/s, most of a radian a
-step, 89%. It never gains energy, so it never blows up. A sphere or a cube turns at a constant
+flipping at 5 rad/s keeps all of it to within 0.001%, at 20 rad/s 99.98%, and at 50 rad/s 99.4%.
+It never gains energy, so it never blows up. A sphere or a cube turns at a constant
 angular velocity, exactly.
 
 <a id="world-destroy"></a>
@@ -647,6 +674,39 @@ Throws: `destroy: this world was destroyed`.
 ```js
 crate.destroy();
 ```
+
+<a id="contacts"></a>
+## Contacts
+
+Bodies collide as soon as they are added: there is nothing to switch on, and nothing to tune.
+Every step finds which bodies touch, or will within the step, and pushes them so they don't sink
+into each other, slide no more than friction allows, and bounce as much as their restitution says.
+
+- **Who pushes whom.** Dynamic bodies push each other. A kinematic body pushes dynamic ones and is
+  never pushed back, so a moving platform carries what stands on it. Static and kinematic bodies
+  don't collide with each other, since neither would move.
+- **Materials mix.** Two bodies' frictions combine as their geometric mean, √(a · b), so ice is
+  slippery against anything; their restitutions as the larger, so a bouncy ball bounces off
+  anything.
+- **Friction is a cone.** A contact resists sliding in every direction alike, up to its friction
+  times how hard it is pressed, so a box pushed diagonally slows exactly as one pushed straight.
+- **Tolerances scale with what touches.** A contact's tolerance is a two-hundredth of the smaller
+  body's thinnest size: about a pixel, for a body you can see whole on screen. That is 5 mm for a
+  1 m box, 0.05 mm for a 1 cm marble and 10 cm for a 20 m-wide building. It sets how fast an overlap
+  is pushed out, how close two answers count as the same, and when a bounce is too small to keep,
+  so a marble and a building both settle with nothing changed between them.
+- **Resting contacts sag a little.** A contact is a very stiff spring, and a spring holds a weight
+  by giving under it: g / ω², which at the default [`substeps`](#world-substeps) and 60 Hz is
+  0.07 mm, whatever the size of the body. That is within the tolerance of anything over about 1.4 cm
+  across, and 0.7% of a 1 cm marble. Doubling the substeps quarters it. A stack sags by about that
+  much at each contact, more at the bottom, which carries more: a 10-box stack of 1 m boxes settles
+  7 mm in all.
+- **Contacts start before touching.** A pair close enough to meet within the step gets its contact
+  early, so a falling box is stopped at the floor rather than sinking in and being pushed back out,
+  and a fast body doesn't pass through a thin one between two steps.
+- **Bounces stop.** A contact bounces only when it meets faster than a bounce that would rise no
+  higher than its tolerance, √(2 g tolerance): below that, a body settles instead of bouncing for
+  ever on rounding.
 
 <a id="determinism"></a>
 ## Determinism

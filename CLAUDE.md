@@ -52,6 +52,13 @@ These were made with Nolan and override the rules below where they differ.
   20 rad/s and blew up at 50. `tumble()` in `src/world.js` works out L, turns the body by the ω L
   gives at the half step, and reads ω back from L: momentum exact to rounding, energy only ever
   falls (bounded by |L|²/2I_min). `test/motion.test.js` holds the measured energy figures.
+- **The solver is the soft step, 8 substeps** (2026-10-13, milestone 4, measured in
+  `bench/solver.js`). Sequential impulses (one substep, many passes) couldn't hold a 10-box stack.
+  Each substep: one solving pass, one relaxing pass; contact stiffness 1/8 of the substep rate,
+  damping ratio 10. A manifold's normal points are swept once per point (four for a box face),
+  which is what stops a flat-landing box tipping and sliding. Every contact tolerance is
+  `PIXEL` (1/200) of the smaller body's thinnest size. `world.substeps` is the one public knob.
+  Contacts are paired O(n²) until milestone 5 (marked `ponytail:` in `src/contact.js`).
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

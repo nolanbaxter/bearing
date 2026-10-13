@@ -20,6 +20,16 @@ interface BodyCommon {
   mass?: number;
   /** Moments of inertia about the body's own axes, kg·m². Worked out from the shape and mass unless given; null goes back to that. */
   inertia?: Vec3 | null;
+  /** How much sideways push a contact resists per newton pressing it, default 0.5. 0 is ice. */
+  friction?: number;
+  /** Fraction of the speed it hits at that comes back as a bounce, 0 to 1, default 0. */
+  restitution?: number;
+  /** Velocity lost per second, 1/s, default 0. */
+  damping?: number;
+  /** Spin lost per second, 1/s, default 0. */
+  angularDamping?: number;
+  /** Multiplies the world's gravity for this body, default 1. */
+  gravityScale?: number;
   /** m, default [0, 0, 0]. */
   position?: Vec3;
   /** Quaternion [x, y, z, w], default [0, 0, 0, 1]. Normalized as it comes in. */
@@ -75,6 +85,11 @@ interface BodyInfoCommon {
   density?: number;
   /** Present if the body was given an inertia. */
   inertia?: [number, number, number];
+  friction: number;
+  restitution: number;
+  damping: number;
+  angularDamping: number;
+  gravityScale: number;
   position: [number, number, number];
   rotation: [number, number, number, number];
   /** Absent for a static body. */
@@ -92,6 +107,8 @@ export type BodyInfo =
 export interface WorldOptions {
   /** m/s², default [0, -9.81, 0]. */
   gravity?: Vec3;
+  /** Smaller steps each step is solved in, a whole number from 1, default 8. */
+  substeps?: number;
 }
 
 export class World {
@@ -100,6 +117,8 @@ export class World {
   /** m/s². Reading gives a frozen copy; assign to change it at any time. */
   get gravity(): readonly [number, number, number];
   set gravity(value: Vec3);
+  /** Smaller steps each step is solved in, a whole number from 1. Assign to change it at any time. */
+  substeps: number;
   /** How many bodies the world holds. */
   readonly bodyCount: number;
   /** 7 numbers per slot: position x, y, z, then quaternion x, y, z, w. Replaced when storage resizes: don't keep it. */
