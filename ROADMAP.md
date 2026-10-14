@@ -254,6 +254,11 @@ confirmed or reset with these numbers.
 on the desktop.
 *Done when:* both machines' numbers are recorded in `bench/RESULTS.md`, and the goals are
 confirmed or reset with Nolan.
+*So far (2026-10-14):* the page is built and the laptop's numbers are in `bench/RESULTS.md`:
+stacks stand and hold tightest of the four, but Bearing is 14 to 23 times slower than Rapier
+and 1.4 times slower than cannon-es on the 1,000-box pile. The 10,000-box pile is left for the
+performance pass: run three times it took most of an hour. Still to do: the desktop's run, and
+the goals confirmed or reset with Nolan.
 
 ### Part two: querying and level content
 

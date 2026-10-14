@@ -1,0 +1,346 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Physics comparison</title>
+<link rel="icon" href="data:,">
+<style>
+body { margin: 0; background: #111; color: #e8e6e1; font: 15px/1.6 system-ui, sans-serif; }
+#panel { max-width: 860px; margin: 40px auto; padding: 0 20px; }
+h1 { font-size: 22px; font-weight: 600; margin: 0 0 8px; }
+button { font: inherit; padding: 8px 18px; border-radius: 8px; border: 1px solid #555; background: #222; color: inherit; cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: default; }
+pre { white-space: pre-wrap; font: 13px/1.5 ui-monospace, monospace; background: #1a1a1a; padding: 14px; border-radius: 8px; }
+.muted { color: #9a9891; font-size: 13px; }
+</style>
+<div id="panel">
+  <h1>Bearing, Rapier, Jolt and cannon-es</h1>
+  <p class="muted">The same scenes through four physics engines in one page, taking turns, printing
+  numbers only. Takes several minutes; keep the tab in front.</p>
+  <p><button id="run">Run</button> <button id="copy" disabled>Copy results</button></p>
+  <p id="status" class="muted"></p>
+  <pre id="out"></pre>
+</div>
+<script type="module">
+// Bearing against Rapier, Jolt and cannon-es, Winding's way (its
+// bench/compare.html): every engine in ONE page, the same scenes, taking
+// turns in blocks of BLOCK steps so whatever the machine is doing lands on
+// all of them alike. Two runs a minute apart differ by more than most real
+// differences, so separate pages per engine would measure the machine.
+//
+// MATCHED, so the scene is the same: 1 m boxes of 1,000 kg, friction 0.5,
+// restitution 0, gravity 9.81 m/s², steps of 1/60 s, the same starting
+// positions and rotations, and the same 200 m floor.
+// EACH ENGINE'S OWN, as its users get it: solver iterations or substeps,
+// contact margins, sleep thresholds. Bearing: 8 substeps. Rapier: its SIMD
+// build, its fastest. Jolt: its single-threaded build, as Bearing has no
+// workers yet, with its contact limit raised as far as this build's fixed
+// scratch memory allows (see make()). cannon-es: its sweep-and-prune broadphase and sleeping, which
+// its own docs advise for many bodies; its defaults, a test of every pair and
+// no sleeping, would only measure a setting.
+//
+// The number is milliseconds of each engine's own step() call, per step:
+// nothing else is timed. The first block of every scene is a warm-up and
+// isn't counted. Each scene is run RUNS times, the median kept.
+//
+//   ?scene=pyramid   only these scenes, comma-separated (stack, pyramid, pile, bigpile)
+//   &runs=1          runs per scene
+//   &only=Bearing,Rapier
+//   &auto=1          start at once (for a headless run; results also on window.bench)
+
+const DT = 1 / 60, G = 9.81, BLOCK = 10;
+const q = new URLSearchParams(location.search);
+const RUNS = Number(q.get('runs') ?? 3);
+
+const VERSIONS = { Bearing: 'this checkout', Rapier: '0.21.0, SIMD', Jolt: '1.1.0, single-threaded', 'cannon-es': '0.20.0' };
+const CDN = 'https://cdn.jsdelivr.net/npm/';
+
+// ---- the engines: each makes the scene and steps it, nothing else ----
+
+const ENGINES = {
+  Bearing: {
+    load: () => import('../src/bearing.js'),
+    make(B, scene) {
+      const world = new B.World();
+      world.addBody({ type: 'static', size: [200, 1, 200], position: [0, -0.5, 0] });
+      // The defaults are the scene: a 1 m box, water's density (1,000 kg), friction 0.5.
+      const bodies = scene.boxes.map((b) => world.addBody({ position: b.p, rotation: b.q }));
+      return {
+        step: () => world.step(DT),
+        position: (i) => bodies[i].position,
+        asleep: () => bodies.reduce((n, b) => n + (b.asleep ? 1 : 0), 0),
+        mass: () => bodies[0].mass,
+        free: () => world.destroy(),
+      };
+    },
+  },
+
+  Rapier: {
+    async load() {
+      const R = (await import(`${CDN}@dimforge/rapier3d-simd-compat@0.21.0/dist/rapier.mjs`)).default;
+      await R.init();
+      return R;
+    },
+    make(R, scene) {
+      const world = new R.World({ x: 0, y: -G, z: 0 });
+      world.timestep = DT;
+      const floor = world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(0, -0.5, 0));
+      world.createCollider(R.ColliderDesc.cuboid(100, 0.5, 100).setFriction(0.5).setRestitution(0), floor);
+      const bodies = scene.boxes.map((b) => {
+        const body = world.createRigidBody(R.RigidBodyDesc.dynamic()
+          .setTranslation(b.p[0], b.p[1], b.p[2]).setRotation({ x: b.q[0], y: b.q[1], z: b.q[2], w: b.q[3] }));
+        world.createCollider(R.ColliderDesc.cuboid(0.5, 0.5, 0.5).setDensity(1000).setFriction(0.5).setRestitution(0), body);
+        return body;
+      });
+      return {
+        step: () => world.step(),
+        position: (i) => { const t = bodies[i].translation(); return [t.x, t.y, t.z]; },
+        asleep: () => bodies.reduce((n, b) => n + (b.isSleeping() ? 1 : 0), 0),
+        mass: () => bodies[0].mass(),
+        free: () => world.free(),
+      };
+    },
+  },
+
+  Jolt: {
+    async load() {
+      const init = (await import(`${CDN}jolt-physics@1.1.0/dist/jolt-physics.wasm-compat.js`)).default;
+      return init();
+    },
+    make(J, scene) {
+      // Jolt's own setup, as in its examples: one layer that doesn't move,
+      // one that does, and the tables saying which collide.
+      const STILL = 0, MOVING = 1;
+      const pairs = new J.ObjectLayerPairFilterTable(2);
+      pairs.EnableCollision(STILL, MOVING);
+      pairs.EnableCollision(MOVING, MOVING);
+      const layers = new J.BroadPhaseLayerInterfaceTable(2, 2);
+      layers.MapObjectToBroadPhaseLayer(STILL, new J.BroadPhaseLayer(0));
+      layers.MapObjectToBroadPhaseLayer(MOVING, new J.BroadPhaseLayer(1));
+      const settings = new J.JoltSettings();
+      settings.mObjectLayerPairFilter = pairs;
+      settings.mBroadPhaseLayerInterface = layers;
+      settings.mObjectVsBroadPhaseLayerFilter = new J.ObjectVsBroadPhaseLayerFilterTable(layers, 2, pairs, 2);
+      // Room for as many contacts as this build can hold. Jolt's default stops
+      // at 10,240; its scratch memory is a fixed 10 MB here, with no setting,
+      // and a step sizes its scratch from this limit, so 20,000 is the most
+      // that ran (24,576 aborted). Past it, Jolt drops contacts, and the
+      // 10,000-box pile may need more: its "fell through" column says if so.
+      // Its 10,240 bodies already fit 10,001.
+      settings.mMaxContactConstraints = 20000;
+      const jolt = new J.JoltInterface(settings);
+      J.destroy(settings);
+      const system = jolt.GetPhysicsSystem(), bodies = system.GetBodyInterface();
+      system.SetGravity(new J.Vec3(0, -G, 0));
+      const add = (shape, p, q, motion, layer) => {
+        const make = new J.BodyCreationSettings(shape, new J.RVec3(p[0], p[1], p[2]), new J.Quat(q[0], q[1], q[2], q[3]), motion, layer);
+        make.mFriction = 0.5;
+        make.mRestitution = 0;
+        const body = bodies.CreateBody(make);
+        J.destroy(make);
+        bodies.AddBody(body.GetID(), motion === J.EMotionType_Static ? J.EActivation_DontActivate : J.EActivation_Activate);
+        return body;
+      };
+      add(new J.BoxShape(new J.Vec3(100, 0.5, 100), 0.05, null), [0, -0.5, 0], [0, 0, 0, 1], J.EMotionType_Static, STILL);
+      // Jolt's shapes are water's density by default too: 1,000 kg for a 1 m box.
+      const box = new J.BoxShape(new J.Vec3(0.5, 0.5, 0.5), 0.05, null);
+      const list = scene.boxes.map((b) => add(box, b.p, b.q, J.EMotionType_Dynamic, MOVING));
+      return {
+        step: () => jolt.Step(DT, 1),
+        position: (i) => { const p = list[i].GetPosition(); return [p.GetX(), p.GetY(), p.GetZ()]; },
+        asleep: () => list.reduce((n, b) => n + (b.IsActive() ? 0 : 1), 0),
+        mass: () => 1 / list[0].GetMotionProperties().GetInverseMass(),
+        free: () => J.destroy(jolt),
+      };
+    },
+  },
+
+  'cannon-es': {
+    load: () => import(`${CDN}cannon-es@0.20.0/dist/cannon-es.js`),
+    make(C, scene) {
+      const world = new C.World({ gravity: new C.Vec3(0, -G, 0), allowSleep: true });
+      world.broadphase = new C.SAPBroadphase(world);
+      world.defaultContactMaterial.friction = 0.5;
+      world.defaultContactMaterial.restitution = 0;
+      world.addBody(new C.Body({ mass: 0, shape: new C.Box(new C.Vec3(100, 0.5, 100)), position: new C.Vec3(0, -0.5, 0) }));
+      const box = new C.Box(new C.Vec3(0.5, 0.5, 0.5));
+      const bodies = scene.boxes.map((b) => {
+        const body = new C.Body({ mass: 1000, shape: box, position: new C.Vec3(...b.p), quaternion: new C.Quaternion(...b.q) });
+        world.addBody(body);
+        return body;
+      });
+      return {
+        step: () => world.step(DT),
+        position: (i) => { const p = bodies[i].position; return [p.x, p.y, p.z]; },
+        asleep: () => bodies.reduce((n, b) => n + (b.sleepState === C.Body.SLEEPING ? 1 : 0), 0),
+        mass: () => bodies[0].mass,
+        free: () => {},
+      };
+    },
+  },
+};
+
+// ---- the scenes ----
+
+/** A turn of `angle` about the unit axis made from `a`, as [x, y, z, w]. */
+const turn = (a, angle) => {
+  const l = Math.hypot(...a), s = Math.sin(angle / 2) / l;
+  return [a[0] * s, a[1] * s, a[2] * s, Math.cos(angle / 2)];
+};
+
+/**
+ * Boxes dropped in a block, each turned its own way. 1.8 m apart, wider than
+ * a 1 m box's diagonal (1.73 m), so nothing starts overlapping: an engine's
+ * first push out of an overlap would be part of the race otherwise.
+ */
+function pile(n) {
+  const side = Math.ceil(Math.sqrt(n / 8)), boxes = [];
+  for (let i = 0; i < n; i++) {
+    const x = i % side, z = Math.floor(i / side) % side, y = Math.floor(i / (side * side));
+    boxes.push({
+      p: [(x - side / 2) * 1.8, 1 + y * 1.8, (z - side / 2) * 1.8],
+      q: turn([Math.sin(i * 1.3), Math.cos(i * 0.7), Math.sin(i * 2.1) + 0.1], ((i * 0.618034) % 1) * Math.PI),
+    });
+  }
+  return boxes;
+}
+
+const SCENES = {
+  stack: {
+    name: '10-box stack', seconds: 10, phases: [[0, 10]], stands: true,
+    boxes: Array.from({ length: 10 }, (_, k) => ({ p: [0, 0.5 + k, 0], q: [0, 0, 0, 1] })),
+  },
+  pyramid: {
+    name: '210-box pyramid', seconds: 10, phases: [[0, 10]], stands: true,
+    boxes: Array.from({ length: 20 }, (_, row) => Array.from({ length: 20 - row },
+      (_, k) => ({ p: [k - (19 - row) / 2, 0.5 + row, 0], q: [0, 0, 0, 1] }))).flat(),
+  },
+  pile: { name: '1,000-box pile', seconds: 10, phases: [[0, 5], [5, 10]], boxes: pile(1000) },
+  // One run of its first second only, for now: once it lands, Bearing and
+  // cannon-es take a second or more a step, and 4 s three times over took
+  // most of an hour. The full scene waits for the performance pass.
+  bigpile: { name: '10,000-box pile', seconds: 1, phases: [[0, 1]], runs: 1, boxes: pile(10000) },
+};
+
+// ---- running ----
+
+const out = document.getElementById('out'), status = document.getElementById('status');
+const say = (text) => { status.textContent = text; };
+// A message, not a timer, between blocks: a page's timers are slowed to once a
+// second and worse when it is in the background; messages aren't.
+const breathe = () => new Promise((resolve) => {
+  const c = new MessageChannel();
+  c.port1.onmessage = resolve;
+  c.port2.postMessage(0);
+});
+const median = (xs) => [...xs].sort((a, b) => a - b)[xs.length >> 1];
+
+async function runScene(key, names, libs) {
+  const scene = SCENES[key], steps = Math.round(scene.seconds / DT);
+  const ends = scene.phases.map(([, b]) => Math.round(b / DT));
+  const times = Object.fromEntries(names.map((n) => [n, scene.phases.map(() => [])]));
+  let last = null;
+  const runs = Math.min(RUNS, scene.runs ?? RUNS);
+  for (let run = 0; run < runs; run++) {
+    const worlds = {};
+    for (const n of names) worlds[n] = ENGINES[n].make(libs[n], scene);
+    const spent = Object.fromEntries(names.map((n) => [n, scene.phases.map(() => 0)]));
+    for (let s = 0, block = 0; s < steps; s += BLOCK, block++) {
+      // Each block a different engine goes first.
+      const shift = (block + run) % names.length, turnOrder = [...names.slice(shift), ...names.slice(0, shift)];
+      const phase = ends.findIndex((e) => s < e);
+      for (const n of turnOrder) {
+        const t = performance.now();
+        for (let k = 0; k < BLOCK; k++) worlds[n].step();
+        if (s > 0) spent[n][phase] += performance.now() - t;
+      }
+      say(`${scene.name}, run ${run + 1} of ${runs}: ${((s + BLOCK) * DT).toFixed(1)} of ${scene.seconds} s`);
+      await breathe();
+    }
+    for (const n of names) {
+      scene.phases.forEach(([a, b], p) => {
+        const counted = Math.round((b - a) / DT) - (p === 0 ? BLOCK : 0);
+        times[n][p].push(spent[n][p] / counted);
+      });
+    }
+    last = Object.fromEntries(names.map((n) => [n, check(scene, worlds[n])]));
+    for (const n of names) worlds[n].free();
+  }
+  return { scene, ms: Object.fromEntries(names.map((n) => [n, times[n].map(median)])), quality: last };
+}
+
+/** What each engine's scene looks like at the end: the quality next to the time. */
+function check(scene, world) {
+  let strayed = 0, sank = 0, fell = 0;
+  scene.boxes.forEach((b, i) => {
+    const p = world.position(i);
+    strayed = Math.max(strayed, Math.hypot(p[0] - b.p[0], p[2] - b.p[2]));
+    sank = Math.max(sank, b.p[1] - p[1]);
+    if (p[1] < -1) fell++;
+  });
+  return { strayed, sank, fell, asleep: world.asleep(), mass: world.mass() };
+}
+
+const mm = (m) => `${(m * 1000).toFixed(m < 0.01 ? 2 : 1)} mm`;
+/** Three figures, so a sleeping scene's few microseconds don't print as 0.00. */
+const ms3 = (x) => (x >= 100 ? x.toFixed(0) : x.toPrecision(3));
+
+function table({ scene, ms, quality }) {
+  const names = Object.keys(ms);
+  const lines = [`### ${scene.name}, ${scene.seconds} s`, ''];
+  if (scene.stands) {
+    lines.push('| Engine | ms per step | stands | strayed | sank |', '|---|---|---|---|---|');
+    for (const n of names) {
+      const qy = quality[n], stands = qy.strayed < 0.1 && qy.sank < 0.1 && qy.fell === 0;
+      lines.push(`| ${n} | ${ms3(ms[n][0])} | ${stands ? 'yes' : '**no**'} | ${mm(qy.strayed)} | ${mm(qy.sank)} |`);
+    }
+  } else {
+    const heads = scene.phases.map(([a, b]) => `ms per step, ${a}–${b} s`);
+    lines.push(`| Engine | ${heads.join(' | ')} | asleep at the end | fell through |`, `|---|${heads.map(() => '---|').join('')}---|---|`);
+    for (const n of names) {
+      const qy = quality[n];
+      lines.push(`| ${n} | ${ms[n].map(ms3).join(' | ')} | ${qy.asleep} of ${scene.boxes.length} | ${qy.fell} |`);
+    }
+  }
+  return lines.join('\n');
+}
+
+async function main() {
+  document.getElementById('run').disabled = true;
+  const names = (q.get('only')?.split(',') ?? Object.keys(ENGINES)).filter((n) => ENGINES[n]);
+  const keys = q.get('scene') ? q.get('scene').split(',') : Object.keys(SCENES);
+  const libs = {};
+  for (const n of names) {
+    say(`loading ${n}`);
+    libs[n] = await ENGINES[n].load();
+  }
+  const header = [
+    `## ${new Date().toISOString().slice(0, 10)}, ${navigator.userAgent}`,
+    `Logical processors: ${navigator.hardwareConcurrency}. Median of ${RUNS} run${RUNS === 1 ? '' : 's'} (the 10,000-box pile, one); engines take turns in blocks of ${BLOCK} steps.`,
+    `Versions: ${names.map((n) => `${n} ${VERSIONS[n]}`).join('; ')}.`,
+  ].join('\n');
+  out.textContent = header;
+  const results = [];
+  for (const key of keys) {
+    const result = await runScene(key, names, libs);
+    results.push(result);
+    // Masses must agree, or the scenes differ.
+    const masses = names.map((n) => result.quality[n].mass);
+    if (masses.some((m) => Math.abs(m - 1000) > 1e-6)) out.textContent += `\n\nMASSES DIFFER: ${names.map((n, i) => `${n} ${masses[i]}`).join(', ')}`;
+    out.textContent = `${header}\n\n${results.map(table).join('\n\n')}`;
+  }
+  say('done');
+  window.bench = { done: true, text: out.textContent };
+  const copy = document.getElementById('copy');
+  copy.disabled = false;
+  copy.onclick = () => navigator.clipboard.writeText(out.textContent).then(() => say('copied'));
+}
+
+document.getElementById('run').onclick = () => main().catch((e) => {
+  say(`failed: ${e.message}`);
+  window.bench = { done: true, error: String(e.stack ?? e) };
+  console.error(e);
+});
+// For poking at from the console, or a headless run: build and step one engine by hand.
+window.benchKit = { ENGINES, SCENES, DT };
+if (q.get('auto')) document.getElementById('run').click();
+</script>
