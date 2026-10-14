@@ -23,6 +23,12 @@
 // manifolds a step, and remembers each in a Memory of its own, matched from
 // step to step by direction (contact.js). Memories are reused, not made
 // afresh, as pairs come and go.
+//
+// A pair also knows whether its bodies were touching after the last step it
+// was looked at (contact.js decides). When that changes, or a touching pair
+// is dropped or taken over by new bodies in the same slots, an event is
+// written (events.js). Asleep pairs aren't looked at, so they keep touching,
+// and write nothing.
 
 import { resized } from './core/slots.js';
 
@@ -45,6 +51,7 @@ export class Pairs {
     this.normalImpulse = new Float64Array(0);
     this.friction = new Float64Array(0);   // the friction impulse at each point, as a world vector
     this.twist = new Float64Array(0);      // the pair's rolling and spinning friction, an angular impulse, world vector
+    this.touching = new Uint8Array(0);     // 1 while its bodies touch, as of the last step that looked
     /** A mesh pair's Memory, by pair; null for any other pair. */
     this.memory = [];
     this.spare = [];
@@ -65,6 +72,7 @@ export class Pairs {
     this.a = resized(this.a, c); this.b = resized(this.b, c);
     this.idA = resized(this.idA, c); this.idB = resized(this.idB, c);
     this.points = resized(this.points, c);
+    this.touching = resized(this.touching, c);
     this.pid = resized(this.pid, c * P);
     this.normalImpulse = resized(this.normalImpulse, c * P);
     this.friction = resized(this.friction, c * P * 3);
@@ -139,30 +147,32 @@ export class Pairs {
    */
   found(x, y) {
     const w = this.world, type = w._type;
-    if (type[x] !== DYNAMIC && type[y] !== DYNAMIC) return;
-    if (!filtered(w, x, y)) return;
+    if (!pairable(w, x, y)) return;
     // Only a body that was re-filed asks, and a sleeping one never is; a static
     // one is when it is added or moved by hand. One that now overlaps a
     // sleeping body could leave it buried, so the sleeper wakes. (An awake
-    // body coming near only wakes it by touching it: see narrow().)
-    if (type[y] === STATIC) w._wake(x);
-    else if (type[x] === STATIC) w._wake(y);
+    // body coming near only wakes it by touching it: see narrow().) A sensor
+    // buries nothing, and wakes nothing.
+    if (w._sensor[x] === 0 && w._sensor[y] === 0) {
+      if (type[y] === STATIC) w._wake(x);
+      else if (type[x] === STATIC) w._wake(y);
+    }
     const a = x < y ? x : y, b = x < y ? y : x;
     const ida = w._slots.id(a), idb = w._slots.id(b);
     const at = this._find(a, b);
     if (at >= 0) {
       const p = this.index[at];
       if (this.idA[p] === ida && this.idB[p] === idb) return;
-      // The same slots under new bodies: the old pair is stale, so it starts
-      // over, among the awake pairs, since a new body is awake.
-      this.idA[p] = ida; this.idB[p] = idb;
+      // The same slots under new bodies: the old pair is stale, so it ends,
+      // and starts over, among the awake pairs, since a new body is awake.
       this.forget(p);
+      this.idA[p] = ida; this.idB[p] = idb;
       if (p >= this.active) this.wake(p);
       return;
     }
     const p = this.count;
     this._grow(p + 1);
-    this.a[p] = a; this.b[p] = b; this.idA[p] = ida; this.idB[p] = idb; this.points[p] = 0;
+    this.a[p] = a; this.b[p] = b; this.idA[p] = ida; this.idB[p] = idb; this.points[p] = 0; this.touching[p] = 0;
     this.memory[p] = null;
     this._put(a, b, p);
     this.count++;
@@ -171,6 +181,7 @@ export class Pairs {
 
   /** Takes pair p off the list; the pairs that fill its place come from the end of each run. */
   remove(p) {
+    this.part(p);
     this._delete(this._find(this.a[p], this.b[p]));
     const kept = this.memory[p];
     if (kept) { kept.count = 0; this.spare.push(kept); }
@@ -184,11 +195,19 @@ export class Pairs {
     this.memory[end] = null;
   }
 
-  /** Pair p touched nothing this step: nothing to start the next from. */
+  /** Pair p touched nothing this step: nothing to start the next from, and no longer touching. */
   forget(p) {
     this.points[p] = 0;
     const kept = this.memory[p];
     if (kept) kept.count = 0;
+    this.part(p);
+  }
+
+  /** Pair p is no longer touching: its end, if it was. */
+  part(p) {
+    if (this.touching[p] === 0) return;
+    this.touching[p] = 0;
+    this.world._events.end(this.idA[p], this.idB[p]);
   }
 
   /** Pair p's Memory, taken when it first needs one: a pair can become a mesh pair when a body is reshaped. */
@@ -212,6 +231,7 @@ export class Pairs {
     this.a[to] = this.a[from]; this.b[to] = this.b[from];
     this.idA[to] = this.idA[from]; this.idB[to] = this.idB[from];
     this.points[to] = this.points[from];
+    this.touching[to] = this.touching[from];
     this.pid.copyWithin(to * P, from * P, from * P + P);
     this.normalImpulse.copyWithin(to * P, from * P, from * P + P);
     this.friction.copyWithin(to * P * 3, from * P * 3, from * P * 3 + P * 3);
@@ -224,7 +244,7 @@ export class Pairs {
     if (i === j) return;
     swap(this.a, i, j, 1); swap(this.b, i, j, 1);
     swap(this.idA, i, j, 1); swap(this.idB, i, j, 1);
-    swap(this.points, i, j, 1);
+    swap(this.points, i, j, 1); swap(this.touching, i, j, 1);
     swap(this.pid, i, j, P); swap(this.normalImpulse, i, j, P); swap(this.friction, i, j, 3 * P); swap(this.twist, i, j, 3);
     const kept = this.memory[i];
     this.memory[i] = this.memory[j];
@@ -240,8 +260,7 @@ export class Pairs {
   holds(p, broadphase) {
     const w = this.world, a = this.a[p], b = this.b[p];
     if (w._slots.slotOf(this.idA[p]) !== a || w._slots.slotOf(this.idB[p]) !== b) return false;
-    if (w._type[a] !== DYNAMIC && w._type[b] !== DYNAMIC) return false;
-    if (!filtered(w, a, b)) return false;
+    if (!pairable(w, a, b)) return false;
     return broadphase.overlap(a, b);
   }
 
@@ -302,6 +321,24 @@ function swap(array, i, j, n) {
     array[i * n + k] = array[j * n + k];
     array[j * n + k] = t;
   }
+}
+
+/**
+ * Whether bodies a and b are ever paired. Two bodies collide if one is
+ * dynamic: a static or kinematic one moves nothing it touches, so two of
+ * them have nothing to settle. A sensor sees anything that isn't a sensor,
+ * kinematic included, so a zone sees a character walk in, but never another
+ * sensor (Box2D 3's rule: rarely wanted, and it costs pairs), and never when
+ * both are static, since neither can come or go.
+ */
+function pairable(w, a, b) {
+  const type = w._type, sa = w._sensor[a], sb = w._sensor[b];
+  if (sa === 0 && sb === 0) {
+    if (type[a] !== DYNAMIC && type[b] !== DYNAMIC) return false;
+  } else if ((sa === 1 && sb === 1) || (type[a] === STATIC && type[b] === STATIC)) {
+    return false;
+  }
+  return filtered(w, a, b);
 }
 
 /** Each body's layers must be in the other's mask (Box2D's rule, and Rapier's and Jolt's). */

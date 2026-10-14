@@ -44,7 +44,7 @@ const gone = () => {
   return { world, body };
 };
 
-const OPTIONS = 'type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity';
+const OPTIONS = 'type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, position, rotation, velocity, angularVelocity';
 
 /** The smallest .glb: one node, 'floor', showing one triangle; `json` adds to its JSON. */
 function glb(json = {}) {
@@ -131,6 +131,7 @@ const cases = [
       [e, run({ gravityScale: '1' }), `${call}: gravityScale must be a finite number, got '1'`],
       [e, run({ layers: 2 ** 32 }), `${call}: layers must be a whole number that fits in 32 bits, got 4294967296`],
       [e, run({ mask: 0.5 }), `${call}: mask must be a whole number that fits in 32 bits, got 0.5`],
+      [e, run({ sensor: 1 }), `${call}: sensor must be true or false, got 1`],
       [e, run({ inertia: [1, 0, 1] }), `${call}: inertia must be 3 positive numbers, or null to follow the shape, got 1,0,1`],
       [e, run({ position: { x: 1, y: 2, z: 3 } }), `${call}: position must be 3 finite numbers, got an object`],
       [e, run({ rotation: [0, 0, 0, 0] }), `${call}: rotation must be 4 finite numbers, not all zero, got 0,0,0,0`],
@@ -153,6 +154,14 @@ const cases = [
   ['world-remove', () => { const { world, body } = gone(); world.remove(body); }, 'remove: this world was destroyed'],
   ['world-remove', () => fresh().world.remove(undefined), 'remove: body must be a Body, got undefined'],
   ['world-remove', () => new World().remove(fresh().body), 'remove: that body belongs to another world'],
+
+  ['world-contacts', () => gone().world.contacts(), 'contacts: this world was destroyed'],
+  ['world-contacts', () => fresh().world.contacts({ id: 1 }), 'contacts: body must be a Body, got an object'],
+  ['world-contacts', () => new World().contacts(fresh().body), 'contacts: that body belongs to another world'],
+  ['world-touching', () => { const { world, body } = gone(); world.touching(body); }, 'touching: this world was destroyed'],
+  ['world-touching', () => fresh().world.touching(null), 'touching: body must be a Body, got null'],
+  ['world-touching', () => new World().touching(fresh().body), 'touching: that body belongs to another world'],
+  ['world-touching', () => { const { world, body } = dead(); world.touching(body); }, 'touching: this body was removed'],
 
   ['world-body', () => gone().world.body(0), 'body: this world was destroyed'],
   ['world-body', () => fresh().world.body(1.5), 'body: id must be a whole number from 0 to 9007199254740991, got 1.5'],

@@ -68,8 +68,8 @@ function triangle(world, s, t) {
  * along slot s's own axes: each of its axes reaches |that axis·world axis|
  * of each. From the rotation now, not the axes the last step worked with.
  */
-function extentsIn(world, s, gx, gy, gz) {
-  const out = [0, 0, 0];
+function extentsIn(world, s, gx, gy, gz, out = [0, 0, 0]) {
+  out[0] = 0; out[1] = 0; out[2] = 0;
   for (let j = 0; j < 3; j++) {
     const g = j === 0 ? gx : j === 1 ? gy : gz;
     rotate(world._rotation, 4 * s, j === 0 ? 1 : 0, j === 1 ? 1 : 0, j === 2 ? 1 : 0, true, dir);
@@ -132,8 +132,13 @@ function strays(world) {
   return list;
 }
 
-/** Whether a query with this mask and ignore looks at slot s. */
-const wanted = (world, s, mask, ignore) => s !== ignore && (world._layers[s] & mask) !== 0;
+/**
+ * Whether a query with this mask and ignore looks at slot s. Never a sensor:
+ * a bullet's ray shouldn't stop at an invisible trigger zone, which is the
+ * trap Unity's opposite default sets. What is in a zone is for events and
+ * world.touching().
+ */
+const wanted = (world, s, mask, ignore) => s !== ignore && (world._layers[s] & mask) !== 0 && world._sensor[s] === 0;
 
 // ---- rays ----
 
@@ -419,3 +424,43 @@ export function overlap(world, shape, mask, ignore, hit) {
   for (const s of strays(world)) once(s);
 }
 
+
+// ---- sensors ----
+
+const sensed = new Shape(), half = new Float64Array(3);
+// What senseTriangle needs; sense() is never re-entered.
+let senseWorld = null, senseShape = null, senseSlot = 0, senseTolerance = 0, senseOut = null;
+
+/**
+ * Whether slots a and b, a pair with a sensor in it, are within the tolerance
+ * of touching where they are now, at the end of a step: the contact into
+ * `out`, its normal from a towards b. Two meshes or heightfields never meet,
+ * here as in contacts. It runs inside the step, so it allocates nothing.
+ */
+export function sense(world, a, b, tolerance, out) {
+  out.count = 0;
+  const levelA = world._shape[a] >= MESH, levelB = world._shape[b] >= MESH;
+  if (levelA && levelB) return 0;
+  if (levelA) {
+    sense(world, b, a, tolerance, out);
+    const n = out.normal;
+    n[0] = -n[0]; n[1] = -n[1]; n[2] = -n[2];
+    return out.count;
+  }
+  const s = place(world, a, sensed);
+  if (!levelB) return collide(s, place(world, b, body), tolerance, tolerance, out);
+  // b's triangles under a's box, in b's own frame, as overlap() finds them.
+  extents(s, ext);
+  inward(world, b, s.center[0], s.center[1], s.center[2], true, local);
+  const lx = local[0], ly = local[1], lz = local[2];
+  extentsIn(world, b, ext[0] + tolerance, ext[1] + tolerance, ext[2] + tolerance, half);
+  senseWorld = world; senseShape = s; senseSlot = b; senseTolerance = tolerance; senseOut = out;
+  world._geometry[b].triangles(lx - half[0], ly - half[1], lz - half[2], lx + half[0], ly + half[1], lz + half[2], senseTriangle);
+  senseWorld = null; senseShape = null; senseOut = null;
+  return out.count;
+}
+
+function senseTriangle(t) {
+  if (senseOut.count > 0) return;
+  touch(senseShape, triangle(senseWorld, senseSlot, t), BARE, senseTolerance, senseTolerance, senseOut, t);
+}

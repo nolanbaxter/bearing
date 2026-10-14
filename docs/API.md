@@ -49,7 +49,7 @@ These hold everywhere, so one learned is one learned for good.
 <a id="contents"></a>
 ## Contents
 
-[World](#world-class) · [Body](#body) · [Meshes and heightfields](#meshes) · [Contacts](#contacts) · [Layers and masks](#layers) · [Sleeping](#sleeping) · [Queries](#queries) · [Determinism](#determinism) · [Limits](#limits)
+[World](#world-class) · [Body](#body) · [Meshes and heightfields](#meshes) · [Contacts](#contacts) · [Contact events and sensors](#events) · [Layers and masks](#layers) · [Sleeping](#sleeping) · [Queries](#queries) · [Determinism](#determinism) · [Limits](#limits)
 
 <a id="index"></a>
 ## Index
@@ -60,7 +60,7 @@ Every call, setting and entry, A to Z by its name.
 
 **B** &nbsp; [`world.body()`](#world-body) · [`world.bodyCount`](#world-bodycount) · [`world.bodyOf()`](#world-bodyof)
 
-**C** &nbsp; [Contacts](#contacts)
+**C** &nbsp; [Contact events and sensors](#events) · [Contacts](#contacts) · [`world.contacts()`](#world-contacts)
 
 **D** &nbsp; [`body.destroy()`](#body-destroy) · [`world.destroy()`](#world-destroy) · [Determinism](#determinism)
 
@@ -82,7 +82,7 @@ Every call, setting and entry, A to Z by its name.
 
 **S** &nbsp; [`body.setAngularVelocity()`](#body-setangularvelocity) · [`body.setAxisAngle()`](#body-setaxisangle) · [`world.setBody()`](#world-setbody) · [`body.setEuler()`](#body-seteuler) · [`body.setPosition()`](#body-setposition) · [`body.setRotation()`](#body-setrotation) · [`body.setVelocity()`](#body-setvelocity) · [`world.shapeCast()`](#world-shapecast) · [`world.sleeping`](#world-sleeping) · [Sleeping](#sleeping) · [`body.slot`](#body-slot) · [`world.step()`](#world-step) · [`world.stepCount`](#world-stepcount) · [`world.substeps`](#world-substeps)
 
-**T** &nbsp; [`world.transforms`](#world-transforms)
+**T** &nbsp; [`world.touching()`](#world-touching) · [`world.transforms`](#world-transforms)
 
 **V** &nbsp; [`body.velocity`](#body-velocity)
 
@@ -301,6 +301,7 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 | `gravityScale` | `1` | Multiplies the world's gravity, for this body: 0 floats, -1 rises. |
 | `layers` | `1` | Which of 32 layers the body is in, one bit each: the first layer only. See [Layers and masks](#layers). |
 | `mask` | `0xffffffff` | Which layers it collides with, one bit each: all of them. |
+| `sensor` | `false` | A sensor reports what overlaps it and pushes nothing. See [Contact events and sensors](#events). |
 | `position` | `[0, 0, 0]` | Where the body's centre is, in metres. |
 | `rotation` | `[0, 0, 0, 1]` | A quaternion `[x, y, z, w]`, normalized as it comes in. |
 | `velocity` | `[0, 0, 0]` | m/s. Not for a static body. |
@@ -308,7 +309,7 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 
 Returns: a [`Body`](#body).
 
-Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `addBody: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got …`; `addBody: a <shape> has no <option>`; `addBody: type must be 'static' or 'kinematic' for a <shape>, got 'dynamic'`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: vertices must be finite numbers, three to a vertex, got …`; `addBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `addBody: columns must be a whole number, 2 or more, got …`; `addBody: spacing must be a positive number, got …`; `addBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `addBody: friction must be 0 or more, got …`; `addBody: restitution must be from 0 to 1, got …`; `addBody: damping must be 0 or more, got …`; `addBody: angularDamping must be 0 or more, got …`; `addBody: gravityScale must be a finite number, got …`; `addBody: layers must be a whole number that fits in 32 bits, got …`; `addBody: mask must be a whole number that fits in 32 bits, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a static body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
+Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `addBody: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got …`; `addBody: a <shape> has no <option>`; `addBody: type must be 'static' or 'kinematic' for a <shape>, got 'dynamic'`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: vertices must be finite numbers, three to a vertex, got …`; `addBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `addBody: columns must be a whole number, 2 or more, got …`; `addBody: spacing must be a positive number, got …`; `addBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `addBody: friction must be 0 or more, got …`; `addBody: restitution must be from 0 to 1, got …`; `addBody: damping must be 0 or more, got …`; `addBody: angularDamping must be 0 or more, got …`; `addBody: gravityScale must be a finite number, got …`; `addBody: layers must be a whole number that fits in 32 bits, got …`; `addBody: mask must be a whole number that fits in 32 bits, got …`; `addBody: sensor must be true or false, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a static body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
 
 ```js
 const ground = world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
@@ -329,7 +330,7 @@ has (`got 10 numbers`), rather than every number in it.
 Changes any of the options [`addBody`](#world-addbody) took, with the same names, defaults and
 checks, and leaves the rest as they are.
 
-Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `setBody: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got …`; `setBody: a <shape> has no <option>`; `setBody: type must be 'static' or 'kinematic' for a <shape>, got 'dynamic'`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: vertices must be finite numbers, three to a vertex, got …`; `setBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `setBody: columns must be a whole number, 2 or more, got …`; `setBody: spacing must be a positive number, got …`; `setBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `setBody: friction must be 0 or more, got …`; `setBody: restitution must be from 0 to 1, got …`; `setBody: damping must be 0 or more, got …`; `setBody: angularDamping must be 0 or more, got …`; `setBody: gravityScale must be a finite number, got …`; `setBody: layers must be a whole number that fits in 32 bits, got …`; `setBody: mask must be a whole number that fits in 32 bits, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a static body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
+Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `setBody: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got …`; `setBody: a <shape> has no <option>`; `setBody: type must be 'static' or 'kinematic' for a <shape>, got 'dynamic'`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: vertices must be finite numbers, three to a vertex, got …`; `setBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `setBody: columns must be a whole number, 2 or more, got …`; `setBody: spacing must be a positive number, got …`; `setBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `setBody: friction must be 0 or more, got …`; `setBody: restitution must be from 0 to 1, got …`; `setBody: damping must be 0 or more, got …`; `setBody: angularDamping must be 0 or more, got …`; `setBody: gravityScale must be a finite number, got …`; `setBody: layers must be a whole number that fits in 32 bits, got …`; `setBody: mask must be a whole number that fits in 32 bits, got …`; `setBody: sensor must be true or false, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a static body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
 
 ```js
 world.setBody(crate, { size: [2, 1, 1] });           // twice as long, and twice as heavy
@@ -354,7 +355,7 @@ A copy of the body's options as they are now, in the form [`addBody`](#world-add
 `world.addBody(world.bodyOf(body))` makes a copy of it. Changing the result changes nothing; pass
 it to [`setBody`](#world-setbody) for that.
 
-Returns: `{ type, shape, …sizes, mass or density, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity }`.
+Returns: `{ type, shape, …sizes, mass or density, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, position, rotation, velocity, angularVelocity }`.
 `layers` and `mask` come back unsigned, from 0 to 4294967295, whichever way they were given.
 The sizes are the shape's own: `size` for a box, `radius` for a sphere, `radius` and `height` for a
 capsule, `vertices` and `indices` for a mesh, as plain arrays, and `heights`, `columns` and
@@ -504,6 +505,56 @@ Throws: `overlap: this world was destroyed`; `overlap: shape must be an object, 
 const blast = [0, 1, 0];   // where an explosion went off
 for (const body of world.overlap({ shape: 'sphere', radius: 4 }, blast)) body.applyImpulse([0, 2000, 0]);
 ```
+
+<a id="world-contacts"></a>
+### `world.contacts(body)` → `Array`
+
+The last step's contact events: which pairs of bodies began touching in it, and which stopped. Read
+it after each step, in the same place you step. Given a body, only that body's events, each turned
+so that `a` is that body. See [Contact events and sensors](#events).
+
+Returns: an array of fresh plain objects, in the order the step found them (the same order every
+run). A begin is `{ type: 'begin', a, b, point, normal, speed }`: `a` and `b` are the two
+[`Body`](#body) handles, `point` is where they met and `normal` the unit direction from `a`
+towards `b` there, both world-space arrays of 3, and `speed` is how fast they closed along `normal`
+when they met, in m/s, 0 or more: for the loudness of a sound, or damage. An end is
+`{ type: 'end', a, b }`. `[]` before the first step, and after a step in which nothing changed.
+
+Throws: `contacts: this world was destroyed`; `contacts: body must be a Body, got …`; `contacts: that body belongs to another world`.
+
+```js
+world.step(1 / 60);
+for (const e of world.contacts()) {
+  if (e.type === 'begin' && e.speed > 2) console.log('thud', e.point, e.speed);
+}
+for (const e of world.contacts(crate)) {
+  if (e.type === 'end') console.log('crate let go of', e.b.id);
+}
+```
+
+Notes: a body removed since is still taken, so its last events can be read: they come with the
+step after its removal, and its handle in them reads `alive` as `false`; compare handles by `id`.
+The handles in an event can be kept; the arrays are fresh each call.
+
+<a id="world-touching"></a>
+### `world.touching(body)` → `Array`
+
+Every body touching this one, as of the last step, or overlapping it where either of the two is a
+sensor. What `begin` and `end` events say, asked at any time: "is the player on the ground?",
+"what is in this zone?". See [Contact events and sensors](#events).
+
+Returns: an array of [`Body`](#body), in the same order every run; `[]` if none.
+
+Throws: `touching: this world was destroyed`; `touching: body must be a Body, got …`; `touching: that body belongs to another world`; `touching: this body was removed`.
+
+```js
+const grounded = world.touching(player).length > 0;
+const inside = world.touching(crate).map((b) => b.id);
+```
+
+Notes: it costs nothing until called, and then looks only at the bodies near this one, through
+the same tree the contacts use, not at every pair in the world. A sleeping body's touches are
+kept, and listed. A body moved by hand since the last step is listed as it was at the step.
 
 <a id="world-step"></a>
 ### `world.step(dt)`
@@ -1008,6 +1059,70 @@ standing on an edge stays up while its centre is within its tolerance of being o
 1 m cube 0.41° past balance stands, and 0.45° past falls. Friction 0 leaves no friction across a
 patch, so a ball spinning in place on ice spins on, though its rolling still slows.
 
+<a id="events"></a>
+## Contact events and sensors
+
+Games need to know when things touch: a crate lands and a thud plays, a player walks into a coin,
+something enters a goal. After each step, [`world.contacts()`](#world-contacts) lists the pairs
+that began touching in it and the pairs that stopped, and [`world.touching(body)`](#world-touching)
+says what touches a body now. Sensors are bodies that notice what overlaps them and push nothing.
+
+```js
+const coin = world.addBody({ type: 'static', shape: 'sphere', radius: 0.4, sensor: true, position: [3, 1, 0] });
+world.step(1 / 60);
+for (const e of world.contacts(coin)) {
+  if (e.type === 'begin' && e.b.id === player.id) world.remove(coin);
+}
+```
+
+- **Read after the step, never called back.** A function called from inside the solver at the
+  moment two bodies touch couldn't safely remove one of them: it would pull the body out of arrays
+  the solver is halfway through, so engines that call back forbid changing anything inside the
+  call. Read after the step, the step is over, and anything can change.
+- **What touching means.** A pair touched in a step if the solver pushed them apart in it, or the
+  step left them within a contact's tolerance of touching (a pixel; see [Contacts](#contacts)).
+  The push catches a body that hits another and is knocked away within the same step; the distance,
+  a box resting against a wall with nothing pressing it.
+- **Begin and end, once each.** A pair's `begin` comes in the step it starts touching, and its
+  `end` in the step it stops, and never two begins without an end between. A body against a mesh
+  or heightfield is one pair, however many of its triangles it touches.
+- **No stay events.** A pair still touching writes nothing. A stay event a step for every touching
+  pair would be 30,000 a step for a resting pile of 10,000 boxes, and sleeping bodies, whose
+  contacts nothing looks at, would have to be walked to give them. Ask
+  [`touching()`](#world-touching) instead, when you want to know.
+- **Removed bodies end their touches.** Their `end` events come with the next step, the removed
+  body's handle dead. A body added already touching something begins touching it at the next
+  step, and a slot reused in the same place ends the old body's touches and begins the new one's.
+- **Sleeping keeps touches.** Bodies falling asleep while touching write nothing, nor do they when
+  woken, unless they then move apart.
+- **A touch the step couldn't foresee comes a step late.** Contacts are found from how bodies are
+  moving when the step starts. A resting body knocked into another in the middle of the step meets
+  it unforeseen, and that touch begins at the next step, 1/60 s later at 60 Hz. In a scene of
+  bouncing and knocked bodies, 5 of 3,209 touches were.
+- **Events cost nothing when nothing changes.** The step writes an event only when a pair starts or
+  stops touching, into storage it reuses, and builds objects only when you call `contacts()`.
+  Measured on a settled pile of 1,000 boxes kept awake, and while it landed, steps cost the same as
+  before events, within 2% either way, run alternately in one process.
+
+**Sensors.** Any body is a sensor with `sensor: true`: any shape, any type. A static sensor is a
+zone; a kinematic one follows something, as a trigger around a character does.
+
+- **They push nothing, and nothing pushes them.** Bodies pass through a sensor exactly as if it
+  weren't there: their paths are the same to the bit. A dynamic sensor falls through everything.
+- **They see every body that isn't a sensor.** Dynamic and kinematic bodies always, so a zone sees
+  a moving platform or a character pass; static ones too, unless the sensor is static as well,
+  since then neither can come or go. Two sensors never see each other: rarely wanted, and it
+  costs pairs (Box2D 3's rule). Layers and masks filter them as any body.
+- **They wake nothing.** A sensor sweeping through a sleeping pile reports each body without waking
+  it, and a sleeping body inside a zone stays touching it.
+- **Queries don't see them.** A ray, a shape cast or an overlap test passes through a sensor: a
+  bullet's ray shouldn't stop at an invisible trigger zone. What is in a zone is for events and
+  [`touching()`](#world-touching).
+- **They look where a step leaves bodies.** A sensor's pairs are checked once a step is over, so a
+  body that passes all the way through a sensor within one step isn't seen; continuous collision,
+  in a later version, will. A mesh or heightfield sensor sees what touches its triangles, not what
+  is inside it, since triangles are a surface; two meshes never meet.
+
 <a id="layers"></a>
 ## Layers and masks
 
@@ -1079,6 +1194,8 @@ keeps the whole heap awake until it, too, comes to rest.
   measures again, which can never step past a touch.
 - **Nothing kept, nothing spent.** A query costs nothing until called, and asking never changes
   what the world does next: the same steps give the same results to the bit, asked or not.
+- **Sensors aren't seen.** A query passes through a sensor, so a bullet's ray doesn't stop at a
+  trigger zone. What is in a zone is for [`touching()`](#world-touching).
 
 Notes: results are fresh objects each call; a query isn't meant for the inside of a step.
 

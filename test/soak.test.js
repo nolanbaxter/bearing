@@ -205,6 +205,42 @@ await test('meshes and heightfields made, landed on and removed 30 times: their 
   assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
 });
 
+await test('a pile landing past sensors and cleared 30 times: event storage, sensor pairs and memory come back', async () => {
+  const world = new World();
+  world.addBody({ type: 'static', size: [40, 1, 40], position: [0, -0.5, 0] });
+  world.step(1 / 60);
+  let before = 0;
+  for (let round = 0; round < 30; round++) {
+    if (round === WARM) {
+      await collect();
+      before = heap();
+    }
+    // Zones the pile falls through, and a pile that lands all at once: a
+    // burst of begins, then, cleared, a burst of ends.
+    const zones = [], pile = [];
+    for (let k = 0; k < 8; k++) zones.push(world.addBody({ type: 'static', size: [3, 1, 3], position: [(k % 4) * 3 - 4.5, 3, Math.floor(k / 4) * 3 - 1.5], sensor: true }));
+    for (let k = 0; k < 200; k++) pile.push(world.addBody({ position: [(k % 10) * 1.01 - 5, 0.5 + Math.floor(k / 20) * 1.01, (Math.floor(k / 10) % 2) * 1.01 + (round % 3) * 0.1] }));
+    let begun = 0, ended = 0;
+    for (let s = 0; s < 40; s++) {
+      world.step(1 / 60);
+      for (const e of world.contacts()) e.type === 'begin' ? begun++ : ended++;
+    }
+    assert.ok(begun > 200, `round ${round}: only ${begun} begins`);
+    for (const b of [...pile, ...zones]) world.remove(b);
+    world.step(1 / 60);
+    const cleared = world.contacts().length;
+    assert.ok(cleared > 200, `round ${round}: only ${cleared} ends`);
+    world.step(1 / 60);
+    // Back to the smallest room it keeps, as the pair list does: 16.
+    assert.ok(world._events.capacity <= 16, `round ${round}: room for ${world._events.capacity} events kept`);
+    assert.ok(world._sensed.length <= 16, `round ${round}: ${world._sensed.length} sensor pairs kept room for`);
+    assert.equal(world._sensorCount, 0);
+  }
+  await collect();
+  const grown = heap() - before;
+  assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
+});
+
 await test('removed bodies\' handles and destroyed worlds are collected', async () => {
   const world = new World();
   let handle = world.addBody({});

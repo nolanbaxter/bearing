@@ -86,3 +86,14 @@ All notable changes to Bearing are recorded here. The format follows
 - A kinematic body moving however slowly stays awake. Measured by how far it had strayed, a 10 m
   platform at 1 cm/s counted as still, fell asleep and stopped; now one is still only when its
   velocities are zero.
+- Contact events. `world.contacts(body)` lists the last step's events: a `begin` when two bodies
+  start touching, with where, which way and how fast they met, and an `end` when they stop. Read
+  after the step, never called back from inside it, so anything can be changed while reading. A
+  pair touches when the solver pushed it in the step or the step left it within a pixel. Given a
+  body, only its events, turned so it is `a`. Removed bodies' touches end at the next step.
+- `world.touching(body)`: every body touching it now, through the broadphase tree, for "is the
+  player on the ground?" without a stay event per touching pair per step.
+- Sensors: `addBody({ sensor: true })`, any shape and type. A sensor reports what overlaps it and
+  pushes nothing; bodies pass through it on exactly the path they'd take without it. Sensors see
+  every body but other sensors, never two static bodies, wake nothing, and queries pass through
+  them. Events and sensors cost nothing when nothing changes.

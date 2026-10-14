@@ -312,14 +312,34 @@ tested alone. 100,352 triangles build in 0.21 s (i7-1260P, Node 22) and a box on
 fans included. Also fixed: a slow kinematic body fell asleep and stopped (a 10 m platform at
 1 cm/s); a kinematic body is now still only when its velocities are zero.
 
-**10. Contact events and sensors ⬜**
-*Concepts:* contact lifecycles (begin, stay, end); triggers; why callbacks from inside a solver cause re-entrancy bugs.
-`world.contacts()`: begin, stay and end after each step, as plain data. Sensors: shapes that
-report overlaps and push nothing.
-*Needs Nolan:* the choice in rule 65, read after the step rather than callbacks. Recommended:
-read after the step.
-*Done when:* events match the pairs exactly over a scripted scene; removing a body mid-scene gives
-its end events; no event fires twice.
+**10. Contact events and sensors ✅** *(approved and done 2026-10-14)*
+*Concepts:* contact lifecycles (begin and end); triggers; why callbacks from inside a solver cause re-entrancy bugs.
+`world.contacts(body)`: the last step's begin and end events, as plain data, read after the step
+(rule 65, Nolan's choice). `world.touching(body)`: what touches a body now, in place of `stay`
+events. Sensors (`sensor: true`): bodies that report overlaps and push nothing; they see every body
+but other sensors, never two static bodies, and queries don't see them.
+*Done when:* events match an independently worked-out touching set over a scripted scene, with no
+event twice and every begin closed by one end; removing a body mid-scene gives its end events; a
+dropped ball's begin speed is √(2gh); a sensor sees a box in and out and changes nothing about its
+path; sleeping keeps touches with no events; events and sensors cost nothing when nothing changes,
+measured on the 1,000-box pile.
+*Result:* `world.contacts(body)`, `world.touching(body)` and `sensor` (`src/events.js`, with the
+touching decision in `src/contact.js`'s `touched()` and sensors asked in `World._senseAll`), held by
+`test/events.test.js`. Over a scripted scene (a stack, a slide off a ledge, bouncing boxes and
+balls, a paddle knocking balls away, a kinematic platform through a zone, a body replaced in its
+own slot, one removed), every step's events matched a touching set worked out from the bodies'
+final positions with the narrowphase run afresh, plus the solver's pushes: 3,209 pair-steps, none
+too close to call, no event twice. The push matters: in a scene of bouncing boxes and balls the
+solver pushed 1,510 contacts that the step left more than a pixel apart, and 1,142 in a tumbling
+pile. Five touches in the scene weren't foreseen by the step (a resting ball knocked into another
+mid-step) and began at the next one, which the docs say. Removing a body ends its touches at the
+next step; a dropped ball begins at 9.892 m/s from 5 m against √(2gh) = 9.905; a sensor saw a box in
+and out on the steps worked out from its speed alone, with the box's path bit-identical to the
+world without it; a kinematic sensor swept a sleeping pile without waking it. Undoing any of six
+pieces (the push, an end on removal, a reused slot's end, sensors waking nothing or pushing
+nothing, queries passing them) fails a test. Measured on the 1,000-box pile against the last
+commit, alternating in one process: +0.5% and +1.8% landing, +0.5% and +1.9% settled and kept
+awake, bit-identical results.
 
 ### Part three: gameplay
 
@@ -524,3 +544,13 @@ Winding's way, copied before the first one:
   every remaining seam rule just leaves a contact out, which a real fold's own triangles keep, and
   no test told the two apart. The test reference for a box against a triangle found a box's axes
   were tried only towards the triangle's centre; now both ways.
+- **2026-10-14.** Milestone 10's `stay` events replaced by `world.touching(body)`, at Nolan's word:
+  a stay event fires for every touching pair every step, about 30,000 a step for a resting pile of
+  10,000 boxes, and sleeping pairs, which nothing looks at, would have to be walked to report them.
+  What stay is for ("is the player on the ground?") is a question, asked when wanted. Box2D 3 made
+  the same choice. Events are read after the step, not called back (rule 65).
+- **2026-10-14.** Milestone 10 done. Touching was planned as "pushed in the step, or ended it within
+  a pixel"; for a moment the push looked redundant (bounces are applied after the substeps, so a
+  ball ends its impact step at the surface), and measuring settled it: bodies knocked away by
+  others within a step are pushed yet end it apart, about one contact in 30 in a bouncing scene.
+  So both stay, and the test scene has bouncing boxes and a paddle to hold the push to it.

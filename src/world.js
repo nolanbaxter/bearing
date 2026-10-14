@@ -28,13 +28,14 @@ import { rotate } from './core/math.js';
 import { Slots, resized, MAX_ID, MAX_SLOTS } from './core/slots.js';
 import { volume, inertia as shapeInertia } from './shapes.js';
 import {
-  Contacts, PIXEL, narrow, store, prepare, makeSoft, warmStart, solve, restitution,
+  Contacts, PIXEL, narrow, store, prepare, makeSoft, warmStart, solve, restitution, touched,
 } from './contact.js';
 import { Broadphase } from './broadphase.js';
 import { Pairs } from './pairs.js';
 import { Body } from './body.js';
-import { Shape, SPHERE as SPHERE_KIND, CAPSULE as CAPSULE_KIND, BOX as BOX_KIND } from './collide.js';
-import { ray, shapeCast as cast, overlap as overlapping } from './query.js';
+import { Shape, Manifold, SPHERE as SPHERE_KIND, CAPSULE as CAPSULE_KIND, BOX as BOX_KIND } from './collide.js';
+import { ray, shapeCast as cast, overlap as overlapping, sense } from './query.js';
+import { Events, END } from './events.js';
 import { Mesh, Heightfield } from './mesh.js';
 
 const TYPES = ['dynamic', 'static', 'kinematic'];
@@ -107,7 +108,7 @@ const SLEEP_TIME = 1;
 const BODY_OPTIONS = [
   'type', 'shape', 'size', 'radius', 'height', 'vertices', 'indices', 'heights', 'columns', 'spacing',
   'density', 'mass', 'inertia',
-  'friction', 'restitution', 'damping', 'angularDamping', 'gravityScale', 'layers', 'mask',
+  'friction', 'restitution', 'damping', 'angularDamping', 'gravityScale', 'layers', 'mask', 'sensor',
   'position', 'rotation', 'velocity', 'angularVelocity',
 ];
 
@@ -128,7 +129,7 @@ const DEFAULTS = Object.freeze({
   friction: 0.5, restitution: 0, damping: 0, angularDamping: 0, gravityScale: 1,
   // In the first layer, and colliding with all 32: everything collides with
   // everything until told otherwise (rule 110).
-  layers: 1, mask: 0xffffffff,
+  layers: 1, mask: 0xffffffff, sensor: false,
   position: [0, 0, 0], rotation: [0, 0, 0, 1], velocity: [0, 0, 0], angularVelocity: [0, 0, 0],
 });
 
@@ -184,6 +185,7 @@ const COLUMNS = [
   ['_least', Float64Array, 1],       // at an island's root, while islands are found: its least still time
   ['_slept', Int32Array, 1],         // the bodies that fell asleep in the last step, dense
   ['_staticMoved', Uint8Array, 1],   // 1 for a static body moved or changed since the last step
+  ['_sensor', Uint8Array, 1],        // 1 for a sensor: it reports what it overlaps, and pushes nothing
   // The moved list (see moved()):
   ['_movedAt', Float64Array, 1],     // the step it last moved in; stepCount + 1 if set by hand since
   ['_seen', Uint32Array, 1],         // for moved(), so a body is listed once
@@ -244,6 +246,15 @@ export class World {
     /** Entries stamped this or earlier were dropped: moved() asked about older steps reads every body. */
     this._logFloor = 0;
     this._seenMark = 0;
+    // Contact events (events.js): the last step's, written only when a pair
+    // starts or stops touching. And the pairs with a sensor in them that the
+    // step found, to ask about once it is over (_senseAll).
+    this._events = new Events();
+    this._sensed = new Int32Array(0);
+    this._sensedCount = 0;
+    this._sensorCount = 0;
+    /** Steps that asked about sensor pairs: for the off-means-off test, which reads it. */
+    this._sensorPasses = 0;
     // Queries (query.js): bodies that ended the last step outside their fat
     // boxes, listed by the first query after the step, and anything that
     // adds, removes or moves a body by hand since.
@@ -409,6 +420,65 @@ export class World {
   }
 
   /**
+   * The last step's contact events: which pairs began touching and which
+   * stopped, as fresh plain objects. Given a body, only its own, each turned
+   * so that `a` is that body. A body removed since still has its events, its
+   * handle reading as dead, so a removed body is taken here.
+   */
+  contacts(body) {
+    this._live('contacts');
+    let id = -1;
+    if (body !== undefined) {
+      if (!(body instanceof Body)) fail('contacts', `body must be a Body, got ${show(body)}`);
+      if (body.world !== this) fail('contacts', 'that body belongs to another world');
+      id = body.id;
+    }
+    const e = this._events, out = [];
+    for (let i = 0; i < e.count; i++) {
+      let a = e.idA[i], b = e.idB[i];
+      const turned = id >= 0 && b === id;
+      if (id >= 0 && a !== id && !turned) continue;
+      if (turned) { b = a; a = id; }
+      if (e.type[i] === END) {
+        out.push({ type: 'end', a: new Body(this, a), b: new Body(this, b) });
+        continue;
+      }
+      // Turned round, the normal points the other way; 0 - x keeps a zero from becoming -0.
+      const i3 = 3 * i, n = e.normal, k = (x) => (turned ? 0 - x : x);
+      out.push({
+        type: 'begin', a: new Body(this, a), b: new Body(this, b),
+        point: [e.point[i3], e.point[i3 + 1], e.point[i3 + 2]],
+        normal: [k(n[i3]), k(n[i3 + 1]), k(n[i3 + 2])],
+        speed: e.speed[i],
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Every body touching this one, as of the last step, or overlapping it
+   * where either is a sensor. Found through the broadphase tree, from the
+   * body's own box: the bodies near it, not every pair in the world.
+   */
+  touching(body) {
+    const s = this._slotOfBody('touching', body);
+    const bp = this._broadphase, pairs = this._pairs, slots = this._slots, t = bp.which[s], out = [];
+    if (t < 0) return out;
+    const box = bp.trees[t].box, o = 6 * bp.leaf[s];
+    const visit = (other) => {
+      if (other === s) return;
+      const a = s < other ? s : other, b = s < other ? other : s, at = pairs._find(a, b);
+      if (at < 0) return;
+      const p = pairs.index[at];
+      if (pairs.touching[p] === 1 && slots.slotOf(pairs.idA[p]) === a && slots.slotOf(pairs.idB[p]) === b) {
+        out.push(new Body(this, slots.id(other)));
+      }
+    };
+    for (const tree of bp.trees) tree.query(box[o], box[o + 1], box[o + 2], box[o + 3], box[o + 4], box[o + 5], visit);
+    return out;
+  }
+
+  /**
    * The slots of the bodies that moved in any step after step `since`, and
    * always of those that moved in the last one, since they are still between
    * `previous` and `transforms`; with bodies added, or moved by hand, since
@@ -531,6 +601,9 @@ export class World {
     }
     const step = ++this._stepCount;
     const state = this._slots.state, list = this._awakeList, at = this._movedAt;
+    // Events are the last step's: this one's start afresh.
+    this._events.count = 0;
+    this._sensedCount = 0;
     const tr = this._transforms, prev = this._previous;
 
     if (this._forcedSlots.length > 0) this._applyForces(dt);
@@ -608,6 +681,7 @@ export class World {
       const g = this._gravity;
       restitution(this, next, Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]));
       store(this._pairs, next);
+      touched(this, pairs, next);
     }
 
     const p = this._position, q = this._rotation;
@@ -618,6 +692,14 @@ export class World {
       at[s] = step;
     }
     this._stepDt = 0;
+    if (this._sensedCount > 0) this._senseAll();
+    // Both give storage back after a burst, by the world's quarter rule.
+    this._events.trim();
+    if (this._sensed.length > 16 && this._sensedCount <= this._sensed.length / 4) {
+      let c = 16;
+      while (c < this._sensedCount) c *= 2;
+      this._sensed = resized(this._sensed, c);
+    }
     if (this._sleeping) this._sleep(dt);
   }
 
@@ -1083,6 +1165,47 @@ export class World {
     this._reset();
   }
 
+  /** Pair p has a sensor in it: the narrowphase leaves it to be asked about once the step is over. */
+  _sense(p) {
+    if (this._sensedCount === this._sensed.length) this._sensed = resized(this._sensed, Math.max(16, 2 * this._sensed.length));
+    this._sensed[this._sensedCount++] = p;
+  }
+
+  /**
+   * Every pair with a sensor in it, where the step left its bodies: touching
+   * if within the tolerance of it, the same pixel as for any contact, and an
+   * event if that changed. A begin carries the point and normal found, and
+   * how fast b closes on a along it there. A sensor's pairs are asked only
+   * here, after the step, so a body that passes all the way through a sensor
+   * within one step isn't seen (continuous collision, milestone 13, is what
+   * would see it).
+   */
+  _senseAll() {
+    this._sensorPasses++;
+    const pairs = this._pairs, events = this._events, size = this._size;
+    const v = this._velocity, w = this._angular, pos = this._position;
+    for (let i = 0; i < this._sensedCount; i++) {
+      const p = this._sensed[i], a = pairs.a[p], b = pairs.b[p];
+      // A mesh has no thickness of its own: then the other's size.
+      const sa = size[a], sb = size[b], tolerance = (sa > 0 && sb > 0 ? Math.min(sa, sb) : sa + sb) * PIXEL;
+      const now = sense(this, a, b, tolerance, SENSED) > 0 ? 1 : 0;
+      if (now === pairs.touching[p]) continue;
+      pairs.touching[p] = now;
+      if (now === 0) {
+        events.end(pairs.idA[p], pairs.idB[p]);
+        continue;
+      }
+      const pt = SENSED.points, n = SENSED.normal, a3 = 3 * a, b3 = 3 * b;
+      const rax = pt[0] - pos[a3], ray = pt[1] - pos[a3 + 1], raz = pt[2] - pos[a3 + 2];
+      const rbx = pt[0] - pos[b3], rby = pt[1] - pos[b3 + 1], rbz = pt[2] - pos[b3 + 2];
+      const dvx = v[b3] + w[b3 + 1] * rbz - w[b3 + 2] * rby - v[a3] - w[a3 + 1] * raz + w[a3 + 2] * ray;
+      const dvy = v[b3 + 1] + w[b3 + 2] * rbx - w[b3] * rbz - v[a3 + 1] - w[a3 + 2] * rax + w[a3] * raz;
+      const dvz = v[b3 + 2] + w[b3] * rby - w[b3 + 1] * rbx - v[a3 + 2] - w[a3] * ray + w[a3 + 1] * rax;
+      const closing = -(dvx * n[0] + dvy * n[1] + dvz * n[2]);
+      events.begin(pairs.idA[p], pairs.idB[p], pt[0], pt[1], pt[2], n[0], n[1], n[2], closing > 0 ? closing : 0);
+    }
+  }
+
   // ---- what Body calls (public, but not for users: see test/docs.test.js) ----
 
   _live(caller) {
@@ -1221,6 +1344,7 @@ export class World {
     this._force.fill(0, s * 3, s * 3 + 3);
     this._torque.fill(0, s * 3, s * 3 + 3);
     this._geometry[s] = null;
+    if (this._sensor[s] === 1) { this._sensor[s] = 0; this._sensorCount--; }
     this._epoch++;
     // What it was holding up, or resting on, wakes: its own island now, and
     // anything asleep against it at the next step, which finds it gone.
@@ -1298,6 +1422,7 @@ export class World {
       gravityScale: this._gravityScale[s],
       layers: this._layers[s],
       mask: this._mask[s],
+      sensor: this._sensor[s] === 1,
       position: [this._position[s3], this._position[s3 + 1], this._position[s3 + 2]],
       rotation: [this._rotation[s4], this._rotation[s4 + 1], this._rotation[s4 + 2], this._rotation[s4 + 3]],
       velocity: [this._velocity[s3], this._velocity[s3 + 1], this._velocity[s3 + 2]],
@@ -1360,6 +1485,9 @@ export class World {
     this._gravityScale[s] = spec.gravityScale;
     this._layers[s] = spec.layers;
     this._mask[s] = spec.mask;
+    const sensor = spec.sensor ? 1 : 0;
+    this._sensorCount += sensor - this._sensor[s];
+    this._sensor[s] = sensor;
     this._position.set(spec.position, s3);
     this._rotation.set(spec.rotation, s * 4);
     this._velocity.set(spec.velocity, s3);
@@ -1477,6 +1605,7 @@ function resolve(caller, base, given) {
   const gravityScale = has('gravityScale') ? finite(caller, 'gravityScale', given.gravityScale) : base.gravityScale;
   const layers = has('layers') ? bits(caller, 'layers', given.layers) : base.layers;
   const mask = has('mask') ? bits(caller, 'mask', given.mask) : base.mask;
+  const sensor = has('sensor') ? flag(caller, 'sensor', given.sensor) : base.sensor;
 
   const position = has('position') ? vec3(caller, 'position', given.position) : base.position;
   const rotation = has('rotation') ? quat(caller, 'rotation', given.rotation) : base.rotation;
@@ -1493,13 +1622,16 @@ function resolve(caller, base, given) {
   }
   return {
     type, shape, size, radius, height, geometry, density, mass, massGiven, inertia, inertiaGiven,
-    friction, restitution, damping, angularDamping, gravityScale, layers, mask,
+    friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor,
     position, rotation, velocity, angularVelocity,
   };
 }
 
 /** The material options, in the order bodyOf lists them. */
-const MATERIAL = ['friction', 'restitution', 'damping', 'angularDamping', 'gravityScale', 'layers', 'mask'];
+const MATERIAL = ['friction', 'restitution', 'damping', 'angularDamping', 'gravityScale', 'layers', 'mask', 'sensor'];
+
+/** Where _senseAll's pair met; it isn't re-entered. */
+const SENSED = new Manifold();
 
 /**
  * 32 bits, given as any whole number that fits: unsigned (0 to 2^32 - 1) or

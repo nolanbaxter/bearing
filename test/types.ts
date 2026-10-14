@@ -123,3 +123,24 @@ export function level(bytes: ArrayBuffer): void {
   // @ts-expect-error readGlb takes the file's bytes, not its name
   readGlb('level.glb');
 }
+
+export function events(): void {
+  const world = new World();
+  const player = world.addBody({ shape: 'capsule', radius: 0.3, height: 1.8 });
+  const coin = world.addBody({ type: 'static', shape: 'sphere', radius: 0.4, sensor: true, position: [3, 1, 0] });
+  world.setBody(coin, { sensor: false });
+  world.step(1 / 60);
+  for (const e of world.contacts()) {
+    if (e.type === 'begin') e.speed.toFixed(), e.point[0].toFixed(), e.normal[1].toFixed();
+    else e.a.id.toFixed();
+  }
+  const near: Body[] = world.touching(player);
+  const sensor: boolean = world.bodyOf(coin).sensor;
+  void near; void sensor;
+  for (const e of world.contacts(player)) {
+    // @ts-expect-error an end has no point: they have stopped touching
+    void e.point;
+  }
+  // @ts-expect-error sensor is true or false
+  world.addBody({ sensor: 1 });
+}

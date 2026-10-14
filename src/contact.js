@@ -54,6 +54,11 @@
 // Memory of each (pairs.js); a manifold starts from the remembered one whose
 // normal is nearest its own, so a box sliding from triangle to triangle of a
 // flat floor keeps its impulses all the way across.
+//
+// TOUCHING. After the solve, each pair is touching or not, and a change is
+// an event (events.js): see touched(). A sensor's pairs get no manifold here,
+// since a sensor pushes nothing; World asks about them after the step, where
+// the bodies end up.
 
 import { collide, Shape, Manifold, SPHERE, CAPSULE, BOX as BOX_KIND } from './collide.js';
 import { touchLevel, Touches } from './triangle.js';
@@ -111,6 +116,7 @@ export class Contacts {
     grow('ra', Float64Array, 3 * p); grow('rb', Float64Array, 3 * p);
     grow('la', Float64Array, 3 * p); grow('lb', Float64Array, 3 * p);
     grow('adjusted', Float64Array, p);
+    grow('gap', Float64Array, m);   // its points' least separation as the last pass saw it: at the step's end
     grow('normalMass', Float64Array, p); grow('tangentMass1', Float64Array, p); grow('tangentMass2', Float64Array, p);
     grow('normalImpulse', Float64Array, p); grow('tangentImpulse1', Float64Array, p); grow('tangentImpulse2', Float64Array, p);
     grow('maxNormalImpulse', Float64Array, p); grow('relativeVelocity', Float64Array, p);
@@ -153,7 +159,8 @@ const v3 = new Float64Array(3);
  * Adds to `next` a manifold for each awake pair from `from` on whose shapes
  * touch, or will within the step. A pair that no longer holds (a body gone,
  * filtered apart, or fat boxes parted) is dropped from the list here. Each
- * manifold starts from the impulses its pair remembers.
+ * manifold starts from the impulses its pair remembers. A pair with a sensor
+ * in it gets none: it is listed for World to ask about after the step.
  *
  * A touch between an awake body and a sleeping one wakes the sleeper's
  * island. Its other pairs then join the awake ones, past where this pass
@@ -161,7 +168,8 @@ const v3 = new Float64Array(3);
  * woken stack is held up in the very step it wakes.
  */
 export function narrow(world, pairs, broadphase, next, from) {
-  const box = world._box, reach = world._motion, awake = world._awake, shape = world._shape;
+  const box = world._box, reach = world._motion, awake = world._awake, shape = world._shape, sensor = world._sensor;
+  const sensing = world._sensorCount > 0;
   for (let p = from; p < pairs.active;) {
     if (!pairs.holds(p, broadphase)) {
       pairs.remove(p);   // the last pair moves into p, so p is looked at again
@@ -173,6 +181,11 @@ export function narrow(world, pairs, broadphase, next, from) {
     if (box[a6] > box[b6 + 3] || box[b6] > box[a6 + 3] || box[a6 + 1] > box[b6 + 4]
       || box[b6 + 1] > box[a6 + 4] || box[a6 + 2] > box[b6 + 5] || box[b6 + 2] > box[a6 + 5]) {
       pairs.forget(p);
+      p++;
+      continue;
+    }
+    if (sensing && (sensor[a] === 1 || sensor[b] === 1)) {
+      world._sense(p);
       p++;
       continue;
     }
@@ -605,6 +618,7 @@ export function solve(world, c, h, bias) {
     // An overlap is pushed out no faster than a pixel (the tolerance) a substep.
     const maxBias = c.tolerance[m] * inv;
     const count = c.points[m];
+    let least = Infinity;
     for (let k = 0; k < count; k++) {
       const i = m * P + k, i3 = 3 * i;
       // The separation now: the anchors where the bodies' current rotations put
@@ -613,6 +627,7 @@ export function solve(world, c, h, bias) {
       const cax = v3[0], cay = v3[1], caz = v3[2];
       rotate(q, b * 4, c.lb[i3], c.lb[i3 + 1], c.lb[i3 + 2], false, v3);
       const s = (dx + v3[0] - cax) * nx + (dy + v3[1] - cay) * ny + (dz + v3[2] - caz) * nz + c.adjusted[i];
+      if (s < least) least = s;
       if (s > 0) {
         // Not touching yet: allowed to close exactly the gap this substep, no more.
         target[k] = s * inv; massScale[k] = 1; impulseScale[k] = 0;
@@ -623,6 +638,8 @@ export function solve(world, c, h, bias) {
         target[k] = 0; massScale[k] = 1; impulseScale[k] = 0;
       }
     }
+    // The last relaxing pass comes after the last move, so this is where the step leaves them.
+    c.gap[m] = least;
     // One sweep per point. The points of a face contact are coupled: four
     // points on a box's face hold only three things (its height and its two
     // tilts), and a single sweep visits them in an order, so the first stops
@@ -700,6 +717,50 @@ export function solve(world, c, h, bias) {
     c.spinImpulse[m] = s1;
     const ds = s1 - s0;
     twist(w, invI, a, b, nx * ds, ny * ds, nz * ds);
+  }
+}
+
+/**
+ * After the solve: which pairs touched in this step, and an event for each
+ * that started or stopped. A pair touched if the solver pushed it apart
+ * anywhere, or it ends the step within the tolerance of touching: the push
+ * catches a ball that hits and leaves within one step, and the distance a box
+ * resting against a wall with nothing pressing it. A begin carries the
+ * deepest point, moved on by half of what the two bodies moved this step, so
+ * it lands where they met rather than where the step started them; the
+ * pair's normal; and the fastest closing speed among its points at impact.
+ */
+export function touched(world, pairs, c) {
+  const events = world._events, p3 = world._position, start = world._start;
+  for (let m = 0; m < c.count;) {
+    const p = c.pair[m];
+    // A mesh pair's manifolds come together; any one of them touching will do.
+    let hit = -1;
+    for (; m < c.count && c.pair[m] === p; m++) {
+      if (hit >= 0) continue;
+      let meets = c.gap[m] <= c.tolerance[m];
+      for (let k = 0; k < c.points[m] && !meets; k++) meets = c.maxNormalImpulse[m * P + k] > 0;
+      if (meets) hit = m;
+    }
+    const now = hit >= 0 ? 1 : 0;
+    if (now === pairs.touching[p]) continue;
+    pairs.touching[p] = now;
+    if (now === 0) {
+      events.end(pairs.idA[p], pairs.idB[p]);
+      continue;
+    }
+    let deepest = hit * P, speed = 0;
+    for (let k = 0; k < c.points[hit]; k++) {
+      const i = hit * P + k;
+      if (c.separation[i] < c.separation[deepest]) deepest = i;
+      if (-c.relativeVelocity[i] > speed) speed = -c.relativeVelocity[i];
+    }
+    const a3 = 3 * c.a[hit], b3 = 3 * c.b[hit], d3 = 3 * deepest, h3 = 3 * hit;
+    events.begin(pairs.idA[p], pairs.idB[p],
+      c.point[d3] + (p3[a3] - start[a3] + p3[b3] - start[b3]) * 0.5,
+      c.point[d3 + 1] + (p3[a3 + 1] - start[a3 + 1] + p3[b3 + 1] - start[b3 + 1]) * 0.5,
+      c.point[d3 + 2] + (p3[a3 + 2] - start[a3 + 2] + p3[b3 + 2] - start[b3 + 2]) * 0.5,
+      c.normal[h3], c.normal[h3 + 1], c.normal[h3 + 2], speed);
   }
 }
 

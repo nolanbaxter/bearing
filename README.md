@@ -34,6 +34,9 @@ density unless you give one), no tolerances to tune, and nothing to size in adva
   renderer has to draw again. 32 collision layers, with a mask per body for what it collides with.
 - **Queries**: raycasts (nearest, or every hit), shape casts and overlap tests, exact for every
   shape and quick through the same tree the contacts use.
+- **Contact events and sensors**: which bodies began and stopped touching in each step, with where
+  and how hard they met, read after the step; what touches a body now; and sensors, zones that
+  report what enters them and push nothing. See [Contact events and sensors](docs/API.md#events).
 - **Level geometry**: triangle meshes and heightfields, with no seams to catch on, and meshes read
   straight from a `.glb` file with [`readGlb`](docs/API.md#readglb), with no dependency. See
   [Meshes and heightfields](docs/API.md#meshes).

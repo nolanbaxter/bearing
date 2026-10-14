@@ -96,6 +96,16 @@ These were made with Nolan and override the rules below where they differ.
   face (that ghosted a ball 29 mm off a crest), except a ball over the triangle to the tolerance;
   clip points on seams are dropped, a box's own corners never. `readGlb` takes bytes, not a URL;
   Draco, meshopt and quantized positions throw naming the extension.
+- **Contact events and sensors** (2026-10-14, milestone 10, approved): `world.contacts(body)` (the
+  last step's `begin`/`end`, read after the step, rule 65; with a body, its own, turned so it is
+  `a`; removed bodies accepted), `world.touching(body)` in place of stay events (through the
+  broadphase tree), body option `sensor`. Touching = the solver pushed in the step, or the step left
+  it within the tolerance (`contact.js` `touched()`, gap recorded by the last relax pass). Events
+  written only on change, into `src/events.js` columns, cleared at each step's start; a pair's
+  `touching` flag lives in `pairs.js`, and dropping or resetting a touching pair writes its end.
+  Sensors: no manifold; checked after the step at final positions (`World._senseAll`, `query.js`
+  `sense()`); see everything but sensors, never two static; wake nothing; queries skip them.
+  Unforeseen mid-step touches begin a step late (documented).
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

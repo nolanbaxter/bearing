@@ -45,6 +45,8 @@ interface BodyCommon {
   layers?: number;
   /** Which layers it collides with, as bits, default 0xffffffff (all). */
   mask?: number;
+  /** Reports what overlaps it and pushes nothing, default false. */
+  sensor?: boolean;
   /** m, default [0, 0, 0]. */
   position?: Vec3;
   /** Quaternion [x, y, z, w], default [0, 0, 0, 1]. Normalized as it comes in. */
@@ -151,6 +153,7 @@ interface BodyInfoCommon {
   layers: number;
   /** Unsigned, 0 to 4294967295. */
   mask: number;
+  sensor: boolean;
   position: [number, number, number];
   rotation: [number, number, number, number];
   /** Absent for a static body. */
@@ -169,6 +172,25 @@ export type BodyInfo =
 
 /** A mesh's or heightfield's: never dynamic, and no mass, density or inertia. */
 type LevelInfoCommon = Omit<BodyInfoCommon, 'type' | 'mass' | 'density' | 'inertia'> & { type: 'static' | 'kinematic' };
+
+/** Two bodies began touching in the last step: where, which way (from a to b), and how fast they met, m/s. */
+export interface BeginEvent {
+  type: 'begin';
+  a: Body;
+  b: Body;
+  point: [number, number, number];
+  normal: [number, number, number];
+  speed: number;
+}
+
+/** Two bodies stopped touching in the last step. A removed body's handle reads as dead. */
+export interface EndEvent {
+  type: 'end';
+  a: Body;
+  b: Body;
+}
+
+export type ContactEvent = BeginEvent | EndEvent;
 
 /** What raycast, raycastAll and shapeCast find. */
 export interface Hit {
@@ -267,6 +289,10 @@ export class World {
   shapeCast(shape: QueryShape, origin: Vec3, direction: Vec3, options?: CastOptions): Hit | null;
   /** Every body a shape placed at position overlaps or touches. */
   overlap(shape: QueryShape, position: Vec3, options?: OverlapOptions): Body[];
+  /** The last step's begin and end events; given a body, only its own, with it as `a`. A removed body is taken. */
+  contacts(body?: Body): ContactEvent[];
+  /** Every body touching this one as of the last step, or overlapping it where either is a sensor. */
+  touching(body: Body): Body[];
   /** A handle for an id. Doesn't check the body is alive. */
   body(id: number): Body;
   /** Moves the world on by dt seconds, exactly. */
