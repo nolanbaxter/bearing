@@ -42,7 +42,7 @@ pre { white-space: pre-wrap; font: 13px/1.5 ui-monospace, monospace; background:
 // nothing else is timed. The first block of every scene is a warm-up and
 // isn't counted. Each scene is run RUNS times, the median kept.
 //
-//   ?scene=pyramid   only these scenes, comma-separated (stack, pyramid, pile, bigpile)
+//   ?scene=pyramid   only these scenes, comma-separated (stack, pyramid, pile, rays, bigpile)
 //   &runs=1          runs per scene
 //   &only=Bearing,Rapier
 //   &auto=1          start at once (for a headless run; results also on window.bench)
@@ -69,6 +69,7 @@ const ENGINES = {
         position: (i) => bodies[i].position,
         asleep: () => bodies.reduce((n, b) => n + (b.asleep ? 1 : 0), 0),
         mass: () => bodies[0].mass,
+        ray: (o, d, max) => world.raycast(o, d, { maxDistance: max })?.distance ?? -1,
         free: () => world.destroy(),
       };
     },
@@ -91,8 +92,15 @@ const ENGINES = {
         world.createCollider(R.ColliderDesc.cuboid(0.5, 0.5, 0.5).setDensity(1000).setFriction(0.5).setRestitution(0), body);
         return body;
       });
+      const ray = new R.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
       return {
         step: () => world.step(),
+        ray: (o, d, max) => {
+          ray.origin = { x: o[0], y: o[1], z: o[2] };
+          ray.dir = { x: d[0], y: d[1], z: d[2] };
+          const hit = world.castRay(ray, max, true);
+          return hit ? hit.timeOfImpact ?? hit.toi : -1;
+        },
         position: (i) => { const t = bodies[i].translation(); return [t.x, t.y, t.z]; },
         asleep: () => bodies.reduce((n, b) => n + (b.isSleeping() ? 1 : 0), 0),
         mass: () => bodies[0].mass(),
@@ -144,8 +152,23 @@ const ENGINES = {
       // Jolt's shapes are water's density by default too: 1,000 kg for a 1 m box.
       const box = new J.BoxShape(new J.Vec3(0.5, 0.5, 0.5), 0.05, null);
       const list = scene.boxes.map((b) => add(box, b.p, b.q, J.EMotionType_Dynamic, MOVING));
+      // Jolt's ray query, as its examples cast one: a ray, settings, a
+      // collector for the nearest hit, and its layer, body and shape filters.
+      const cast = new J.RRayCast(), castSettings = new J.RayCastSettings();
+      const nearest = new J.CastRayClosestHitCollisionCollector();
+      const filters = [new J.DefaultBroadPhaseLayerFilter(jolt.GetObjectVsBroadPhaseLayerFilter(), MOVING),
+        new J.DefaultObjectLayerFilter(jolt.GetObjectLayerPairFilter(), MOVING), new J.BodyFilter(), new J.ShapeFilter()];
+      const query = system.GetNarrowPhaseQuery();
       return {
         step: () => jolt.Step(DT, 1),
+        ray: (o, d, max) => {
+          const origin = cast.mOrigin, dir = cast.mDirection;
+          origin.SetX(o[0]); origin.SetY(o[1]); origin.SetZ(o[2]);
+          dir.SetX(d[0] * max); dir.SetY(d[1] * max); dir.SetZ(d[2] * max);
+          nearest.Reset();
+          query.CastRay(cast, castSettings, nearest, ...filters);
+          return nearest.HadHit() ? nearest.mHit.mFraction * max : -1;
+        },
         position: (i) => { const p = list[i].GetPosition(); return [p.GetX(), p.GetY(), p.GetZ()]; },
         asleep: () => list.reduce((n, b) => n + (b.IsActive() ? 0 : 1), 0),
         mass: () => 1 / list[0].GetMotionProperties().GetInverseMass(),
@@ -168,8 +191,16 @@ const ENGINES = {
         world.addBody(body);
         return body;
       });
+      const result = new C.RaycastResult(), from = new C.Vec3(), to = new C.Vec3();
       return {
         step: () => world.step(DT),
+        ray: (o, d, max) => {
+          from.set(o[0], o[1], o[2]);
+          to.set(o[0] + d[0] * max, o[1] + d[1] * max, o[2] + d[2] * max);
+          result.reset();
+          world.raycastClosest(from, to, {}, result);
+          return result.hasHit ? result.distance : -1;
+        },
         position: (i) => { const p = bodies[i].position; return [p.x, p.y, p.z]; },
         asleep: () => bodies.reduce((n, b) => n + (b.sleepState === C.Body.SLEEPING ? 1 : 0), 0),
         mass: () => bodies[0].mass,
@@ -218,6 +249,9 @@ const SCENES = {
   // One run of its first second only, for now: once it lands, Bearing and
   // cannon-es take a second or more a step, and 4 s three times over took
   // most of an hour. The full scene waits for the performance pass.
+  // The roadmap's raycast scene: 10,000 rays from above into the 1,000-box
+  // pile, as it starts, each asking for the nearest hit within 100 m.
+  rays: { name: '10,000 rays into 1,000 boxes', rays: 10000, boxes: pile(1000) },
   bigpile: { name: '10,000-box pile', seconds: 1, phases: [[0, 1]], runs: 1, boxes: pile(10000) },
 };
 
@@ -234,8 +268,46 @@ const breathe = () => new Promise((resolve) => {
 });
 const median = (xs) => [...xs].sort((a, b) => a - b)[xs.length >> 1];
 
+/** The same 10,000 rays for every engine: from above the pile, at a point in it. */
+const RAYS = (() => {
+  let seed = 1;
+  const r = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
+  const list = [];
+  for (let i = 0; i < 10000; i++) {
+    const o = [(r() - 0.5) * 30, 20 + r() * 10, (r() - 0.5) * 30];
+    const at = [(r() - 0.5) * 22, r() * 12, (r() - 0.5) * 22];
+    const d = at.map((x, k) => x - o[k]), l = Math.hypot(...d);
+    list.push([o, d.map((x) => x / l)]);
+  }
+  return list;
+})();
+
+/** Times each engine casting the rays, in blocks of 1,000, taking turns; the step before isn't timed. */
+async function runRays(scene, names, libs) {
+  const times = Object.fromEntries(names.map((n) => [n, []])), hits = {};
+  for (let run = 0; run < RUNS; run++) {
+    const worlds = {};
+    for (const n of names) { worlds[n] = ENGINES[n].make(libs[n], scene); worlds[n].step(); }
+    const spent = Object.fromEntries(names.map((n) => [n, 0]));
+    const count = Object.fromEntries(names.map((n) => [n, 0]));
+    for (let start = 0, block = 0; start < RAYS.length; start += 1000, block++) {
+      const shift = (block + run) % names.length, turnOrder = [...names.slice(shift), ...names.slice(0, shift)];
+      for (const n of turnOrder) {
+        const w = worlds[n], t = performance.now();
+        for (let i = start; i < start + 1000; i++) if (w.ray(RAYS[i][0], RAYS[i][1], 100) >= 0) count[n]++;
+        spent[n] += performance.now() - t;
+      }
+      say(`${scene.name}, run ${run + 1} of ${RUNS}: ${start + 1000} rays`);
+      await breathe();
+    }
+    for (const n of names) { times[n].push(spent[n]); hits[n] = count[n]; worlds[n].free(); }
+  }
+  return { scene, ms: Object.fromEntries(names.map((n) => [n, [median(times[n])]])), hits };
+}
+
 async function runScene(key, names, libs) {
   const scene = SCENES[key], steps = Math.round(scene.seconds / DT);
+  if (scene.rays) return runRays(scene, names, libs);
   const ends = scene.phases.map(([, b]) => Math.round(b / DT));
   const times = Object.fromEntries(names.map((n) => [n, scene.phases.map(() => [])]));
   let last = null;
@@ -284,8 +356,13 @@ const mm = (m) => `${(m * 1000).toFixed(m < 0.01 ? 2 : 1)} mm`;
 /** Three figures, so a sleeping scene's few microseconds don't print as 0.00. */
 const ms3 = (x) => (x >= 100 ? x.toFixed(0) : x.toPrecision(3));
 
-function table({ scene, ms, quality }) {
+function table({ scene, ms, quality, hits }) {
   const names = Object.keys(ms);
+  if (scene.rays) {
+    const lines = [`### ${scene.name}`, '', '| Engine | ms for all 10,000 | rays that hit |', '|---|---|---|'];
+    for (const n of names) lines.push(`| ${n} | ${ms3(ms[n][0])} | ${hits[n]} |`);
+    return lines.join('\n');
+  }
   const lines = [`### ${scene.name}, ${scene.seconds} s`, ''];
   if (scene.stands) {
     lines.push('| Engine | ms per step | stands | strayed | sank |', '|---|---|---|---|---|');
@@ -324,7 +401,7 @@ async function main() {
     const result = await runScene(key, names, libs);
     results.push(result);
     // Masses must agree, or the scenes differ.
-    const masses = names.map((n) => result.quality[n].mass);
+    const masses = result.quality ? names.map((n) => result.quality[n].mass) : [1000];
     if (masses.some((m) => Math.abs(m - 1000) > 1e-6)) out.textContent += `\n\nMASSES DIFFER: ${names.map((n, i) => `${n} ${masses[i]}`).join(', ')}`;
     out.textContent = `${header}\n\n${results.map(table).join('\n\n')}`;
   }

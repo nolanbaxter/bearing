@@ -77,6 +77,12 @@ These were made with Nolan and override the rules below where they differ.
   patch is PIXEL of the rolling body's size, so rolling resistance is 0.01 for every ball and
   capsule. No option. Within a step, a round shape's contact is followed by its core (centre or
   axis), not a surface point, which on a fast-rolling ball rolled away and made it hop.
+- **Queries** (2026-10-14, milestone 8, approved): `raycast`, `raycastAll`, `shapeCast`, `overlap`,
+  options `maxDistance`, `mask` (matched against bodies' `layers` only), `ignore`, `rotation`.
+  Direction normalized (Winding's raycast doesn't). Solid: starting inside hits at 0. Shapes are
+  placed from current position and rotation; bodies that left their fat box mid-step are found
+  through a per-step stray list, and queries never write to the tree. GJK lives in `src/gjk.js`
+  for casts now and CCD and hulls later.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

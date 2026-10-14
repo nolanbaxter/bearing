@@ -262,12 +262,24 @@ targets for milestone 16 (Nolan, 2026-10-14). Still to do: the desktop's run.
 
 ### Part two: querying and level content
 
-**8. Queries ⬜**
+**8. Queries ✅** *(approved and done 2026-10-14)*
 *Concepts:* ray–shape intersection; GJK; shape casts by conservative advancement; tree traversal.
 `world.raycast` (nearest hit), all hits along a ray, shape casts and overlap tests, through the
 broadphase tree; results as plain data or `null` *(proposal)*. GJK arrives here for shape casts.
 *Done when:* every query matches a brute-force answer on random scenes; 10,000 rays a step are
 timed.
+*Result:* `world.raycast`, `raycastAll`, `shapeCast` and `overlap` (`src/query.js`), with GJK
+(`src/gjk.js`) and a ray walk of the tree (`src/tree.js`), held by `test/query.test.js` against
+answers worked out without the code they check: rays against marching the ray into each shape by
+its options, to 1e-9 m; the world's rays against every body tested alone, through mask, ignore and
+maxDistance; GJK against sampling one core against exact distances to the other; shape casts
+against marching the shape forward and testing the narrowphase; overlap against the narrowphase on
+every body. Breaking the tree walk, the filters or the casts fails them. Direction is normalized,
+so distances are metres; a ray starting inside a body meets it at 0. A body knocked out of its fat
+box mid-step is still found before the next step, without the query touching the tree, so asking
+never changes the simulation. Shape casts by conservative advancement: over 2,000 random casts a
+hit took at most 6 advances. 10,000 rays into 1,000 boxes: Bearing 72.5 ms, Rapier 32.6, Jolt 342,
+cannon-es 650 (`bench/RESULTS.md`).
 
 **9. Triangle meshes and heightfields ⬜**
 *Concepts:* triangle BVHs; heightfields; internal edges and ghost collisions; the glTF binary format.

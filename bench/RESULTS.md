@@ -42,6 +42,18 @@ Jolt 1.1.0, single-threaded; cannon-es 0.20.0.
 | Jolt | 7.16 | 6.99 | 107 of 1,000 | 0 |
 | cannon-es | 28.0 | 32.4 | 451 of 1,000 | 0 |
 
+### 10,000 rays into 1,000 boxes
+
+From above into the 1,000-box pile as it starts, each the nearest hit within 100 m; each engine's
+own nearest-hit query. 2026-10-14, with milestone 8's queries.
+
+| Engine | ms for all 10,000 | rays that hit |
+|---|---|---|
+| Bearing | 72.5 | 10,000 |
+| Rapier | 32.6 | 10,000 |
+| Jolt | 342 | 10,000 |
+| cannon-es | 650 | 10,000 |
+
 ### 10,000-box pile
 
 Not run. Once it lands, Bearing and cannon-es each take a second or more a step, and three runs
@@ -53,7 +65,8 @@ when it is worth the time.
 - **Faster than cannon-es on every scene:** not yet. Faster on the pyramid (3.8×) and the stack,
   where cannon-es also lets both fall; 1.4× slower on the 1,000-box pile.
 - **Within 2× of Rapier's time per step:** far from it. 3× on the stack, 20× on the pyramid, 14 to
-  23× on the pile. Jolt is between: 6× faster than Bearing on the pile.
+  23× on the pile. Jolt is between: 6× faster than Bearing on the pile. Raycasts are nearest:
+  2.2× Rapier's time, and 4.7 times faster than Jolt's.
 - **Stacks stand wherever they stand in Rapier and Jolt:** met, and held tightest of the four: the
   stack strayed 0.95 mm in Bearing against 9.5 in Rapier and 20 in Jolt, and the pyramid sank
   7.9 mm against 25 to 27.

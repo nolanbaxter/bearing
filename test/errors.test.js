@@ -130,6 +130,51 @@ const cases = [
   ['world-body', () => gone().world.body(0), 'body: this world was destroyed'],
   ['world-body', () => fresh().world.body(1.5), 'body: id must be a whole number from 0 to 9007199254740991, got 1.5'],
 
+  ...['raycast', 'raycastAll'].flatMap((call) => {
+    const e = `world-${call.toLowerCase()}`, run = (...args) => () => fresh().world[call](...args);
+    return [
+      [e, () => gone().world[call]([0, 0, 0], [0, -1, 0]), `${call}: this world was destroyed`],
+      [e, run([0, 0], [0, -1, 0]), `${call}: origin must be 3 finite numbers, got 0,0`],
+      [e, run([0, 0, 0], [0, 0, 0]), `${call}: direction must be 3 finite numbers, not all zero, got 0,0,0`],
+      [e, run([0, 0, 0], [0, -1, 0], 3), `${call}: options must be an object, got 3`],
+      [e, run([0, 0, 0], [0, -1, 0], { maxDistanse: 1 }), `${call}: unknown option 'maxDistanse' (did you mean 'maxDistance'?)`],
+      [e, run([0, 0, 0], [0, -1, 0], { layers: 1 }), `${call}: unknown option 'layers' (the options are maxDistance, mask, ignore)`],
+      [e, run([0, 0, 0], [0, -1, 0], { maxDistance: -1 }), `${call}: maxDistance must be 0 or more, got -1`],
+      [e, run([0, 0, 0], [0, -1, 0], { mask: 1.5 }), `${call}: mask must be a whole number that fits in 32 bits, got 1.5`],
+      [e, run([0, 0, 0], [0, -1, 0], { ignore: 7 }), `${call}: ignore must be a Body of this world, got 7`],
+    ];
+  }),
+  ...['shapeCast', 'overlap'].flatMap((call) => {
+    const e = `world-${call.toLowerCase()}`, cast = call === 'shapeCast';
+    const run = (shape, place = [0, 0, 0], o) => () => {
+      const { world } = fresh();
+      return cast ? world.shapeCast(shape, place, [0, -1, 0], o) : world.overlap(shape, place, o);
+    };
+    const where = cast ? 'origin' : 'position';
+    return [
+      [e, () => (cast ? gone().world.shapeCast({}, [0, 0, 0], [0, -1, 0]) : gone().world.overlap({}, [0, 0, 0])), `${call}: this world was destroyed`],
+      [e, run('box'), `${call}: shape must be an object, got 'box'`],
+      [e, run({ radus: 1 }), `${call}: unknown option 'radus' (did you mean 'radius'?)`],
+      [e, run({ friction: 1 }), `${call}: unknown option 'friction' (the options are shape, size, radius, height)`],
+      [e, run({ shape: 'cone' }), `${call}: shape must be 'box', 'sphere' or 'capsule', got 'cone'`],
+      [e, run({ radius: 1 }), `${call}: a box has no radius`],
+      [e, run({ size: [1, 0, 1] }), `${call}: size must be 3 positive numbers, got 1,0,1`],
+      [e, run({ shape: 'sphere', radius: -1 }), `${call}: radius must be a positive number, got -1`],
+      [e, run({ shape: 'capsule', height: 0 }), `${call}: height must be a positive number, got 0`],
+      [e, run({ shape: 'capsule', radius: 1, height: 1 }), `${call}: height must be at least twice radius (2), got 1`],
+      [e, run({}, [0, NaN, 0]), `${call}: ${where} must be 3 finite numbers, got 0,NaN,0`],
+      [e, run({}, [0, 0, 0], []), `${call}: options must be an object, got an empty array`],
+      [e, run({}, [0, 0, 0], { rotaton: [0, 0, 0, 1] }), `${call}: unknown option 'rotaton' (did you mean 'rotation'?)`],
+      [e, run({}, [0, 0, 0], { speed: 1 }), `${call}: unknown option 'speed' (the options are ${cast ? 'maxDistance, ' : ''}mask, ignore, rotation)`],
+      [e, run({}, [0, 0, 0], { mask: -1.5 }), `${call}: mask must be a whole number that fits in 32 bits, got -1.5`],
+      [e, run({}, [0, 0, 0], { ignore: {} }), `${call}: ignore must be a Body of this world, got an object`],
+      [e, run({}, [0, 0, 0], { rotation: [0, 0, 0, 0] }), `${call}: rotation must be 4 finite numbers, not all zero, got 0,0,0,0`],
+      ...(cast ? [
+        [e, () => fresh().world.shapeCast({}, [0, 0, 0], [0, 0, 0]), 'shapeCast: direction must be 3 finite numbers, not all zero, got 0,0,0'],
+        [e, run({}, [0, 0, 0], { maxDistance: NaN }), 'shapeCast: maxDistance must be 0 or more, got NaN'],
+      ] : []),
+    ];
+  }),
   ['world-step', () => gone().world.step(1 / 60), 'step: this world was destroyed'],
   ['world-step', () => fresh().world.step(0), 'step: dt must be a positive number of seconds, got 0'],
 

@@ -274,6 +274,65 @@ export class Tree {
   }
 }
 
+/**
+ * Calls visit(item, leaf) for every leaf whose box, grown by (gx, gy, gz) on
+ * every side, the ray from (ox, oy, oz) along (dx, dy, dz) passes through
+ * between 0 and maxT. visit returns the maxT to carry on with: a nearer hit
+ * returns its own distance, and from then on nothing beyond it is opened,
+ * which is how a nearest-hit query leaves most of the tree unvisited. The
+ * growth is for a shape cast: a node's box grown by the moving shape's
+ * half-extents is everywhere its centre could be and still touch the box.
+ * Returns the last maxT.
+ */
+export function raycast(tree, ox, oy, oz, dx, dy, dz, maxT, gx, gy, gz, visit) {
+  if (tree.root === NULL) return maxT;
+  const b = tree.box;
+  // A zero component would give 0 * Infinity = NaN on a slab's edge, so it
+  // is tested as "inside the slab or not" instead.
+  const ix = 1 / dx, iy = 1 / dy, iz = 1 / dz;
+  let stack = tree.stack, top = 0;
+  stack[top++] = tree.root;
+  while (top > 0) {
+    const n = stack[--top], o = 6 * n;
+    let t0 = 0, t1 = maxT;
+    if (dx === 0) {
+      if (ox < b[o] - gx || ox > b[o + 3] + gx) continue;
+    } else {
+      let near = (b[o] - gx - ox) * ix, far = (b[o + 3] + gx - ox) * ix;
+      if (near > far) { const s = near; near = far; far = s; }
+      if (near > t0) t0 = near;
+      if (far < t1) t1 = far;
+      if (t0 > t1) continue;
+    }
+    if (dy === 0) {
+      if (oy < b[o + 1] - gy || oy > b[o + 4] + gy) continue;
+    } else {
+      let near = (b[o + 1] - gy - oy) * iy, far = (b[o + 4] + gy - oy) * iy;
+      if (near > far) { const s = near; near = far; far = s; }
+      if (near > t0) t0 = near;
+      if (far < t1) t1 = far;
+      if (t0 > t1) continue;
+    }
+    if (dz === 0) {
+      if (oz < b[o + 2] - gz || oz > b[o + 5] + gz) continue;
+    } else {
+      let near = (b[o + 2] - gz - oz) * iz, far = (b[o + 5] + gz - oz) * iz;
+      if (near > far) { const s = near; near = far; far = s; }
+      if (near > t0) t0 = near;
+      if (far < t1) t1 = far;
+      if (t0 > t1) continue;
+    }
+    if (tree.height[n] === 0) {
+      maxT = visit(tree.item[n], n);
+      continue;
+    }
+    if (top + 2 > stack.length) stack = tree.stack = resized(stack, stack.length * 2);
+    stack[top++] = tree.child2[n];
+    stack[top++] = tree.child1[n];
+  }
+  return maxT;
+}
+
 /** Half the surface area of a box: what matters is how areas compare, so the factor of 2 is left out. */
 function surface(x0, y0, z0, x1, y1, z1) {
   const x = x1 - x0, y = y1 - y0, z = z1 - z0;

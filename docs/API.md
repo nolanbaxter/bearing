@@ -49,7 +49,7 @@ These hold everywhere, so one learned is one learned for good.
 <a id="contents"></a>
 ## Contents
 
-[World](#world-class) · [Body](#body) · [Contacts](#contacts) · [Layers and masks](#layers) · [Sleeping](#sleeping) · [Determinism](#determinism) · [Limits](#limits)
+[World](#world-class) · [Body](#body) · [Contacts](#contacts) · [Layers and masks](#layers) · [Sleeping](#sleeping) · [Queries](#queries) · [Determinism](#determinism) · [Limits](#limits)
 
 <a id="index"></a>
 ## Index
@@ -72,11 +72,15 @@ Every call, setting and entry, A to Z by its name.
 
 **M** &nbsp; [`body.mass`](#body-mass) · [`world.moved()`](#world-moved)
 
+**O** &nbsp; [`world.overlap()`](#world-overlap)
+
 **P** &nbsp; [`body.position`](#body-position) · [`world.previous`](#world-previous)
 
-**R** &nbsp; [`world.remove()`](#world-remove) · [`body.rotation`](#body-rotation)
+**Q** &nbsp; [Queries](#queries)
 
-**S** &nbsp; [`body.setAngularVelocity()`](#body-setangularvelocity) · [`body.setAxisAngle()`](#body-setaxisangle) · [`world.setBody()`](#world-setbody) · [`body.setEuler()`](#body-seteuler) · [`body.setPosition()`](#body-setposition) · [`body.setRotation()`](#body-setrotation) · [`body.setVelocity()`](#body-setvelocity) · [`world.sleeping`](#world-sleeping) · [Sleeping](#sleeping) · [`body.slot`](#body-slot) · [`world.step()`](#world-step) · [`world.stepCount`](#world-stepcount) · [`world.substeps`](#world-substeps)
+**R** &nbsp; [`world.raycast()`](#world-raycast) · [`world.raycastAll()`](#world-raycastall) · [`world.remove()`](#world-remove) · [`body.rotation`](#body-rotation)
+
+**S** &nbsp; [`body.setAngularVelocity()`](#body-setangularvelocity) · [`body.setAxisAngle()`](#body-setaxisangle) · [`world.setBody()`](#world-setbody) · [`body.setEuler()`](#body-seteuler) · [`body.setPosition()`](#body-setposition) · [`body.setRotation()`](#body-setrotation) · [`body.setVelocity()`](#body-setvelocity) · [`world.shapeCast()`](#world-shapecast) · [`world.sleeping`](#world-sleeping) · [Sleeping](#sleeping) · [`body.slot`](#body-slot) · [`world.step()`](#world-step) · [`world.stepCount`](#world-stepcount) · [`world.substeps`](#world-substeps)
 
 **T** &nbsp; [`world.transforms`](#world-transforms)
 
@@ -382,6 +386,111 @@ Throws: `body: this world was destroyed`; `body: id must be a whole number from 
 const id = crate.id;
 const again = world.body(id);
 console.log(again.id === crate.id);   // true
+```
+
+<a id="world-raycast"></a>
+### `world.raycast(origin, direction, options)` → `{ body, point, normal, distance } | null`
+
+Finds the nearest body a ray meets, from `origin` along `direction`, both world-space arrays of 3.
+`direction` needn't be unit length: it is normalized, so `distance` is always in metres. See
+[Queries](#queries).
+
+| Option | Default | Meaning |
+|---|---|---|
+| `maxDistance` | `Infinity` | Ignore hits this far or further, in metres. |
+| `mask` | `0xffffffff` | Which of the 32 layers to hit, as bits: a body is hit if any of its [`layers`](#layers) is in it. |
+| `ignore` | `null` | A body to leave out, such as the one the ray starts from. |
+
+Returns: `{ body, point, normal, distance }` for the nearest hit, or `null`. `body` is the
+[`Body`](#body) hit, `point` where the ray met its surface, `normal` the surface's outward
+direction there (unit length, facing back at the ray), and `distance` how far along the ray, in
+metres. The arrays are fresh copies, and `body` is a handle that can be kept.
+
+Throws: `raycast: this world was destroyed`; `raycast: origin must be 3 finite numbers, got …`; `raycast: direction must be 3 finite numbers, not all zero, got …`; `raycast: options must be an object, got …`; `raycast: unknown option '…' (did you mean '…'?)`; `raycast: unknown option '…' (the options are maxDistance, mask, ignore)`; `raycast: maxDistance must be 0 or more, got …`; `raycast: mask must be a whole number that fits in 32 bits, got …`; `raycast: ignore must be a Body of this world, got …`.
+
+```js
+const below = world.raycast(player.position, [0, -1, 0], { maxDistance: 2, ignore: player });
+if (below) console.log('ground', below.distance, 'm down');
+```
+
+Notes: a ray that starts inside a body meets it at distance 0, with `normal` back along the ray.
+Every body can be hit: static, kinematic, dynamic and sleeping. `mask` is matched against the
+bodies' `layers` only; what a body's own `mask` lets it collide with doesn't decide what a query
+sees. Winding's `scene.raycast` doesn't normalize `direction`; this one does.
+
+<a id="world-raycastall"></a>
+### `world.raycastAll(origin, direction, options)` → `Array`
+
+Finds every body a ray meets, nearest first. The same as [`raycast`](#world-raycast) in every
+other way, with the same options.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `maxDistance` | `Infinity` | Ignore hits this far or further, in metres. |
+| `mask` | `0xffffffff` | Which of the 32 layers to hit, as bits: a body is hit if any of its [`layers`](#layers) is in it. |
+| `ignore` | `null` | A body to leave out, such as the one the ray starts from. |
+
+Returns: an array of `{ body, point, normal, distance }`, nearest first; `[]` if none. Two bodies
+met at the same distance come in the order they were added.
+
+Throws: `raycastAll: this world was destroyed`; `raycastAll: origin must be 3 finite numbers, got …`; `raycastAll: direction must be 3 finite numbers, not all zero, got …`; `raycastAll: options must be an object, got …`; `raycastAll: unknown option '…' (did you mean '…'?)`; `raycastAll: unknown option '…' (the options are maxDistance, mask, ignore)`; `raycastAll: maxDistance must be 0 or more, got …`; `raycastAll: mask must be a whole number that fits in 32 bits, got …`; `raycastAll: ignore must be a Body of this world, got …`.
+
+```js
+for (const hit of world.raycastAll([0, 20, 0], [0, -1, 0])) console.log(hit.body.id, hit.distance);
+```
+
+Notes: each body is listed once, where the ray first meets it.
+
+<a id="world-shapecast"></a>
+### `world.shapeCast(shape, origin, direction, options)` → `{ body, point, normal, distance } | null`
+
+Slides a shape from `origin` along `direction` and finds the first body it would touch. `shape`
+is a plain object with [`addBody`](#world-addbody)'s names and defaults: `shape` (`'box'`,
+`'sphere'` or `'capsule'`), and `size`, `radius` or `height`; `{}` is a 1 m box. The shape
+doesn't need to be a body, and nothing moves. See [Queries](#queries).
+
+| Option | Default | Meaning |
+|---|---|---|
+| `maxDistance` | `Infinity` | Ignore touches this far along or further, in metres. |
+| `mask` | `0xffffffff` | Which of the 32 layers to hit, as bits. |
+| `ignore` | `null` | A body to leave out, such as the one the shape stands for. |
+| `rotation` | `[0, 0, 0, 1]` | The shape's rotation, a quaternion `[x, y, z, w]`. |
+
+Returns: `{ body, point, normal, distance }` for the first touch, or `null`. `distance` is how far
+the shape slid before touching, in metres; `point` is where it touches the body, on the body's
+surface; `normal` is the body's surface direction there, facing back at the shape.
+
+Throws: `shapeCast: this world was destroyed`; `shapeCast: shape must be an object, got …`; `shapeCast: unknown option '…' (did you mean '…'?)`; `shapeCast: unknown option '…' (the options are shape, size, radius, height)`; `shapeCast: shape must be 'box', 'sphere' or 'capsule', got …`; `shapeCast: a <shape> has no <option>`; `shapeCast: size must be 3 positive numbers, got …`; `shapeCast: radius must be a positive number, got …`; `shapeCast: height must be a positive number, got …`; `shapeCast: height must be at least twice radius (…), got …`; `shapeCast: origin must be 3 finite numbers, got …`; `shapeCast: direction must be 3 finite numbers, not all zero, got …`; `shapeCast: options must be an object, got …`; `shapeCast: unknown option '…' (the options are maxDistance, mask, ignore, rotation)`; `shapeCast: maxDistance must be 0 or more, got …`; `shapeCast: mask must be a whole number that fits in 32 bits, got …`; `shapeCast: ignore must be a Body of this world, got …`; `shapeCast: rotation must be 4 finite numbers, not all zero, got …`.
+
+```js
+// How far can the player step forward before walking into something?
+const ahead = world.shapeCast({ shape: 'capsule', radius: 0.3, height: 1.8 }, player.position, [0, 0, -1],
+  { maxDistance: 0.5, ignore: player });
+```
+
+Notes: it stops within the contact tolerance, about a pixel, short of touching, never past it, so a
+small fast shape can't skip through a thin wall however far it slides. A shape that starts
+overlapping a body touches it at distance 0, with `normal` the way out.
+
+<a id="world-overlap"></a>
+### `world.overlap(shape, position, options)` → `Array`
+
+Finds every body a shape placed at `position` overlaps or touches. `shape` is as for
+[`shapeCast`](#world-shapecast). See [Queries](#queries).
+
+| Option | Default | Meaning |
+|---|---|---|
+| `mask` | `0xffffffff` | Which of the 32 layers to find, as bits. |
+| `ignore` | `null` | A body to leave out. |
+| `rotation` | `[0, 0, 0, 1]` | The shape's rotation, a quaternion `[x, y, z, w]`. |
+
+Returns: an array of [`Body`](#body), in no particular order; `[]` if none.
+
+Throws: `overlap: this world was destroyed`; `overlap: shape must be an object, got …`; `overlap: unknown option '…' (did you mean '…'?)`; `overlap: unknown option '…' (the options are shape, size, radius, height)`; `overlap: shape must be 'box', 'sphere' or 'capsule', got …`; `overlap: a <shape> has no <option>`; `overlap: size must be 3 positive numbers, got …`; `overlap: radius must be a positive number, got …`; `overlap: height must be a positive number, got …`; `overlap: height must be at least twice radius (…), got …`; `overlap: position must be 3 finite numbers, got …`; `overlap: options must be an object, got …`; `overlap: unknown option '…' (the options are mask, ignore, rotation)`; `overlap: mask must be a whole number that fits in 32 bits, got …`; `overlap: ignore must be a Body of this world, got …`; `overlap: rotation must be 4 finite numbers, not all zero, got …`.
+
+```js
+const blast = [0, 1, 0];   // where an explosion went off
+for (const body of world.overlap({ shape: 'sphere', radius: 4 }, blast)) body.applyImpulse([0, 2000, 0]);
 ```
 
 <a id="world-step"></a>
@@ -861,6 +970,27 @@ tolerance over a second squared (0.01 m/s² for a 1 m box), can fall asleep befo
 box on a slope within a twentieth of a degree of where friction holds it stays put. Nudge it, or
 switch sleeping off. A heap sleeps only when all of it has stopped, so one slowly settling corner
 keeps the whole heap awake until it, too, comes to rest.
+
+<a id="queries"></a>
+## Queries
+
+[`raycast`](#world-raycast), [`raycastAll`](#world-raycastall), [`shapeCast`](#world-shapecast) and
+[`overlap`](#world-overlap) ask the world questions without changing it.
+
+- **They see the world as it is now.** Every body is tested where it is at the moment of asking,
+  after the last step and any teleport since, not where the last step began.
+- **They look only near the answer.** Each walks the tree of nested boxes the bodies are filed in
+  for finding contacts, opening only boxes the ray or shape reaches; a ray stops looking past
+  the nearest thing it has already met. So a ray across a world of thousands of bodies tests a
+  handful exactly.
+- **Exact for every shape.** A ray meets a sphere, a capsule or a box where the equations say. A
+  shape cast measures the gap to each body it might touch with GJK (Gilbert, Johnson and
+  Keerthi's closest-point method), slides the shape forward by as much as is surely safe, and
+  measures again, which can never step past a touch.
+- **Nothing kept, nothing spent.** A query costs nothing until called, and asking never changes
+  what the world does next: the same steps give the same results to the bit, asked or not.
+
+Notes: results are fresh objects each call; a query isn't meant for the inside of a step.
 
 <a id="determinism"></a>
 ## Determinism

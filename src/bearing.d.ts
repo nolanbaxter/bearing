@@ -112,6 +112,44 @@ export type BodyInfo =
   | (BodyInfoCommon & { shape: 'sphere'; radius: number })
   | (BodyInfoCommon & { shape: 'capsule'; radius: number; height: number });
 
+/** What raycast, raycastAll and shapeCast find. */
+export interface Hit {
+  /** The body met. A handle: safe to keep. */
+  body: Body;
+  /** Where on its surface, m. */
+  point: [number, number, number];
+  /** The surface's outward direction there, unit length, facing back at the ray or shape. */
+  normal: [number, number, number];
+  /** How far along, m. */
+  distance: number;
+}
+
+export interface RayOptions {
+  /** Ignore hits this far or further, m. Default Infinity. */
+  maxDistance?: number;
+  /** Which of the 32 layers to hit, as bits. Default 0xffffffff. */
+  mask?: number;
+  /** A body to leave out. */
+  ignore?: Body | null;
+}
+
+export interface CastOptions extends RayOptions {
+  /** The shape's rotation, [x, y, z, w]. Default [0, 0, 0, 1]. */
+  rotation?: Quat;
+}
+
+export interface OverlapOptions {
+  mask?: number;
+  ignore?: Body | null;
+  rotation?: Quat;
+}
+
+/** A shape to cast or test, with addBody's names and defaults: {} is a 1 m box. */
+export type QueryShape =
+  | { shape?: 'box'; size?: Vec3 }
+  | { shape: 'sphere'; radius?: number }
+  | { shape: 'capsule'; radius?: number; height?: number };
+
 export interface WorldOptions {
   /** m/s², default [0, -9.81, 0]. */
   gravity?: Vec3;
@@ -151,6 +189,14 @@ export class World {
   bodyOf(body: Body): BodyInfo;
   /** Does nothing if the body is already gone. */
   remove(body: Body): void;
+  /** The nearest body a ray meets. direction is normalized, so distance is in metres. */
+  raycast(origin: Vec3, direction: Vec3, options?: RayOptions): Hit | null;
+  /** Every body a ray meets, nearest first. */
+  raycastAll(origin: Vec3, direction: Vec3, options?: RayOptions): Hit[];
+  /** The first body a shape, slid from origin along direction, would touch. */
+  shapeCast(shape: QueryShape, origin: Vec3, direction: Vec3, options?: CastOptions): Hit | null;
+  /** Every body a shape placed at position overlaps or touches. */
+  overlap(shape: QueryShape, position: Vec3, options?: OverlapOptions): Body[];
   /** A handle for an id. Doesn't check the body is alive. */
   body(id: number): Body;
   /** Moves the world on by dt seconds, exactly. */

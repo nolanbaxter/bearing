@@ -62,6 +62,14 @@ All notable changes to Bearing are recorded here. The format follows
   or capsule, so a ball rolled at 1 m/s rolls 7.1 m and stops, at any size. A fast-rolling ball
   also stays on the floor: the solver now follows a ball's contact by its centre, not by a point
   on its surface that rolled up and away.
+- Queries. `world.raycast(origin, direction, options)` finds the nearest body a ray meets, and
+  `world.raycastAll` every one, nearest first, each as `{ body, point, normal, distance }`.
+  `world.shapeCast(shape, origin, direction, options)` slides a sphere, box or capsule and finds
+  the first body it would touch, stopping within a pixel of it and never past it.
+  `world.overlap(shape, position, options)` lists the bodies a shape placed there overlaps. Each
+  takes `mask` and `ignore`; rays and casts take `maxDistance`. Queries see the world as it is
+  between steps, walk the broadphase's tree, and never change what the world does. 10,000 rays into
+  1,000 boxes take 73 ms on the laptop.
 - `world.moved(since)`: the slots of the bodies an engine has to draw again since it last drew at
   step `since`, exact however many steps ran in between, so a world of sleeping bodies copies
   nothing. `world.stepCount` counts the steps.

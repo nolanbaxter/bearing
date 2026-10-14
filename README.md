@@ -32,6 +32,8 @@ density unless you give one), no tolerances to tune, and nothing to size in adva
 - **Thousands of bodies**: only bodies whose boxes overlap are tested. Bodies at rest go to sleep
   and cost nothing until something disturbs them, and `world.moved()` lists only the bodies a
   renderer has to draw again. 32 collision layers, with a mask per body for what it collides with.
+- **Queries**: raycasts (nearest, or every hit), shape casts and overlap tests, exact for every
+  shape and quick through the same tree the contacts use.
 - **Tolerances that scale**: every tolerance comes from the size of what touches, so a 1 cm marble
   and a 50 m building behave with nothing retuned. See [Contacts](docs/API.md#contacts).
 

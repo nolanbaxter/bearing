@@ -22,7 +22,7 @@
 // use fall to a quarter of it. Nothing is sized in advance.
 
 import {
-  fail, show, finite, positive, positive3, vec3, xyz, quat, oneOf, options, known, readOnly,
+  fail, show, finite, positive, positive3, vec3, xyz, quat, direction, oneOf, options, known, readOnly,
 } from './core/check.js';
 import { rotate } from './core/math.js';
 import { Slots, resized, MAX_ID, MAX_SLOTS } from './core/slots.js';
@@ -33,6 +33,8 @@ import {
 import { Broadphase } from './broadphase.js';
 import { Pairs } from './pairs.js';
 import { Body } from './body.js';
+import { Shape, SPHERE as SPHERE_KIND, CAPSULE as CAPSULE_KIND, BOX as BOX_KIND } from './collide.js';
+import { ray, shapeCast as cast, overlap as overlapping } from './query.js';
 
 const TYPES = ['dynamic', 'static', 'kinematic'];
 const DYNAMIC = 0, STATIC = 1, KINEMATIC = 2;
@@ -43,6 +45,10 @@ const BOX = 0, SPHERE = 1, CAPSULE = 2;
 const SHAPE_SIZES = { box: ['size'], sphere: ['radius'], capsule: ['radius', 'height'] };
 
 const WORLD_OPTIONS = ['gravity', 'substeps', 'sleeping'];
+const RAY_OPTIONS = ['maxDistance', 'mask', 'ignore'];
+const CAST_OPTIONS = ['maxDistance', 'mask', 'ignore', 'rotation'];
+const OVERLAP_OPTIONS = ['mask', 'ignore', 'rotation'];
+const SHAPE_OPTIONS = ['shape', 'size', 'radius', 'height'];
 
 // THE SOLVER'S SHAPE, all measured with bench/solver.js (i7-1260P, Node 22),
 // on a 1 m box dropped flat, a 10-box stack and a 210-box pyramid, 10 s at
@@ -225,6 +231,13 @@ export class World {
     /** Entries stamped this or earlier were dropped: moved() asked about older steps reads every body. */
     this._logFloor = 0;
     this._seenMark = 0;
+    // Queries (query.js): bodies that ended the last step outside their fat
+    // boxes, listed by the first query after the step, and anything that
+    // adds, removes or moves a body by hand since.
+    this._strays = [];
+    this._straysAt = -1;
+    this._straysEpoch = -1;
+    this._epoch = 0;
   }
 
   // ---- settings and state ----
@@ -327,6 +340,7 @@ export class World {
     const s = this._slotOfBody('setBody', body);
     const o = options('setBody', changes, 'changes');
     const spec = resolve('setBody', this._spec(s), o);
+    this._epoch++;
     // Any change can change what holds it, so its island wakes first (rule 36).
     this._wake(s);
     // Moving or turning a body by hand is a teleport: `previous` moves with it,
@@ -410,6 +424,56 @@ export class World {
       if (s < top && state[s] === 1 && at[s] > after && seen[s] !== mark) { seen[s] = mark; out[k++] = s; }
     }
     return out.subarray(0, k);
+  }
+
+  // ---- queries (query.js) ----
+
+  /** The nearest body the ray from `origin` along `direction` meets, or null. */
+  raycast(origin, direction_, options_) {
+    const p = this._origin('raycast', origin), d = direction('raycast', 'direction', direction_);
+    const o = this._queryOptions('raycast', options_, RAY_OPTIONS);
+    let found = null;
+    // Only ever nearer hits are reported after the first, so the last is the nearest.
+    ray(this, p[0], p[1], p[2], d[0], d[1], d[2], o.maxDistance, o.mask, o.ignore, (s, t, n) => {
+      found = this._hit(s, t, n, p[0] + t * d[0], p[1] + t * d[1], p[2] + t * d[2]);
+    }, true);
+    return found;
+  }
+
+  /** Every body the ray meets, nearest first. */
+  raycastAll(origin, direction_, options_) {
+    const p = this._origin('raycastAll', origin), d = direction('raycastAll', 'direction', direction_);
+    const o = this._queryOptions('raycastAll', options_, RAY_OPTIONS);
+    const hits = [];
+    ray(this, p[0], p[1], p[2], d[0], d[1], d[2], o.maxDistance, o.mask, o.ignore, (s, t, n) => {
+      hits.push(this._hit(s, t, n, p[0] + t * d[0], p[1] + t * d[1], p[2] + t * d[2]));
+    }, false);
+    // Ties go to the earlier slot, so the order depends only on the inputs.
+    return hits.sort((a, b) => a.distance - b.distance || a.body.slot - b.body.slot);
+  }
+
+  /** The first body `shape`, moving from `origin` along `direction`, would touch, or null. */
+  shapeCast(shape, origin, direction_, options_) {
+    const s = this._queryShape('shapeCast', shape);
+    const p = this._origin('shapeCast', origin), d = direction('shapeCast', 'direction', direction_);
+    const o = this._queryOptions('shapeCast', options_, CAST_OPTIONS);
+    s.place(p[0], p[1], p[2], o.rotation);
+    let found = null;
+    cast(this, s, d[0], d[1], d[2], o.maxDistance, o.mask, o.ignore, (slot, t, n, at) => {
+      found = this._hit(slot, t, n, at[0], at[1], at[2]);
+    });
+    return found;
+  }
+
+  /** The bodies `shape`, placed at `position`, overlaps or touches. */
+  overlap(shape, position, options_) {
+    const s = this._queryShape('overlap', shape);
+    const p = vec3('overlap', 'position', position);
+    const o = this._queryOptions('overlap', options_, OVERLAP_OPTIONS);
+    s.place(p[0], p[1], p[2], o.rotation);
+    const bodies = [];
+    overlapping(this, s, o.mask, o.ignore, (slot) => bodies.push(new Body(this, this._slots.id(slot))));
+    return bodies;
   }
 
   body(id) {
@@ -713,8 +777,74 @@ export class World {
     }
   }
 
+  _origin(caller, value) {
+    this._live(caller);
+    return vec3(caller, 'origin', value);
+  }
+
+  /** A query's options, checked, with their defaults. */
+  _queryOptions(caller, given, names) {
+    const o = options(caller, given);
+    known(caller, o, names);
+    let maxDistance = Infinity;
+    if (o.maxDistance !== undefined) {
+      const m = o.maxDistance;
+      if (typeof m !== 'number' || !(m >= 0)) fail(caller, `maxDistance must be 0 or more, got ${show(m)}`);
+      maxDistance = m;
+    }
+    const mask = o.mask === undefined ? 0xffffffff : bits(caller, 'mask', o.mask);
+    // A removed body leaves nothing to leave out; one from another world is a mistake.
+    let ignore = -1;
+    if (o.ignore !== undefined && o.ignore !== null) {
+      if (!(o.ignore instanceof Body) || o.ignore.world !== this) fail(caller, `ignore must be a Body of this world, got ${show(o.ignore)}`);
+      ignore = this._slots.slotOf(o.ignore.id);
+    }
+    const rotation = o.rotation === undefined ? [0, 0, 0, 1] : quat(caller, 'rotation', o.rotation);
+    return { maxDistance, mask, ignore, rotation };
+  }
+
+  /**
+   * A query's shape, checked as addBody checks a body's, with the same names
+   * and defaults, into one Shape reused by every query.
+   */
+  _queryShape(caller, given) {
+    this._live(caller);
+    const o = options(caller, given, 'shape');
+    known(caller, o, SHAPE_OPTIONS);
+    const has = (k) => o[k] !== undefined;
+    const shape = has('shape') ? oneOf(caller, 'shape', o.shape, SHAPES) : DEFAULTS.shape;
+    for (const k of ['size', 'radius', 'height']) {
+      if (has(k) && !SHAPE_SIZES[shape].includes(k)) fail(caller, `a ${shape} has no ${k}`);
+    }
+    const s = QUERY;
+    if (shape === 'box') {
+      const size = has('size') ? positive3(caller, 'size', o.size) : DEFAULTS.size;
+      s.kind = BOX_KIND;
+      s.half[0] = size[0] * 0.5; s.half[1] = size[1] * 0.5; s.half[2] = size[2] * 0.5;
+      return s;
+    }
+    const radius = has('radius') ? positive(caller, 'radius', o.radius) : DEFAULTS.radius;
+    if (shape === 'sphere') {
+      s.kind = SPHERE_KIND;
+      s.half[0] = radius;
+      return s;
+    }
+    const height = has('height') ? positive(caller, 'height', o.height) : DEFAULTS.height;
+    if (height < 2 * radius) fail(caller, `height must be at least twice radius (${2 * radius}), got ${height}`);
+    s.kind = CAPSULE_KIND;
+    s.half[0] = radius;
+    s.half[1] = (height - 2 * radius) * 0.5;
+    return s;
+  }
+
+  /** A query's result: plain data, fresh copies, and a handle that can be kept. */
+  _hit(s, distance, n, x, y, z) {
+    return { body: new Body(this, this._slots.id(s)), point: [x, y, z], normal: [n[0], n[1], n[2]], distance };
+  }
+
   /** Marks slot s as moved by hand, or added, since the last step. */
   _stamp(s) {
+    this._epoch++;
     this._movedAt[s] = this._stepCount + 1;
     this._log(s);
   }
@@ -1050,6 +1180,7 @@ export class World {
     this._forced[s] = 0;
     this._force.fill(0, s * 3, s * 3 + 3);
     this._torque.fill(0, s * 3, s * 3 + 3);
+    this._epoch++;
     // What it was holding up, or resting on, wakes: its own island now, and
     // anything asleep against it at the next step, which finds it gone.
     this._wake(s);
@@ -1368,6 +1499,9 @@ function tumble(q, s4, I, inv, s3, w, dt) {
 }
 
 const q4 = new Float64Array(4);
+
+/** The shape a query is asked about, filled by _queryShape; queries aren't re-entered. */
+const QUERY = new Shape();
 
 /** out[oo..] = normalize(q + h (ω, 0) q), for q at q[o..]. out may be q. */
 function advance(q, o, wx, wy, wz, h, out, oo) {

@@ -23,6 +23,12 @@ export function examples(): void {
   const settled: boolean = debris.asleep;
   let drawn: number = quiet.stepCount;
   for (const slot of world.moved(drawn)) drawn += slot;
+  const hit = world.raycast([0, 5, 0], [0, -1, 0], { maxDistance: 10, ignore: debris });
+  const far: number = hit ? hit.distance + hit.point[1] + hit.normal[1] + hit.body.mass : 0;
+  const all = world.raycastAll([0, 5, 0], [0, -1, 0]);
+  const cast = world.shapeCast({ shape: "capsule", radius: 0.3, height: 1.8 }, [0, 5, 0], [1, 0, 0], { rotation: [0, 0, 0, 1], mask: 1 });
+  const near: Body[] = world.overlap({ shape: "sphere", radius: 2 }, [0, 0, 0]);
+  const box = world.overlap({}, [0, 0, 0], { mask: ~1 });
   const substeps: number = new World({ substeps: 4 }).substeps;
   const bounce: number = world.bodyOf(ground).restitution;
   void [substeps, bounce];
