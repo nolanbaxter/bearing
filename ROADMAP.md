@@ -257,8 +257,8 @@ confirmed or reset with Nolan.
 *So far (2026-10-14):* the page is built and the laptop's numbers are in `bench/RESULTS.md`:
 stacks stand and hold tightest of the four, but Bearing is 14 to 23 times slower than Rapier
 and 1.4 times slower than cannon-es on the 1,000-box pile. The 10,000-box pile is left for the
-performance pass: run three times it took most of an hour. Still to do: the desktop's run, and
-the goals confirmed or reset with Nolan.
+performance pass: run three times it took most of an hour. The goals are kept as they are, as
+targets for milestone 16 (Nolan, 2026-10-14). Still to do: the desktop's run.
 
 ### Part two: querying and level content
 
