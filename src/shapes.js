@@ -7,8 +7,9 @@
 // shape that breaks that symmetry (a compound, a hull) will need the full
 // tensor and a centre-of-mass offset, and brings both with it.
 
-/** m³. */
+/** m³. A mesh or heightfield is a surface, and encloses none. */
 export function volume(spec) {
+  if (spec.shape === 'mesh' || spec.shape === 'heightfield') return 0;
   const r = spec.radius;
   if (spec.shape === 'box') return spec.size[0] * spec.size[1] * spec.size[2];
   const ball = (4 / 3) * Math.PI * r * r * r;
@@ -39,6 +40,8 @@ export function inertia(spec, mass, out) {
   } else if (spec.shape === 'sphere') {
     const r = spec.radius;
     out[0] = out[1] = out[2] = 0.4 * mass * r * r;
+  } else if (spec.shape === 'mesh' || spec.shape === 'heightfield') {
+    out[0] = out[1] = out[2] = 0;
   } else {
     const r = spec.radius, L = spec.height - 2 * r;
     const cylinder = Math.PI * r * r * L, ball = (4 / 3) * Math.PI * r * r * r;

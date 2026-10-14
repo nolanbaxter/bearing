@@ -35,14 +35,21 @@ import { Pairs } from './pairs.js';
 import { Body } from './body.js';
 import { Shape, SPHERE as SPHERE_KIND, CAPSULE as CAPSULE_KIND, BOX as BOX_KIND } from './collide.js';
 import { ray, shapeCast as cast, overlap as overlapping } from './query.js';
+import { Mesh, Heightfield } from './mesh.js';
 
 const TYPES = ['dynamic', 'static', 'kinematic'];
 const DYNAMIC = 0, STATIC = 1, KINEMATIC = 2;
 
-const SHAPES = ['box', 'sphere', 'capsule'];
-const BOX = 0, SPHERE = 1, CAPSULE = 2;
+const SHAPES = ['box', 'sphere', 'capsule', 'mesh', 'heightfield'];
+const BOX = 0, SPHERE = 1, CAPSULE = 2, MESH = 3;   // a heightfield is 4: shape >= MESH is level geometry
+/** What a query's shape can be: anything a body can be but level geometry. */
+const QUERY_SHAPES = ['box', 'sphere', 'capsule'];
 /** Which sizes each shape has; giving one another shape has throws. */
-const SHAPE_SIZES = { box: ['size'], sphere: ['radius'], capsule: ['radius', 'height'] };
+const SHAPE_SIZES = {
+  box: ['size'], sphere: ['radius'], capsule: ['radius', 'height'],
+  mesh: ['vertices', 'indices'], heightfield: ['heights', 'columns', 'spacing'],
+};
+const SIZES = ['size', 'radius', 'height', 'vertices', 'indices', 'heights', 'columns', 'spacing'];
 
 const WORLD_OPTIONS = ['gravity', 'substeps', 'sleeping'];
 const RAY_OPTIONS = ['maxDistance', 'mask', 'ignore'];
@@ -98,7 +105,8 @@ const DAMPING_RATIO = 10;
 // slope within 0.05° of its friction angle.
 const SLEEP_TIME = 1;
 const BODY_OPTIONS = [
-  'type', 'shape', 'size', 'radius', 'height', 'density', 'mass', 'inertia',
+  'type', 'shape', 'size', 'radius', 'height', 'vertices', 'indices', 'heights', 'columns', 'spacing',
+  'density', 'mass', 'inertia',
   'friction', 'restitution', 'damping', 'angularDamping', 'gravityScale', 'layers', 'mask',
   'position', 'rotation', 'velocity', 'angularVelocity',
 ];
@@ -113,6 +121,9 @@ const BODY_OPTIONS = [
 const GRAVITY = [0, -9.81, 0];
 const DEFAULTS = Object.freeze({
   type: 'dynamic', shape: 'box', size: [1, 1, 1], radius: 0.5, height: 2,
+  // A mesh starts empty; a heightfield as a flat 1 m square, two samples
+  // by two, a metre apart, as a box starts as a 1 m cube.
+  vertices: [], indices: [], heights: [0, 0, 0, 0], columns: 2, spacing: 1, geometry: null,
   density: 1000, mass: 0, massGiven: false, inertia: [0, 0, 0], inertiaGiven: false,
   friction: 0.5, restitution: 0, damping: 0, angularDamping: 0, gravityScale: 1,
   // In the first layer, and colliding with all 32: everything collides with
@@ -186,6 +197,8 @@ export class World {
     this._gravity = o.gravity === undefined ? [...GRAVITY] : vec3('World', 'gravity', o.gravity);
     this._slots = new Slots();
     for (const [name, Type] of COLUMNS) this[name] = new Type(0);
+    /** A mesh's or heightfield's triangles (mesh.js), by slot; null for any other shape. */
+    this._geometry = [];
     /**
      * Slots with a force or torque waiting for the next step. A list, so a step
      * with nothing applied checks nothing (rule 28), however many bodies there
@@ -366,11 +379,21 @@ export class World {
     const s = this._slotOfBody('bodyOf', body);
     const spec = this._spec(s);
     const out = { type: spec.type, shape: spec.shape };
-    for (const k of SHAPE_SIZES[spec.shape]) out[k] = k === 'size' ? [...spec.size] : spec[k];
-    // Whichever the body was given, so addBody(world.bodyOf(b)) makes a copy.
-    if (spec.massGiven) out.mass = spec.mass;
-    else out.density = spec.density;
-    if (spec.inertiaGiven) out.inertia = [...spec.inertia];
+    const g = spec.geometry;
+    if (spec.shape === 'mesh') {
+      out.vertices = Array.from(g.vertices);
+      out.indices = Array.from(g.indices);
+    } else if (spec.shape === 'heightfield') {
+      out.heights = Array.from(g.heights);
+      out.columns = g.columns;
+      out.spacing = g.spacing;
+    } else {
+      for (const k of SHAPE_SIZES[spec.shape]) out[k] = k === 'size' ? [...spec.size] : spec[k];
+      // Whichever the body was given, so addBody(world.bodyOf(b)) makes a copy.
+      if (spec.massGiven) out.mass = spec.mass;
+      else out.density = spec.density;
+      if (spec.inertiaGiven) out.inertia = [...spec.inertia];
+    }
     for (const k of MATERIAL) out[k] = spec[k];
     out.position = [...spec.position];
     out.rotation = [...spec.rotation];
@@ -614,7 +637,7 @@ export class World {
    */
   _sleep(dt) {
     const list = this._awakeList, p = this._position, q = this._rotation, rest = this._rest, still = this._still;
-    const size = this._size, reach = this._reach;
+    const size = this._size, reach = this._reach, type = this._type, v = this._velocity, w = this._angular;
     let ready = false;
     for (let i = 0; i < this._awakeCount; i++) {
       const s = list[i], s3 = s * 3, s4 = s * 4, r7 = s * 7;
@@ -628,7 +651,11 @@ export class World {
       const ty = aw * qy - qw * ay - (qz * ax - qx * az);
       const tz = aw * qz - qw * az - (qx * ay - qy * ax);
       const strayed = Math.sqrt(dx * dx + dy * dy + dz * dz) + 2 * reach[s] * Math.sqrt(tx * tx + ty * ty + tz * tz);
-      if (strayed < size[s] * PIXEL) {
+      // A kinematic body moves only as it is told, so it is still exactly
+      // while told nothing: measured by distance, a slow platform, a 10 m one
+      // at 1 cm/s, would count as still, fall asleep and stop.
+      if (type[s] === KINEMATIC ? v[s3] === 0 && v[s3 + 1] === 0 && v[s3 + 2] === 0
+        && w[s3] === 0 && w[s3 + 1] === 0 && w[s3 + 2] === 0 : strayed < size[s] * PIXEL) {
         still[s] += dt;
         if (still[s] >= SLEEP_TIME) ready = true;
       } else {
@@ -638,7 +665,7 @@ export class World {
     if (!ready) return;
     this._islandSteps++;
 
-    const parent = this._parent, type = this._type, c = this._contacts, n = this._awakeCount;
+    const parent = this._parent, c = this._contacts, n = this._awakeCount;
     for (let i = 0; i < n; i++) parent[list[i]] = list[i];
     for (let m = 0; m < c.count; m++) {
       const a = c.a[m], b = c.b[m];
@@ -812,7 +839,7 @@ export class World {
     const o = options(caller, given, 'shape');
     known(caller, o, SHAPE_OPTIONS);
     const has = (k) => o[k] !== undefined;
-    const shape = has('shape') ? oneOf(caller, 'shape', o.shape, SHAPES) : DEFAULTS.shape;
+    const shape = has('shape') ? oneOf(caller, 'shape', o.shape, QUERY_SHAPES) : DEFAULTS.shape;
     for (const k of ['size', 'radius', 'height']) {
       if (has(k) && !SHAPE_SIZES[shape].includes(k)) fail(caller, `a ${shape} has no ${k}`);
     }
@@ -976,8 +1003,19 @@ export class World {
       // Half the box's extent along each world axis.
       let ex, ey, ez;
       const shape = this._shape[s];
-      if (shape === BOX) {
-        const hx = d[s3] * 0.5, hy = d[s3 + 1] * 0.5, hz = d[s3 + 2] * 0.5;
+      // Where the box's centre is from the body's: off it only for level geometry.
+      let ox = 0, oy = 0, oz = 0;
+      if (shape === BOX || shape >= MESH) {
+        let hx = d[s3] * 0.5, hy = d[s3 + 1] * 0.5, hz = d[s3 + 2] * 0.5;
+        if (shape >= MESH) {
+          // The box round its triangles in its own frame, turned into the world's.
+          const g = this._geometry[s], lo = g.lo, hi = g.hi;
+          const cx = (lo[0] + hi[0]) * 0.5, cy = (lo[1] + hi[1]) * 0.5, cz = (lo[2] + hi[2]) * 0.5;
+          hx = (hi[0] - lo[0]) * 0.5; hy = (hi[1] - lo[1]) * 0.5; hz = (hi[2] - lo[2]) * 0.5;
+          ox = ax[a9] * cx + ax[a9 + 3] * cy + ax[a9 + 6] * cz;
+          oy = ax[a9 + 1] * cx + ax[a9 + 4] * cy + ax[a9 + 7] * cz;
+          oz = ax[a9 + 2] * cx + ax[a9 + 5] * cy + ax[a9 + 8] * cz;
+        }
         ex = Math.abs(ax[a9]) * hx + Math.abs(ax[a9 + 3]) * hy + Math.abs(ax[a9 + 6]) * hz;
         ey = Math.abs(ax[a9 + 1]) * hx + Math.abs(ax[a9 + 4]) * hy + Math.abs(ax[a9 + 7]) * hz;
         ez = Math.abs(ax[a9 + 2]) * hx + Math.abs(ax[a9 + 5]) * hy + Math.abs(ax[a9 + 8]) * hz;
@@ -988,8 +1026,9 @@ export class World {
         ex = Math.abs(ax[a9 + 3]) * hl + r; ey = Math.abs(ax[a9 + 4]) * hl + r; ez = Math.abs(ax[a9 + 5]) * hl + r;
       }
       const grow = m + this._size[s] * PIXEL;
-      box[b6] = p[s3] - ex - grow; box[b6 + 1] = p[s3 + 1] - ey - grow; box[b6 + 2] = p[s3 + 2] - ez - grow;
-      box[b6 + 3] = p[s3] + ex + grow; box[b6 + 4] = p[s3 + 1] + ey + grow; box[b6 + 5] = p[s3 + 2] + ez + grow;
+      const cx = p[s3] + ox, cy = p[s3 + 1] + oy, cz = p[s3 + 2] + oz;
+      box[b6] = cx - ex - grow; box[b6 + 1] = cy - ey - grow; box[b6 + 2] = cz - ez - grow;
+      box[b6 + 3] = cx + ex + grow; box[b6 + 4] = cy + ey + grow; box[b6 + 5] = cz + ez + grow;
     }
   }
 
@@ -1036,6 +1075,7 @@ export class World {
     this._destroyed = true;
     this._slots = new Slots();
     for (const [name, Type] of COLUMNS) this[name] = new Type(0);
+    this._geometry = [];
     this._forcedSlots = [];
     this._broadphase = new Broadphase();
     this._pairs = new Pairs(this);
@@ -1180,6 +1220,7 @@ export class World {
     this._forced[s] = 0;
     this._force.fill(0, s * 3, s * 3 + 3);
     this._torque.fill(0, s * 3, s * 3 + 3);
+    this._geometry[s] = null;
     this._epoch++;
     // What it was holding up, or resting on, wakes: its own island now, and
     // anything asleep against it at the next step, which finds it gone.
@@ -1227,6 +1268,9 @@ export class World {
   _resize(capacity) {
     this._slots.resize(capacity);
     for (const [name, , per] of COLUMNS) this[name] = resized(this[name], capacity * per);
+    const g = this._geometry, had = g.length;
+    g.length = capacity;
+    for (let s = had; s < capacity; s++) g[s] = null;
     this._broadphase.resize(capacity);
   }
 
@@ -1238,6 +1282,7 @@ export class World {
     return {
       type: TYPES[this._type[s]],
       shape,
+      geometry: this._geometry[s],
       size: shape === 'box' ? [d[s3], d[s3 + 1], d[s3 + 2]] : [...DEFAULTS.size],
       radius: shape === 'box' ? DEFAULTS.radius : d[s3],
       height: shape === 'capsule' ? d[s3 + 1] : DEFAULTS.height,
@@ -1266,8 +1311,10 @@ export class World {
     this._type[s] = TYPES.indexOf(spec.type);
     const shape = SHAPES.indexOf(spec.shape);
     this._shape[s] = shape;
+    this._geometry[s] = spec.geometry;
     const d = this._dims;
     if (shape === BOX) d.set(spec.size, s3);
+    else if (shape >= MESH) d.fill(0, s3, s3 + 3);
     else { d[s3] = spec.radius; d[s3 + 1] = shape === CAPSULE ? spec.height : 0; d[s3 + 2] = 0; }
 
     // Mass follows the shape unless it was given (rule 36: no
@@ -1285,7 +1332,8 @@ export class World {
     this._inertiaGiven[s] = spec.inertiaGiven ? 1 : 0;
     if (spec.inertiaGiven) this._inertia.set(spec.inertia, s3);
     else this._inertia.set(shapeInertia(spec, this._mass[s], v3), s3);
-    for (let k = 0; k < 3; k++) this._invInertia[s3 + k] = 1 / this._inertia[s3 + k];
+    // Level geometry has none, and is never dynamic: nothing turns it.
+    for (let k = 0; k < 3; k++) this._invInertia[s3 + k] = this._inertia[s3 + k] > 0 ? 1 / this._inertia[s3 + k] : 0;
     // What contacts use: how much a push moves it (nothing, unless it is
     // dynamic), its thinnest size, which its tolerances scale with, and how
     // far its surface reaches from its centre, which bounds how far a spin
@@ -1297,6 +1345,10 @@ export class World {
     if (shape === BOX) {
       this._size[s] = Math.min(spec.size[0], spec.size[1], spec.size[2]);
       this._reach[s] = 0.5 * Math.sqrt(spec.size[0] * spec.size[0] + spec.size[1] * spec.size[1] + spec.size[2] * spec.size[2]);
+    } else if (shape >= MESH) {
+      // A surface, with no thickness: its contacts take the other body's tolerance (contact.js).
+      this._size[s] = 0;
+      this._reach[s] = spec.geometry.reach;
     } else {
       this._size[s] = 2 * spec.radius;
       this._reach[s] = shape === CAPSULE ? spec.height * 0.5 : spec.radius;
@@ -1355,13 +1407,34 @@ function resolve(caller, base, given) {
   // with holes takes the defaults. A misspelt one still throws above.
   const has = (k) => given[k] !== undefined;
 
-  const type = has('type') ? oneOf(caller, 'type', given.type, TYPES) : base.type;
   const shape = has('shape') ? oneOf(caller, 'shape', given.shape, SHAPES) : base.shape;
-  for (const k of ['size', 'radius', 'height']) {
+  const level = shape === 'mesh' || shape === 'heightfield';
+  // addBody passes DEFAULTS itself, so a mesh or heightfield being made with
+  // no type is static: what level geometry almost always is.
+  const type = has('type') ? oneOf(caller, 'type', given.type, TYPES) : level && base === DEFAULTS ? 'static' : base.type;
+  for (const k of SIZES) {
     if (has(k) && !SHAPE_SIZES[shape].includes(k)) fail(caller, `a ${shape} has no ${k}`);
+  }
+  if (level) {
+    // Its triangles enclose nothing, so it has no mass to fall with or turn.
+    if (type === 'dynamic') fail(caller, `type must be 'static' or 'kinematic' for a ${shape}, got 'dynamic'`);
+    for (const k of ['mass', 'density', 'inertia']) if (has(k)) fail(caller, `a ${shape} has no ${k}`);
   }
   // A new shape starts from its own defaults; sizes of the old one don't carry over.
   const fresh = shape !== base.shape;
+  let geometry = fresh ? null : base.geometry;
+  if (shape === 'mesh' && (fresh || has('vertices') || has('indices'))) {
+    const vertices = has('vertices') ? vertexList(caller, given.vertices) : fresh ? DEFAULTS.vertices : geometry.vertices;
+    const indices = has('indices') ? given.indices : fresh ? DEFAULTS.indices : geometry.indices;
+    triangleList(caller, indices, vertices.length / 3);
+    geometry = new Mesh(vertices, indices);
+  } else if (shape === 'heightfield' && (fresh || has('heights') || has('columns') || has('spacing'))) {
+    const columns = has('columns') ? wholeFrom(caller, 'columns', given.columns, 2) : fresh ? DEFAULTS.columns : geometry.columns;
+    const spacing = has('spacing') ? positive(caller, 'spacing', given.spacing) : fresh ? DEFAULTS.spacing : geometry.spacing;
+    const heights = has('heights') ? given.heights : fresh ? DEFAULTS.heights : geometry.heights;
+    grid(caller, heights, columns);
+    geometry = new Heightfield(heights, columns, spacing);
+  }
   const size = has('size') ? positive3(caller, 'size', given.size) : fresh ? [...DEFAULTS.size] : base.size;
   const radius = has('radius') ? positive(caller, 'radius', given.radius) : fresh ? DEFAULTS.radius : base.radius;
   const height = has('height') ? positive(caller, 'height', given.height) : fresh ? DEFAULTS.height : base.height;
@@ -1419,7 +1492,7 @@ function resolve(caller, base, given) {
       ? vec3(caller, 'angularVelocity', given.angularVelocity) : base.angularVelocity;
   }
   return {
-    type, shape, size, radius, height, density, mass, massGiven, inertia, inertiaGiven,
+    type, shape, size, radius, height, geometry, density, mass, massGiven, inertia, inertiaGiven,
     friction, restitution, damping, angularDamping, gravityScale, layers, mask,
     position, rotation, velocity, angularVelocity,
   };
@@ -1444,8 +1517,54 @@ function bits(caller, name, value) {
 
 /** A whole number, 1 or more. */
 function wholeFromOne(caller, name, value) {
-  if (!Number.isInteger(value) || value < 1) fail(caller, `${name} must be a whole number, 1 or more, got ${show(value)}`);
+  return wholeFrom(caller, name, value, 1);
+}
+
+/** A whole number, `least` or more. */
+function wholeFrom(caller, name, value, least) {
+  if (!Number.isInteger(value) || value < least) fail(caller, `${name} must be a whole number, ${least} or more, got ${show(value)}`);
   return value;
+}
+
+/** An array or typed array, as a mesh's lists are given. */
+const list = (value) => Array.isArray(value) || (ArrayBuffer.isView(value) && !(value instanceof DataView));
+
+/**
+ * Where a long list goes wrong, for its message: the whole of it would be
+ * thousands of numbers, so the first bad entry and where it is.
+ */
+const entry = (value, i) => `${show(value[i])} at index ${i}`;
+
+/** A mesh's vertices: finite numbers, three to a vertex. */
+function vertexList(caller, value) {
+  const rule = 'vertices must be finite numbers, three to a vertex';
+  if (!list(value)) fail(caller, `${rule}, got ${show(value)}`);
+  if (value.length % 3 !== 0) fail(caller, `${rule}, got ${value.length} numbers`);
+  for (let i = 0; i < value.length; i++) {
+    if (typeof value[i] !== 'number' || !Number.isFinite(value[i])) fail(caller, `${rule}, got ${entry(value, i)}`);
+  }
+  return value;
+}
+
+/** A mesh's indices: whole numbers below the vertex count, three to a triangle. */
+function triangleList(caller, value, count) {
+  const rule = `indices must be whole numbers below the vertex count (${count}), three to a triangle`;
+  if (!list(value)) fail(caller, `${rule}, got ${show(value)}`);
+  if (value.length % 3 !== 0) fail(caller, `${rule}, got ${value.length} numbers`);
+  for (let i = 0; i < value.length; i++) {
+    const k = value[i];
+    if (!Number.isInteger(k) || k < 0 || k >= count) fail(caller, `${rule}, got ${entry(value, i)}`);
+  }
+}
+
+/** A heightfield's heights: finite numbers, whole rows of `columns`, at least two rows. */
+function grid(caller, value, columns) {
+  const rule = `heights must be finite numbers, rows of columns (${columns}), 2 rows or more`;
+  if (!list(value)) fail(caller, `${rule}, got ${show(value)}`);
+  if (value.length % columns !== 0 || value.length < 2 * columns) fail(caller, `${rule}, got ${value.length} numbers`);
+  for (let i = 0; i < value.length; i++) {
+    if (typeof value[i] !== 'number' || !Number.isFinite(value[i])) fail(caller, `${rule}, got ${entry(value, i)}`);
+  }
 }
 
 function atLeastZero(caller, name, value) {

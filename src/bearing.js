@@ -5,3 +5,4 @@
 
 export { World } from './world.js';
 export { Body } from './body.js';
+export { readGlb } from './glb.js';

@@ -7,8 +7,8 @@
 // node; a capsule can't be (its round ends would stretch), so one is built for
 // each radius and height the scene uses.
 
-/** A .glb of one mesh, flat-shaded per vertex normal, in one colour. */
-function glb(positions, normals, indices, color) {
+/** A .glb of one mesh, flat-shaded per vertex normal, in one colour; seen from both sides if `twoSided`. */
+function glb(positions, normals, indices, color, twoSided = false) {
   const pos = new Float32Array(positions), nor = new Float32Array(normals), idx = new Uint32Array(indices);
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < pos.length; i += 3) {
@@ -18,7 +18,7 @@ function glb(positions, normals, indices, color) {
     asset: { version: '2.0', generator: 'Bearing demo' },
     scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
     meshes: [{ primitives: [{ attributes: { POSITION: 0, NORMAL: 1 }, indices: 2, material: 0 }] }],
-    materials: [{ pbrMetallicRoughness: { baseColorFactor: [...color, 1], metallicFactor: 0, roughnessFactor: 0.6 } }],
+    materials: [{ pbrMetallicRoughness: { baseColorFactor: [...color, 1], metallicFactor: 0, roughnessFactor: 0.6 }, doubleSided: twoSided }],
     accessors: [
       { bufferView: 0, componentType: 5126, count: pos.length / 3, type: 'VEC3', min, max },
       { bufferView: 1, componentType: 5126, count: nor.length / 3, type: 'VEC3' },
@@ -101,3 +101,45 @@ function round(radius, half, color) {
 
 export const sphere = (color) => round(1, 0, color);
 export const capsule = (radius, height, color) => round(radius, height / 2 - radius, color);
+
+/**
+ * Triangles, flat-shaded, each with its own three corners and its face's
+ * normal, seen from both sides, as Bearing's triangles have two.
+ */
+export function triangles(vertices, indices, color) {
+  const p = [], n = [], i = [];
+  for (let t = 0; t < indices.length; t += 3) {
+    const a = 3 * indices[t], b = 3 * indices[t + 1], c = 3 * indices[t + 2], v = vertices;
+    const ux = v[b] - v[a], uy = v[b + 1] - v[a + 1], uz = v[b + 2] - v[a + 2];
+    const wx = v[c] - v[a], wy = v[c + 1] - v[a + 1], wz = v[c + 2] - v[a + 2];
+    const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx, l = Math.hypot(nx, ny, nz) || 1;
+    for (const k of [a, b, c]) { p.push(v[k], v[k + 1], v[k + 2]); n.push(nx / l, ny / l, nz / l); }
+    i.push(t, t + 1, t + 2);
+  }
+  return glb(p, n, i, color, true);
+}
+
+/** A heightfield's triangles, cut as Bearing cuts its cells: from each one's lowest x and z to its highest. */
+export function heightfield(heights, columns, spacing, color) {
+  const rows = heights.length / columns, x0 = -((columns - 1) * spacing) / 2, z0 = -((rows - 1) * spacing) / 2;
+  const v = [], ix = [];
+  for (let j = 0; j < rows; j++) for (let i = 0; i < columns; i++) v.push(x0 + i * spacing, heights[j * columns + i], z0 + j * spacing);
+  for (let j = 0; j < rows - 1; j++) {
+    for (let i = 0; i < columns - 1; i++) {
+      const a = j * columns + i, b = a + 1, c = a + columns, d = c + 1;
+      ix.push(a, d, b, a, c, d);
+    }
+  }
+  return triangles(v, ix, color);
+}
+
+/**
+ * A ramp, what a level's .glb might hold: 6 m long, rising 2 m from its far
+ * end (x = 6) to its near one (x = 0), 3 m wide, with sides and a back.
+ */
+export function ramp(color) {
+  const v = [0, 0, -1.5, 6, 0, -1.5, 6, 0, 1.5, 0, 0, 1.5, 0, 2, -1.5, 0, 2, 1.5];
+  // The slope, the back (x = 0), the two sides and the bottom.
+  const ix = [4, 5, 2, 4, 2, 1, 0, 3, 5, 0, 5, 4, 0, 4, 1, 3, 2, 5, 0, 1, 2, 0, 2, 3];
+  return triangles(v, ix, color);
+}

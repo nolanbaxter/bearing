@@ -9,7 +9,18 @@ export type Quat = readonly [number, number, number, number] | Float32Array | Fl
 
 /** 'dynamic' is moved by gravity; 'static' never moves unless moved; 'kinematic' moves at its velocity. */
 export type BodyType = 'dynamic' | 'static' | 'kinematic';
-export type Shape = 'box' | 'sphere' | 'capsule';
+export type Shape = 'box' | 'sphere' | 'capsule' | 'mesh' | 'heightfield';
+/** A list of numbers: a plain array or any typed array. */
+export type Numbers = ArrayLike<number>;
+
+/** The sizes of shapes other than this one: refused, here and at run time. */
+interface NoLevelSizes {
+  vertices?: never;
+  indices?: never;
+  heights?: never;
+  columns?: never;
+  spacing?: never;
+}
 
 interface BodyCommon {
   /** Default 'dynamic'. */
@@ -45,7 +56,7 @@ interface BodyCommon {
 }
 
 /** A box: the default shape. */
-export interface BoxOptions extends BodyCommon {
+export interface BoxOptions extends BodyCommon, NoLevelSizes {
   shape?: 'box';
   /** Full width, height and depth in m, default [1, 1, 1]. */
   size?: Vec3;
@@ -53,7 +64,7 @@ export interface BoxOptions extends BodyCommon {
   height?: never;
 }
 
-export interface SphereOptions extends BodyCommon {
+export interface SphereOptions extends BodyCommon, NoLevelSizes {
   shape: 'sphere';
   /** m, default 0.5. */
   radius?: number;
@@ -61,7 +72,7 @@ export interface SphereOptions extends BodyCommon {
   height?: never;
 }
 
-export interface CapsuleOptions extends BodyCommon {
+export interface CapsuleOptions extends BodyCommon, NoLevelSizes {
   shape: 'capsule';
   /** m, default 0.5. */
   radius?: number;
@@ -70,8 +81,45 @@ export interface CapsuleOptions extends BodyCommon {
   size?: never;
 }
 
+/** Level geometry: static unless made kinematic, never dynamic, with no mass, density or inertia. */
+interface LevelCommon extends Omit<BodyCommon, 'type' | 'density' | 'mass' | 'inertia'> {
+  /** Default 'static'. */
+  type?: 'static' | 'kinematic';
+  density?: never;
+  mass?: never;
+  inertia?: never;
+  size?: never;
+  radius?: never;
+  height?: never;
+}
+
+/** Triangles, for level geometry. See docs/API.md, "Meshes and heightfields". */
+export interface MeshOptions extends LevelCommon {
+  shape: 'mesh';
+  /** Corners, three numbers each, in m, in the body's own frame. Default none. */
+  vertices?: Numbers;
+  /** Triangles, three corner numbers each, from 0. Default none. */
+  indices?: Numbers;
+  heights?: never;
+  columns?: never;
+  spacing?: never;
+}
+
+/** A grid of heights, centred on the body: columns along x, rows along z. */
+export interface HeightfieldOptions extends LevelCommon {
+  shape: 'heightfield';
+  /** m, row by row, `columns` to a row, at least 2 rows. Default [0, 0, 0, 0]: a flat 1 m square. */
+  heights?: Numbers;
+  /** Heights to a row, a whole number from 2, default 2. */
+  columns?: number;
+  /** m between neighbouring heights, default 1. */
+  spacing?: number;
+  vertices?: never;
+  indices?: never;
+}
+
 /** What world.addBody takes. A size option the shape doesn't have is refused, here and at run time. */
-export type BodyOptions = BoxOptions | SphereOptions | CapsuleOptions;
+export type BodyOptions = BoxOptions | SphereOptions | CapsuleOptions | MeshOptions | HeightfieldOptions;
 
 /** What world.setBody takes: any of addBody's options. Which sizes fit is checked against the body's shape when called. */
 export interface BodyChanges extends BodyCommon {
@@ -79,6 +127,11 @@ export interface BodyChanges extends BodyCommon {
   size?: Vec3;
   radius?: number;
   height?: number;
+  vertices?: Numbers;
+  indices?: Numbers;
+  heights?: Numbers;
+  columns?: number;
+  spacing?: number;
 }
 
 interface BodyInfoCommon {
@@ -110,7 +163,12 @@ interface BodyInfoCommon {
 export type BodyInfo =
   | (BodyInfoCommon & { shape: 'box'; size: [number, number, number] })
   | (BodyInfoCommon & { shape: 'sphere'; radius: number })
-  | (BodyInfoCommon & { shape: 'capsule'; radius: number; height: number });
+  | (BodyInfoCommon & { shape: 'capsule'; radius: number; height: number })
+  | (LevelInfoCommon & { shape: 'mesh'; vertices: number[]; indices: number[] })
+  | (LevelInfoCommon & { shape: 'heightfield'; heights: number[]; columns: number; spacing: number });
+
+/** A mesh's or heightfield's: never dynamic, and no mass, density or inertia. */
+type LevelInfoCommon = Omit<BodyInfoCommon, 'type' | 'mass' | 'density' | 'inertia'> & { type: 'static' | 'kinematic' };
 
 /** What raycast, raycastAll and shapeCast find. */
 export interface Hit {
@@ -149,6 +207,18 @@ export type QueryShape =
   | { shape?: 'box'; size?: Vec3 }
   | { shape: 'sphere'; radius?: number }
   | { shape: 'capsule'; radius?: number; height?: number };
+
+export interface GlbOptions {
+  /** The name of one node: only it and the nodes under it are read, still placed as in the scene. */
+  node?: string;
+}
+
+/**
+ * Every triangle of a .glb file's scene, each node placed as the scene places
+ * it, ready for addBody({ shape: 'mesh', ...readGlb(bytes) }). `bytes` is the
+ * file itself, as fetch's arrayBuffer() or Node's readFile gives it.
+ */
+export function readGlb(bytes: ArrayBuffer | ArrayBufferView, options?: GlbOptions): { vertices: Float64Array; indices: Uint32Array };
 
 export interface WorldOptions {
   /** m/s², default [0, -9.81, 0]. */

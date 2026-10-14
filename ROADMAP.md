@@ -281,13 +281,36 @@ never changes the simulation. Shape casts by conservative advancement: over 2,00
 hit took at most 6 advances. 10,000 rays into 1,000 boxes: Bearing 72.5 ms, Rapier 32.6, Jolt 342,
 cannon-es 650 (`bench/RESULTS.md`).
 
-**9. Triangle meshes and heightfields ⬜**
+**9. Triangle meshes and heightfields ✅** *(approved and done 2026-10-14)*
 *Concepts:* triangle BVHs; heightfields; internal edges and ghost collisions; the glTF binary format.
 Static level geometry: a triangle mesh with its own BVH, and a heightfield. Every primitive
 against triangles, with internal edges handled so a sliding box doesn't catch on the seams between
 triangles. Meshes read straight from a `.glb`, with no dependency *(proposal)*.
 *Done when:* a box slides across a flat mesh of many triangles exactly as across one box; a
 sphere rolls over a heightfield; a `.glb` loads.
+*Result:* `addBody({ shape: 'mesh', vertices, indices })`, `addBody({ shape: 'heightfield', heights,
+columns, spacing })` and `readGlb(bytes, { node })` (`src/mesh.js`, `src/triangle.js`, `src/glb.js`),
+held by `test/mesh.test.js`. Static or kinematic, never dynamic; triangles have two sides. A body against a
+mesh touches each triangle under it, and the points of every triangle that pushes the same way
+become one manifold, reduced to four, with the points clipping makes on a seam left out, so a box on
+a flat floor of 800 triangles gets its four corners, as on one box. Its path across that floor
+matches the path across one box to 1.6e-14 m, straight, diagonal, turned, and with its corners
+riding exactly along the lines between triangles. A capsule rolls down a heightfield slope as down
+a tilted box to 3e-15 m, a ball to 7.6 µm (where a landing rounds to either side of zero gap); a
+ball rolls over waves within 0.19 mm of the ground. Seams: an edge is a corner from a side when the
+triangle across folds away from it, or there is none; a contact at a seam is left out, the triangle
+the body is over holding it, except a ball over this triangle too (to the tolerance), which takes
+its face. Two things found on the way: a ball's seam contact taken as the face of a triangle it
+wasn't over held it 29 mm off a wave's crest (that plane, carried past the seam, runs above the
+ground there); and a box's axes must be tried both ways against a triangle, which isn't symmetric
+about its centre as a box is. Every shape against a lone triangle agrees with a brute-force
+signed distance on 1,200 random pairs. Warm starting: each mesh pair remembers its manifolds and
+matches them by direction. Rays on a mesh of a box's 12 triangles match the box to 1e-12 m, on a
+heightfield match marching down to the ground to 1e-9 m; casts and overlaps match every triangle
+tested alone. 100,352 triangles build in 0.21 s (i7-1260P, Node 22) and a box on them looks at
+16.6 a step. A `.glb` built byte by byte reads back exactly, node transforms, matrices, strips and
+fans included. Also fixed: a slow kinematic body fell asleep and stopped (a 10 m platform at
+1 cm/s); a kinematic body is now still only when its velocities are zero.
 
 **10. Contact events and sensors ⬜**
 *Concepts:* contact lifecycles (begin, stay, end); triggers; why callbacks from inside a solver cause re-entrancy bugs.
@@ -496,3 +519,8 @@ Winding's way, copied before the first one:
 - **2026-10-13.** Rolling and spinning friction added to milestone 6 as its closing piece, at
   Nolan's word: milestone 6 found that balls and capsules rolling or spinning kept heaps awake for
   good, and rule 35's "a ball bounces and settles" failed for any ball moving sideways.
+- **2026-10-14.** Milestone 9 done. Per-corner seam flags (a corner a seam only if every edge at it
+  is) were built and then taken out: once a ball's seam contact is only kept over its own triangle,
+  every remaining seam rule just leaves a contact out, which a real fold's own triangles keep, and
+  no test told the two apart. The test reference for a box against a triangle found a box's axes
+  were tried only towards the triangle's centre; now both ways.

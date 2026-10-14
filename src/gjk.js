@@ -21,7 +21,7 @@
 // known. Exact operations and square roots only, so the result is the same
 // to the bit on every machine.
 
-import { SPHERE, CAPSULE } from './collide.js';
+import { SPHERE, CAPSULE, TRIANGLE } from './collide.js';
 
 /**
  * A round's progress counts while it brings the squared distance in by more
@@ -68,6 +68,15 @@ function support(s, x, y, z, out) {
   const c = s.center, a = s.axes, h = s.half;
   if (s.kind === SPHERE) {
     out[0] = c[0]; out[1] = c[1]; out[2] = c[2];
+  } else if (s.kind === TRIANGLE) {
+    // The corner farthest along; the first of equals, so the answer is the same every time.
+    const p = s.points;
+    let best = 0, most = -Infinity;
+    for (let i = 0; i < 3; i++) {
+      const d = p[3 * i] * x + p[3 * i + 1] * y + p[3 * i + 2] * z;
+      if (d > most) { most = d; best = i; }
+    }
+    out[0] = p[3 * best]; out[1] = p[3 * best + 1]; out[2] = p[3 * best + 2];
   } else if (s.kind === CAPSULE) {
     const e = x * a[3] + y * a[4] + z * a[5] >= 0 ? h[1] : -h[1];
     out[0] = c[0] + e * a[3]; out[1] = c[1] + e * a[4]; out[2] = c[2] + e * a[5];

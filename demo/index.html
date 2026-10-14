@@ -49,8 +49,8 @@
 
 <script type="module">
   import { Winding, Camera, OrbitController } from 'https://cdn.jsdelivr.net/npm/winding-engine@1.7.0/src/winding.js';
-  import { World } from '../src/bearing.js';
-  import { box, sphere, capsule } from './models.js';
+  import { World, readGlb } from '../src/bearing.js';
+  import { box, sphere, capsule, triangles, heightfield, ramp } from './models.js';
 
   const status = document.getElementById('status');
   const canvas = document.getElementById('view');
@@ -155,6 +155,43 @@
         }
       },
     },
+    terrain: {
+      label: 'Terrain: hills and a .glb ramp',
+      look: { target: [2, 1, 0], distance: 40, pitch: 0.5 },
+      build(world) {
+        // Hills, as a heightfield: 49 by 49 heights half a metre apart, 4,608
+        // triangles, kept as one number a sample.
+        const columns = 49, heights = [];
+        for (let j = 0; j < columns; j++) {
+          for (let i = 0; i < columns; i++) {
+            const x = (i - 24) * 0.5, z = (j - 24) * 0.5;
+            heights.push(1.2 + 0.8 * Math.sin(x * 0.6) * Math.cos(z * 0.45) - 0.04 * x);
+          }
+        }
+        world.addBody({ shape: 'heightfield', heights, columns, spacing: 0.5, color: LEAF });
+        // A wall round the floor, so whatever rolls off the hills stays on it.
+        for (const [x, z, sx, sz] of [[0, 30.5, 62, 1], [0, -30.5, 62, 1], [30.5, 0, 1, 60], [-30.5, 0, 1, 60]]) {
+          world.addBody({ type: 'static', size: [sx, 1.5, sz], position: [x, 0.75, z], color: STONE });
+        }
+        // A ramp, as a level's .glb file holds it: Bearing reads its triangles
+        // with readGlb, and Winding draws it from the very same bytes.
+        const file = ramp(STONE);
+        world.addBody({ shape: 'mesh', ...readGlb(file), position: [13, 0, 0], color: STONE, glb: file });
+        let n = 0;
+        for (let layer = 0; layer < 3; layer++) {
+          for (let k = 0; k < 30; k++) {
+            n++;
+            const at = [Math.sin(n * 12.9898) * 10, 4 + layer * 1.5, Math.cos(n * 78.233) * 10];
+            if (n % 3 === 0) world.addBody({ size: [0.6, 0.6, 0.6], position: at, color: WOOD });
+            else if (n % 3 === 1) world.addBody({ shape: 'sphere', radius: 0.35, position: at, color: SKY });
+            else world.addBody({ shape: 'capsule', radius: 0.2, height: 0.9, position: at, rotation: [0, 0, Math.SQRT1_2, Math.SQRT1_2], color: SUN });
+          }
+        }
+        // Down the ramp, from the top, and stopped by a wall before the floor's edge.
+        world.addBody({ type: 'static', size: [1, 1.5, 10], position: [25, 0.75, 0], color: STONE });
+        for (let k = 0; k < 4; k++) world.addBody({ shape: 'sphere', radius: 0.35, position: [13.5, 3 + k, (k - 1.5) * 0.7], color: CLAY });
+      },
+    },
     layers: {
       label: 'Layers: two colours',
       look: { target: [0, 3, 0], distance: 20, pitch: 0.3 },
@@ -179,6 +216,10 @@
     // Models, made once per shape and colour (and per size, for capsules).
     const models = new Map();
     async function model(desc) {
+      // Level geometry is one of a kind: drawn from its own file, or from its triangles.
+      if (desc.glb) return engine.load(desc.glb);
+      if (desc.shape === 'mesh') return engine.load(triangles(desc.vertices, desc.indices, desc.color));
+      if (desc.shape === 'heightfield') return engine.load(heightfield(desc.heights, desc.columns, desc.spacing, desc.color));
       const key = JSON.stringify([desc.shape, desc.shape === 'capsule' ? [desc.radius, desc.height] : 0, desc.color]);
       if (!models.has(key)) {
         const bytes = desc.shape === 'sphere' ? sphere(desc.color)
@@ -196,13 +237,14 @@
       scene.addLight({ type: 'directional', direction: [-0.4, -0.9, -0.3], intensity: 3, castShadow: true });
       const pending = [];
       // Bodies are added through this, which notes how to draw each; the
-      // colour is the demo's, not Bearing's, so it is taken off first.
+      // colour, and a model file to draw from, are the demo's, not Bearing's,
+      // so they are taken off first.
       const add = world.addBody.bind(world);
       world.addBody = (options) => {
-        const { color = STONE, ...body } = options;
+        const { color = STONE, glb, ...body } = options;
         const handle = add(body);
         const desc = world.bodyOf(handle);
-        pending.push({ handle, desc: { ...desc, color } });
+        pending.push({ handle, desc: { ...desc, color, glb } });
         return handle;
       };
       world.addBody({ type: 'static', size: [60, 1, 60], position: [0, -0.5, 0], color: STONE });

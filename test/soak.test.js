@@ -168,6 +168,43 @@ await test('stacks put to sleep, woken and cleared 30 times: the awake list, the
   assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
 });
 
+await test('meshes and heightfields made, landed on and removed 30 times: their triangles and pair memories go', async () => {
+  const world = new World();
+  world.step(1 / 60);
+  // A floor of 800 triangles, as test/mesh.test.js builds it.
+  const vertices = [], indices = [];
+  for (let j = 0; j <= 20; j++) for (let i = 0; i <= 20; i++) vertices.push(i - 10, 0, j - 10);
+  for (let j = 0; j < 20; j++) for (let i = 0; i < 20; i++) { const a = j * 21 + i; indices.push(a, a + 21, a + 22, a, a + 22, a + 1); }
+  let before = 0, mesh = null;
+  for (let round = 0; round < 30; round++) {
+    if (round === WARM) {
+      await collect();
+      before = heap();
+    }
+    const level = [
+      world.addBody({ shape: 'mesh', vertices, indices }),
+      world.addBody({ shape: 'heightfield', heights: new Array(21 * 21).fill(0), columns: 21, position: [30, 0, 0] }),
+    ];
+    if (round === WARM) mesh = new WeakRef(world._geometry[level[0].slot]);
+    const bodies = [];
+    for (let k = 0; k < 40; k++) {
+      bodies.push(world.addBody({ shape: k % 2 ? 'sphere' : 'box', position: [(k % 20) - 9.5 + 30 * (k >= 20), 1, round % 3] }));
+    }
+    for (let s = 0; s < 30; s++) world.step(1 / 60);
+    assert.ok(world._contacts.count >= 40, `round ${round}: only ${world._contacts.count} contacts`);
+    for (const b of [...bodies, ...level]) world.remove(b);
+    world.step(1 / 60);
+    assert.equal(world._contacts.capacity, 0, `round ${round}: contact storage kept`);
+    assert.equal(world._pairs.count, 0, `round ${round}: pairs kept`);
+    assert.ok(world._geometry.every((g) => g === null), `round ${round}: triangles kept`);
+    assert.ok(world._pairs.memory.length <= world._pairs.capacity && world._pairs.spare.length <= 40, `round ${round}: pair memories kept`);
+  }
+  await collect();
+  assert.equal(mesh.deref(), undefined, 'a removed mesh\'s triangles are still held');
+  const grown = heap() - before;
+  assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
+});
+
 await test('removed bodies\' handles and destroyed worlds are collected', async () => {
   const world = new World();
   let handle = world.addBody({});

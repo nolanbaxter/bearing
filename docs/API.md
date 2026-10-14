@@ -49,7 +49,7 @@ These hold everywhere, so one learned is one learned for good.
 <a id="contents"></a>
 ## Contents
 
-[World](#world-class) · [Body](#body) · [Contacts](#contacts) · [Layers and masks](#layers) · [Sleeping](#sleeping) · [Queries](#queries) · [Determinism](#determinism) · [Limits](#limits)
+[World](#world-class) · [Body](#body) · [Meshes and heightfields](#meshes) · [Contacts](#contacts) · [Layers and masks](#layers) · [Sleeping](#sleeping) · [Queries](#queries) · [Determinism](#determinism) · [Limits](#limits)
 
 <a id="index"></a>
 ## Index
@@ -70,7 +70,7 @@ Every call, setting and entry, A to Z by its name.
 
 **L** &nbsp; [Layers and masks](#layers) · [Limits](#limits)
 
-**M** &nbsp; [`body.mass`](#body-mass) · [`world.moved()`](#world-moved)
+**M** &nbsp; [`body.mass`](#body-mass) · [Meshes and heightfields](#meshes) · [`world.moved()`](#world-moved)
 
 **O** &nbsp; [`world.overlap()`](#world-overlap)
 
@@ -78,7 +78,7 @@ Every call, setting and entry, A to Z by its name.
 
 **Q** &nbsp; [Queries](#queries)
 
-**R** &nbsp; [`world.raycast()`](#world-raycast) · [`world.raycastAll()`](#world-raycastall) · [`world.remove()`](#world-remove) · [`body.rotation`](#body-rotation)
+**R** &nbsp; [`world.raycast()`](#world-raycast) · [`world.raycastAll()`](#world-raycastall) · [`readGlb()`](#readglb) · [`world.remove()`](#world-remove) · [`body.rotation`](#body-rotation)
 
 **S** &nbsp; [`body.setAngularVelocity()`](#body-setangularvelocity) · [`body.setAxisAngle()`](#body-setaxisangle) · [`world.setBody()`](#world-setbody) · [`body.setEuler()`](#body-seteuler) · [`body.setPosition()`](#body-setposition) · [`body.setRotation()`](#body-setrotation) · [`body.setVelocity()`](#body-setvelocity) · [`world.shapeCast()`](#world-shapecast) · [`world.sleeping`](#world-sleeping) · [Sleeping](#sleeping) · [`body.slot`](#body-slot) · [`world.step()`](#world-step) · [`world.stepCount`](#world-stepcount) · [`world.substeps`](#world-substeps)
 
@@ -281,14 +281,19 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 
 | Option | Default | Meaning |
 |---|---|---|
-| `type` | `'dynamic'` | `'dynamic'`: moved by gravity, and later by contacts and forces. `'static'`: never moves unless you move it, as the ground. `'kinematic'`: moves at the velocity you give it, ignoring gravity, as a lift or a moving platform. |
-| `shape` | `'box'` | `'box'`, `'sphere'` or `'capsule'`. |
+| `type` | `'dynamic'`; `'static'` for a mesh or heightfield | `'dynamic'`: moved by gravity, and later by contacts and forces. `'static'`: never moves unless you move it, as the ground. `'kinematic'`: moves at the velocity you give it, ignoring gravity, as a lift or a moving platform. A mesh or heightfield can't be dynamic. |
+| `shape` | `'box'` | `'box'`, `'sphere'`, `'capsule'`, `'mesh'` or `'heightfield'`; the last two are level geometry, see [Meshes and heightfields](#meshes). |
 | `size` | `[1, 1, 1]` | A box's full width, height and depth, along its own x, y and z, in metres. |
 | `radius` | `0.5` | A sphere's or capsule's radius, in metres. |
 | `height` | `2` | A capsule's full height, tip to tip, along its own y, in metres. At least twice `radius`. The defaults are Godot's capsule, about a person. |
-| `density` | `1000` | kg/m³; water's. The mass is the density times the shape's volume. |
-| `mass` | from `density` | kg. Give this instead of `density` for a body of a known weight. |
-| `inertia` | from the shape and mass | The moments of inertia `[x, y, z]` about the body's own axes, in kg·m²: how hard it is to turn about each. Worked out for a solid shape; give it for one that isn't, such as a hollow ball. `null` goes back to working it out. |
+| `vertices` | `[]` | A mesh's corners, three numbers each, in metres, in its own frame. Any array or typed array. |
+| `indices` | `[]` | A mesh's triangles, three corner numbers each, counting from 0. |
+| `heights` | `[0, 0, 0, 0]` | A heightfield's heights, in metres, row by row: `columns` along x to a row, rows along z. The default is a flat 1 m square. |
+| `columns` | `2` | How many heights to a heightfield's row: 2 or more. |
+| `spacing` | `1` | Metres between a heightfield's neighbouring heights, along x and z. |
+| `density` | `1000` | kg/m³; water's. The mass is the density times the shape's volume. Not for a mesh or heightfield, which encloses none. |
+| `mass` | from `density` | kg. Give this instead of `density` for a body of a known weight. Not for a mesh or heightfield. |
+| `inertia` | from the shape and mass | The moments of inertia `[x, y, z]` about the body's own axes, in kg·m²: how hard it is to turn about each. Worked out for a solid shape; give it for one that isn't, such as a hollow ball. `null` goes back to working it out. Not for a mesh or heightfield. |
 | `friction` | `0.5` | How much sideways push a contact can resist for each newton pressing it together: 0 is ice. The middle of everyday dry materials, about 0.3 to 0.8. |
 | `restitution` | `0` | How much of the speed it hits at comes back as a bounce, from 0 (none) to 1 (all of it). |
 | `damping` | `0` | Velocity lost per second, as air drag would take it, in 1/s. 0 is none. |
@@ -303,7 +308,7 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 
 Returns: a [`Body`](#body).
 
-Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `addBody: shape must be 'box', 'sphere' or 'capsule', got …`; `addBody: a <shape> has no <option>`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `addBody: friction must be 0 or more, got …`; `addBody: restitution must be from 0 to 1, got …`; `addBody: damping must be 0 or more, got …`; `addBody: angularDamping must be 0 or more, got …`; `addBody: gravityScale must be a finite number, got …`; `addBody: layers must be a whole number that fits in 32 bits, got …`; `addBody: mask must be a whole number that fits in 32 bits, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a static body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
+Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `addBody: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got …`; `addBody: a <shape> has no <option>`; `addBody: type must be 'static' or 'kinematic' for a <shape>, got 'dynamic'`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: vertices must be finite numbers, three to a vertex, got …`; `addBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `addBody: columns must be a whole number, 2 or more, got …`; `addBody: spacing must be a positive number, got …`; `addBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `addBody: friction must be 0 or more, got …`; `addBody: restitution must be from 0 to 1, got …`; `addBody: damping must be 0 or more, got …`; `addBody: angularDamping must be 0 or more, got …`; `addBody: gravityScale must be a finite number, got …`; `addBody: layers must be a whole number that fits in 32 bits, got …`; `addBody: mask must be a whole number that fits in 32 bits, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a static body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
 
 ```js
 const ground = world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
@@ -314,7 +319,9 @@ const player = world.addBody({ shape: 'capsule', radius: 0.3, height: 1.8, mass:
 Notes: a size option the shape doesn't have throws rather than being ignored, so
 `addBody({ radius: 0.5 })`, which forgot `shape: 'sphere'`, says `a box has no radius` instead of
 quietly making a 1 m box. A capsule whose height is exactly twice its radius is a sphere, and is
-allowed. Bodies collide as soon as they are added; see [Contacts](#contacts).
+allowed. Bodies collide as soon as they are added; see [Contacts](#contacts). A long list that
+throws names the first bad entry and where it is (`got NaN at index 2`), or how many numbers it
+has (`got 10 numbers`), rather than every number in it.
 
 <a id="world-setbody"></a>
 ### `world.setBody(body, changes)`
@@ -322,7 +329,7 @@ allowed. Bodies collide as soon as they are added; see [Contacts](#contacts).
 Changes any of the options [`addBody`](#world-addbody) took, with the same names, defaults and
 checks, and leaves the rest as they are.
 
-Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `setBody: shape must be 'box', 'sphere' or 'capsule', got …`; `setBody: a <shape> has no <option>`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `setBody: friction must be 0 or more, got …`; `setBody: restitution must be from 0 to 1, got …`; `setBody: damping must be 0 or more, got …`; `setBody: angularDamping must be 0 or more, got …`; `setBody: gravityScale must be a finite number, got …`; `setBody: layers must be a whole number that fits in 32 bits, got …`; `setBody: mask must be a whole number that fits in 32 bits, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a static body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
+Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `setBody: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got …`; `setBody: a <shape> has no <option>`; `setBody: type must be 'static' or 'kinematic' for a <shape>, got 'dynamic'`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: vertices must be finite numbers, three to a vertex, got …`; `setBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `setBody: columns must be a whole number, 2 or more, got …`; `setBody: spacing must be a positive number, got …`; `setBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `setBody: friction must be 0 or more, got …`; `setBody: restitution must be from 0 to 1, got …`; `setBody: damping must be 0 or more, got …`; `setBody: angularDamping must be 0 or more, got …`; `setBody: gravityScale must be a finite number, got …`; `setBody: layers must be a whole number that fits in 32 bits, got …`; `setBody: mask must be a whole number that fits in 32 bits, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a static body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
 
 ```js
 world.setBody(crate, { size: [2, 1, 1] });           // twice as long, and twice as heavy
@@ -335,7 +342,10 @@ mass and inertia, unless the body was given a `mass` or an `inertia`, which it k
 sizes; the old shape's don't carry over, so a sphere of radius 1.5 made a capsule needs a `height`
 of at least 3. A body made static stops: its velocities become zero. A capsule's radius and height
 are checked together, so changing one must still fit the other. Setting `position` or `rotation`
-moves `previous` too; see [`world.previous`](#world-previous).
+moves `previous` too; see [`world.previous`](#world-previous). A mesh's or heightfield's triangles
+are worked out again only when its `vertices`, `indices`, `heights`, `columns` or `spacing`
+change; a change of `friction` or `position` leaves them be. A dynamic body made a mesh must be
+made static or kinematic in the same call.
 
 <a id="world-bodyof"></a>
 ### `world.bodyOf(body)` → `object`
@@ -347,8 +357,10 @@ it to [`setBody`](#world-setbody) for that.
 Returns: `{ type, shape, …sizes, mass or density, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity }`.
 `layers` and `mask` come back unsigned, from 0 to 4294967295, whichever way they were given.
 The sizes are the shape's own: `size` for a box, `radius` for a sphere, `radius` and `height` for a
-capsule. `mass` if the body was given one, `density` if not, and `inertia` only if it was given one. A
-static body has no `velocity` or `angularVelocity`.
+capsule, `vertices` and `indices` for a mesh, as plain arrays, and `heights`, `columns` and
+`spacing` for a heightfield. A mesh's `indices` are the triangles it kept, without any that had no
+area. `mass` if the body was given one, `density` if not, and `inertia` only if it was given one;
+none of the three for a mesh or heightfield. A static body has no `velocity` or `angularVelocity`.
 
 Throws: `bodyOf: this world was destroyed`; `bodyOf: body must be a Body, got …`; `bodyOf: that body belongs to another world`; `bodyOf: this body was removed`.
 
@@ -863,6 +875,84 @@ Throws: `destroy: this world was destroyed`.
 ```js
 crate.destroy();
 ```
+
+<a id="meshes"></a>
+## Meshes and heightfields
+
+Level geometry: the ground, walls, ramps and terrain a game is played on, as triangles.
+
+```js
+// A ramp, as a mesh: four corners, two triangles.
+const ramp = world.addBody({
+  shape: 'mesh',
+  vertices: [0, 0, 0, 4, 2, 0, 4, 2, 3, 0, 0, 3],
+  indices: [0, 1, 2, 0, 2, 3],
+});
+// Hills, as a heightfield: 3 by 3 heights, 10 m apart, centred on its position.
+const hills = world.addBody({ shape: 'heightfield', heights: [0, 1, 0, 1, 3, 1, 0, 1, 0], columns: 3, spacing: 10 });
+```
+
+- **A mesh is any triangles.** `vertices` are numbers, three to a corner, in metres, in the body's
+  own frame; `indices` are three to a triangle, each the number of a corner. Models from a `.glb`
+  file come ready to use from [`readGlb`](#readglb). Triangles with no area are left out: nothing
+  could touch them.
+- **A heightfield is a grid of heights**, cheaper to keep than the same ground as a mesh: one number
+  a sample instead of a triangle's worth. `heights` runs row by row, `columns` to a row; columns go
+  along the body's x, rows along its z, `spacing` metres apart, and the grid is centred on the
+  body's position. Each square of four samples is cut corner to corner into two triangles, from
+  the sample at its lowest x and z to the one at its highest.
+- **Static, or kinematic, never dynamic.** Triangles enclose nothing, so they have no mass to fall
+  with or turn. A mesh or heightfield is static unless given `type: 'kinematic'`, which makes a
+  moving platform of any shape; `'dynamic'` throws. Its `mass` is 0. A falling object of any
+  shape will come with compound shapes, in a later version.
+- **Every triangle has two sides.** A body is pushed out on whichever side it is, so a wall needs
+  no thickness, and the order of a triangle's corners doesn't matter.
+- **The seams between triangles can't be caught on.** Where two triangles meet flat, or fold
+  inward, nothing could touch the edge between them without touching a face first, so a contact
+  pointing off that edge is left out, and the face beside holds the body instead. A box slides
+  across a floor of 800 triangles on exactly the path it takes across one big box, and a ball
+  rolls over a heightfield without bumping at its seams. Where triangles fold outward, the edge is
+  a real corner, and a ball rolls over it as over any edge. Two triangles count as flat to within a
+  part in about a million of their size, sixteen times what a model file rounds to.
+- **Only the triangles under a body are looked at.** A mesh files its triangles in a tree, as the
+  world files its bodies, and a heightfield finds the squares under a body from where it is; a box
+  on a floor of 100,000 triangles tests about 17 a step. A 100,000-triangle mesh takes about
+  0.2 s to add (i7-1260P, Node 22), once.
+- **Contacts and queries work on them as on any body.** Rays, shape casts and overlap tests see
+  their triangles; see [Queries](#queries). A mesh takes the contact tolerance of whatever touches
+  it, since it has no thickness of its own.
+
+<a id="readglb"></a>
+### `readGlb(bytes, options)` → `{ vertices, indices }`
+
+Reads every triangle of a `.glb` file's scene, each node placed where the scene puts it, ready for
+`addBody({ shape: 'mesh', ... })`. A `.glb` is glTF 2.0 in one binary file, which every 3D package
+exports; Bearing reads it itself, with no dependency.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `node` | every node in the scene | The name of one node: only it and the nodes under it are read, still placed as in the scene. The first node of that name, if several share it. |
+
+Returns: `{ vertices, indices }`: a `Float64Array` of corner positions, three numbers each, in
+metres, with every node's translation, rotation, scale or matrix applied; and a `Uint32Array` of
+corner numbers, three to a triangle. Fresh arrays, yours to keep.
+
+Throws: `readGlb: options must be an object, got …`; `readGlb: unknown option '…' (did you mean '…'?)`; `readGlb: unknown option '…' (the options are node)`; `readGlb: node must be a string, got …`; `readGlb: node must be the name of a node in the file, got …`; `readGlb: bytes must be an ArrayBuffer or a typed array, got …`; `readGlb: bytes must be a binary glTF 2.0 file (.glb), got …`; `readGlb: the file needs …, which Bearing doesn't read; export it without that`; `readGlb: the file is damaged: …`.
+
+```js
+// levelBytes: the file, from fetch('level.glb') then .arrayBuffer() in a page, or
+// readFileSync('level.glb') in Node.
+const level = world.addBody({ shape: 'mesh', ...readGlb(levelBytes) });
+const stairs = world.addBody({ shape: 'mesh', ...readGlb(levelBytes, { node: 'stairs' }), position: [0, 0, 20] });
+```
+
+Notes: `bytes` is the file itself, not a URL: fetching or reading it is yours to do, as Bearing
+does no input or output of its own. Triangles, triangle strips and triangle fans are read; points
+and lines have no triangles and are left out, as are materials, textures and animation, which say
+nothing about shape. Geometry compressed with Draco (`KHR_draco_mesh_compression`) or meshopt
+(`EXT_meshopt_compression`), or quantized (`KHR_mesh_quantization`), would need a decoder, and
+throws, naming the extension: export the model without it. glTF's units are metres and its y is
+up, as Bearing's are, so a model lines up with what any engine draws from the same file.
 
 <a id="contacts"></a>
 ## Contacts

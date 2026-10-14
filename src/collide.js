@@ -35,6 +35,11 @@
 
 /** Shape kinds, numbered in the order pairs are dispatched: a pair is always handled lower first. */
 export const SPHERE = 0, CAPSULE = 1, BOX = 2;
+/**
+ * One triangle of a mesh or heightfield, placed in the world. Not dispatched
+ * by collide(): a triangle against a shape is triangle.js's.
+ */
+export const TRIANGLE = 3;
 
 /** One shape placed in the world, as collide() reads it. */
 export class Shape {
@@ -45,6 +50,8 @@ export class Shape {
     this.axes = new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
     /** Box: half its size along each axis. Sphere: radius. Capsule: radius, then half its segment's length. */
     this.half = new Float64Array(3);
+    /** Triangle: its corners, a, b and c, in the world. Its centre is their mean, and axes[0..2] its unit normal. */
+    this.points = new Float64Array(9);
   }
 
   /** Places the shape: `q` is a unit quaternion [x, y, z, w] at q[o..o+3]. */

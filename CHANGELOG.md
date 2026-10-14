@@ -73,3 +73,16 @@ All notable changes to Bearing are recorded here. The format follows
 - `world.moved(since)`: the slots of the bodies an engine has to draw again since it last drew at
   step `since`, exact however many steps ran in between, so a world of sleeping bodies copies
   nothing. `world.stepCount` counts the steps.
+- Triangle meshes and heightfields, for level geometry: `addBody({ shape: 'mesh', vertices,
+  indices })` and `addBody({ shape: 'heightfield', heights, columns, spacing })`, static unless
+  made kinematic. Every shape collides with their triangles, from either side, and the seams
+  between triangles can't be caught on: a box slides across a floor of 800 triangles on exactly
+  the path it takes across one box, and a ball rolls over a wavy heightfield without leaving it.
+  Only the triangles under a body are looked at, about 17 a step for a box on 100,000 of them.
+  Rays, shape casts and overlap tests see them too.
+- `readGlb(bytes, options)`: every triangle of a `.glb` file's scene, or of one named node, placed
+  as the scene places it, ready for a mesh body. No dependency; a file compressed with Draco or
+  meshopt throws, naming the extension to export without.
+- A kinematic body moving however slowly stays awake. Measured by how far it had strayed, a 10 m
+  platform at 1 cm/s counted as still, fell asleep and stopped; now one is still only when its
+  velocities are zero.

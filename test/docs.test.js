@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { World, Body } from '../src/bearing.js';
+import { World, Body, readGlb } from '../src/bearing.js';
 import * as bearing from '../src/bearing.js';
 import { suite, test } from './test.js';
 
@@ -27,10 +27,10 @@ function surface(prefix, cls) {
     .map((name) => `${prefix}-${name.toLowerCase()}`);
 }
 
-const expected = ['world', ...surface('world', World), ...surface('body', Body)];
+const expected = ['world', 'readglb', ...surface('world', World), ...surface('body', Body)];
 
-test('the package exports World and Body, and nothing else', () => {
-  assert.deepEqual(Object.keys(bearing).sort(), ['Body', 'World']);
+test('the package exports World, Body and readGlb, and nothing else', () => {
+  assert.deepEqual(Object.keys(bearing).sort(), ['Body', 'World', 'readGlb']);
 });
 
 test('every public method and getter has an entry', () => {
@@ -39,7 +39,7 @@ test('every public method and getter has an entry', () => {
 });
 
 test('every entry is for something that exists', () => {
-  const entries = [...API.matchAll(/<a id="((?:world|body)-[^"]+|world)"><\/a>\s*\n###/g)].map((m) => m[1]);
+  const entries = [...API.matchAll(/<a id="((?:world|body)-[^"]+|world|readglb)"><\/a>\s*\n###/g)].map((m) => m[1]);
   const stale = entries.filter((id) => !expected.includes(id));
   assert.deepEqual(stale, [], `entries for nothing: ${stale.join(', ')}`);
 });
@@ -75,16 +75,37 @@ test('every entry has its parts in order: heading, text, Throws if it throws, ex
  * Every ```js block runs, against the real package. Each gets the same
  * starting world, so an example can use `ball` or `crate` without making
  * them, and each runs in a fresh block, so one can't spoil the next. Import
- * lines are dropped: World is passed in.
+ * lines are dropped: World and readGlb are passed in, and levelBytes is a
+ * small .glb, a floor and a flight of stairs, for readGlb's examples.
  */
 const PREAMBLE = `
   const world = new World();
+  const levelBytes = makeLevel();
   const ball = world.addBody({ shape: 'sphere', radius: 0.5, position: [0, 4, 0] });
   const crate = world.addBody({ position: [2, 0.5, 0] });
   const player = world.addBody({ shape: 'capsule', radius: 0.3, height: 1.8, mass: 80 });
   const bodies = [ball, crate];
 `;
 const quiet = { log() {} };
+
+/** A .glb of two nodes, 'floor' and 'stairs', each one triangle: enough for an example to read. */
+function makeLevel() {
+  const corners = new Float32Array([0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  let text = JSON.stringify({
+    asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0, 1] }],
+    nodes: [{ name: 'floor', mesh: 0 }, { name: 'stairs', mesh: 0, translation: [0, 1, 0] }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' }],
+    bufferViews: [{ buffer: 0, byteLength: 36 }], buffers: [{ byteLength: 36 }],
+  });
+  while (text.length % 4) text += ' ';
+  const j = new TextEncoder().encode(text), out = new Uint8Array(20 + j.length + 8 + 36), v = new DataView(out.buffer);
+  v.setUint32(0, 0x46546c67, true); v.setUint32(4, 2, true); v.setUint32(8, out.length, true);
+  v.setUint32(12, j.length, true); v.setUint32(16, 0x4e4f534a, true); out.set(j, 20);
+  v.setUint32(20 + j.length, 36, true); v.setUint32(24 + j.length, 0x004e4942, true);
+  out.set(new Uint8Array(corners.buffer), 28 + j.length);
+  return out;
+}
 
 function examples(markdown) {
   return [...markdown.matchAll(/```js\n([^]*?)```/g)].map((m) => m[1]);
@@ -97,7 +118,7 @@ test('every example in the API reference and the README runs', () => {
   for (const code of all) {
     const body = code.split('\n').filter((line) => !line.startsWith('import ')).join('\n');
     try {
-      new Function('World', 'console', `${PREAMBLE}\n{\n${body}\n}`)(World, quiet);
+      new Function('World', 'readGlb', 'makeLevel', 'console', `${PREAMBLE}\n{\n${body}\n}`)(World, readGlb, makeLevel, quiet);
     } catch (e) {
       assert.fail(`this example throws ${e.message}:\n${code}`);
     }

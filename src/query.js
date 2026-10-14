@@ -14,13 +14,25 @@
 //
 // Queries run outside the step, when the user calls them, and return fresh
 // objects; they cost nothing until called.
+//
+// A mesh or heightfield is asked about its triangles: the query goes into
+// the body's own frame, and the mesh's tree (or the heightfield's grid) says
+// which triangles to test. Every triangle has two sides, as it does for
+// contacts, and seams make no difference to a query: a ray hits where the
+// triangles are.
 
-import { Shape, Manifold, collide, SPHERE, CAPSULE } from './collide.js';
+import { Shape, Manifold, collide, SPHERE, CAPSULE, TRIANGLE } from './collide.js';
 import { load, PIXEL } from './contact.js';
 import { raycast as walk } from './tree.js';
 import { closest, Closest, radius } from './gjk.js';
+import { touch } from './triangle.js';
+import { triangleNormal } from './mesh.js';
+import { rotate } from './core/math.js';
 
 const STATIC = 1, MOVING_TREE = 1;   // World's static type code; Broadphase's moving tree
+const MESH = 3;                      // World's shape code; shapes from it on are triangles
+/** Every edge and corner a corner from both sides (mesh.js): pure geometry, with no seams. */
+const BARE = 63;
 
 /**
  * Conservative advancement stops once the gap is under the contact tolerance,
@@ -35,6 +47,43 @@ const ADVANCES = 64;
 // Scratch, since queries aren't re-entered.
 const body = new Shape(), manifold = new Manifold(), near = new Closest();
 const normal = new Float64Array(3), point = new Float64Array(3);
+const tri = new Shape(), local = new Float64Array(3), dir = new Float64Array(3);
+tri.kind = TRIANGLE;
+
+/** Triangle t of slot s's mesh or heightfield, placed in the world, into tri. */
+function triangle(world, s, t) {
+  const g = world._geometry[s], p = tri.points, pos = world._position, s3 = 3 * s;
+  g.triangle(t, p);
+  for (let v = 0; v < 9; v += 3) {
+    rotate(world._rotation, 4 * s, p[v], p[v + 1], p[v + 2], false, local);
+    p[v] = pos[s3] + local[0]; p[v + 1] = pos[s3 + 1] + local[1]; p[v + 2] = pos[s3 + 2] + local[2];
+  }
+  for (let k = 0; k < 3; k++) tri.center[k] = (p[k] + p[k + 3] + p[k + 6]) / 3;
+  triangleNormal(p, tri.axes);
+  return tri;
+}
+
+/**
+ * A box's half-extents (gx, gy, gz) along the world's axes, as half-extents
+ * along slot s's own axes: each of its axes reaches |that axis·world axis|
+ * of each. From the rotation now, not the axes the last step worked with.
+ */
+function extentsIn(world, s, gx, gy, gz) {
+  const out = [0, 0, 0];
+  for (let j = 0; j < 3; j++) {
+    const g = j === 0 ? gx : j === 1 ? gy : gz;
+    rotate(world._rotation, 4 * s, j === 0 ? 1 : 0, j === 1 ? 1 : 0, j === 2 ? 1 : 0, true, dir);
+    out[0] += Math.abs(dir[0]) * g; out[1] += Math.abs(dir[1]) * g; out[2] += Math.abs(dir[2]) * g;
+  }
+  return out;
+}
+
+/** (x, y, z) into slot s's own frame, into out: a point, or a direction when `point` is false. */
+function inward(world, s, x, y, z, isPoint, out) {
+  const p = world._position, s3 = 3 * s;
+  if (isPoint) { x -= p[s3]; y -= p[s3 + 1]; z -= p[s3 + 2]; }
+  return rotate(world._rotation, 4 * s, x, y, z, true, out);
+}
 
 /** Slot s's shape where it is now, into out. */
 function place(world, s, out) {
@@ -161,6 +210,50 @@ export function rayShape(s, ox, oy, oz, dx, dy, dz, maxT) {
 
 const ENDS = [-1, 1];
 
+/**
+ * Where the ray meets the triangle in p, from either side, before maxT, with
+ * its unit normal turned back at the ray into `normal`; or -1. Edges count
+ * as the triangle's own, so a ray down the line between two triangles hits.
+ * Möller and Trumbore's test.
+ */
+function rayTriangle(p, ox, oy, oz, dx, dy, dz, maxT) {
+  const e1x = p[3] - p[0], e1y = p[4] - p[1], e1z = p[5] - p[2], e2x = p[6] - p[0], e2y = p[7] - p[1], e2z = p[8] - p[2];
+  const hx = dy * e2z - dz * e2y, hy = dz * e2x - dx * e2z, hz = dx * e2y - dy * e2x;
+  const a = e1x * hx + e1y * hy + e1z * hz;
+  if (a === 0) return -1;   // along its plane: it passes the triangle edge-on
+  const f = 1 / a, sx = ox - p[0], sy = oy - p[1], sz = oz - p[2];
+  const u = f * (sx * hx + sy * hy + sz * hz);
+  if (u < 0 || u > 1) return -1;
+  const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+  const v = f * (dx * qx + dy * qy + dz * qz);
+  if (v < 0 || u + v > 1) return -1;
+  const t = f * (e2x * qx + e2y * qy + e2z * qz);
+  if (t < 0 || t >= maxT) return -1;
+  let nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+  const l = Math.sqrt(nx * nx + ny * ny + nz * nz) * (nx * dx + ny * dy + nz * dz > 0 ? -1 : 1);
+  normal[0] = nx / l; normal[1] = ny / l; normal[2] = nz / l;
+  return t;
+}
+
+/**
+ * Where the ray first meets slot s's mesh or heightfield before maxT, with
+ * the world normal in `normal`; or -1. Tested in the body's own frame.
+ */
+function rayLevel(world, s, ox, oy, oz, dx, dy, dz, maxT) {
+  const g = world._geometry[s], p = tri.points;
+  const [lx, ly, lz] = inward(world, s, ox, oy, oz, true, local);
+  const [ux, uy, uz] = inward(world, s, dx, dy, dz, false, dir);
+  let best = -1, nx = 0, ny = 0, nz = 0;
+  g.ray(lx, ly, lz, ux, uy, uz, maxT, 0, 0, 0, (t) => {
+    g.triangle(t, p);
+    const at = rayTriangle(p, lx, ly, lz, ux, uy, uz, maxT);
+    if (at >= 0) { best = maxT = at; nx = normal[0]; ny = normal[1]; nz = normal[2]; }
+    return maxT;
+  });
+  if (best >= 0) rotate(world._rotation, 4 * s, nx, ny, nz, false, normal);
+  return best;
+}
+
 function inside(dx, dy, dz) {
   normal[0] = -dx; normal[1] = -dy; normal[2] = -dz;
   return 0;
@@ -177,7 +270,8 @@ export function ray(world, ox, oy, oz, dx, dy, dz, maxT, mask, ignore, hit, near
     // A stray can be reached through the tree as well; it counts once.
     if (seen.has(s) || !wanted(world, s, mask, ignore)) return maxT;
     seen.add(s);
-    const t = rayShape(place(world, s, body), ox, oy, oz, dx, dy, dz, maxT);
+    const t = world._shape[s] >= MESH ? rayLevel(world, s, ox, oy, oz, dx, dy, dz, maxT)
+      : rayShape(place(world, s, body), ox, oy, oz, dx, dy, dz, maxT);
     if (t < 0) return maxT;
     hit(s, t, normal);
     if (nearest) maxT = t;
@@ -199,10 +293,8 @@ export function ray(world, ox, oy, oz, dx, dy, dz, maxT, mask, ignore, hit, near
  * it. Returns -1 for no touch, with the normal (from the body towards the
  * cast) in `normal` and the point on the body in `point` otherwise.
  */
-function advance(world, cast, s, ox, oy, oz, dx, dy, dz, maxT) {
-  const b = place(world, s, body);
-  const ra = radius(cast), rb = radius(b);
-  const scale = Math.min(world._size[s], size(cast)), tolerance = scale * PIXEL;
+function advance(cast, b, scale, ox, oy, oz, dx, dy, dz, maxT) {
+  const ra = radius(cast), rb = radius(b), tolerance = scale * PIXEL;
   // Cores closer than this are meeting: GJK's closest points are rounding
   // there, half a double's bits of the shapes' size, and give no direction.
   const meeting = scale / 67108864;   // 2^-26
@@ -216,7 +308,7 @@ function advance(world, cast, s, ox, oy, oz, dx, dy, dz, maxT) {
         const nx = (near.a[0] - near.b[0]) / d, ny = (near.a[1] - near.b[1]) / d, nz = (near.a[2] - near.b[2]) / d;
         normal[0] = nx; normal[1] = ny; normal[2] = nz;
         point[0] = near.b[0] + nx * rb; point[1] = near.b[1] + ny * rb; point[2] = near.b[2] + nz * rb;
-      } else if (collide(cast, b, 0, tolerance, manifold) > 0) {
+      } else if ((b.kind === TRIANGLE ? touch(cast, b, BARE, 0, tolerance, manifold, 0) : collide(cast, b, 0, tolerance, manifold)) > 0) {
         // The cores meet: the shapes overlap, deeply, where it started. The
         // narrowphase knows which way out; its normal runs from the cast to the body.
         normal[0] = -manifold.normal[0]; normal[1] = -manifold.normal[1]; normal[2] = -manifold.normal[2];
@@ -241,6 +333,36 @@ function size(s) {
   return 2 * Math.min(s.half[0], s.half[1], s.half[2]);
 }
 
+/** The size a query against slot s scales its tolerance by: the smaller, as for a contact; a mesh has none of its own. */
+function scaleOf(world, s, shape) {
+  const own = world._size[s];
+  return own > 0 ? Math.min(own, size(shape)) : size(shape);
+}
+
+/**
+ * Where `cast` first touches slot s's mesh or heightfield, as advance()
+ * does for one shape, testing each triangle its sweep can reach.
+ */
+function castLevel(world, cast, s, ox, oy, oz, dx, dy, dz, maxT, gx, gy, gz) {
+  const g = world._geometry[s], scale = size(cast);
+  const [lx, ly, lz] = inward(world, s, ox, oy, oz, true, local);
+  const [ux, uy, uz] = inward(world, s, dx, dy, dz, false, dir);
+  const [hx, hy, hz] = extentsIn(world, s, gx, gy, gz);
+  let best = -1;
+  const n = [0, 0, 0], at = [0, 0, 0];
+  g.ray(lx, ly, lz, ux, uy, uz, maxT, hx, hy, hz, (t) => {
+    const hit = advance(cast, triangle(world, s, t), scale, ox, oy, oz, dx, dy, dz, maxT);
+    if (hit >= 0) {
+      best = maxT = hit;
+      n[0] = normal[0]; n[1] = normal[1]; n[2] = normal[2];
+      at[0] = point[0]; at[1] = point[1]; at[2] = point[2];
+    }
+    return maxT;
+  });
+  normal.set(n); point.set(at);
+  return best;
+}
+
 /**
  * The first body `cast`, placed at its start, touches moving along the unit
  * (dx, dy, dz) before maxT, through hit(slot, distance, normal, point), or
@@ -253,7 +375,8 @@ export function shapeCast(world, cast, dx, dy, dz, maxT, mask, ignore, hit) {
   let best = -1;
   const visit = (s) => {
     if (!wanted(world, s, mask, ignore)) return maxT;
-    const t = advance(world, cast, s, ox, oy, oz, dx, dy, dz, maxT);
+    const t = world._shape[s] >= MESH ? castLevel(world, cast, s, ox, oy, oz, dx, dy, dz, maxT, gx, gy, gz)
+      : advance(cast, place(world, s, body), scaleOf(world, s, cast), ox, oy, oz, dx, dy, dz, maxT);
     if (t < 0) return maxT;
     best = s;
     maxT = t;
@@ -274,9 +397,19 @@ export function overlap(world, shape, mask, ignore, hit) {
   const c = shape.center;
   const visit = (s) => {
     if (!wanted(world, s, mask, ignore)) return;
-    const b = place(world, s, body);
-    const tolerance = Math.min(world._size[s], size(shape)) * PIXEL;
-    if (collide(shape, b, 0, tolerance, manifold) > 0) hit(s);
+    const tolerance = scaleOf(world, s, shape) * PIXEL;
+    if (world._shape[s] < MESH) {
+      if (collide(shape, place(world, s, body), 0, tolerance, manifold) > 0) hit(s);
+      return;
+    }
+    // The shape's box in the body's own frame; any triangle in it that it touches.
+    const [lx, ly, lz] = inward(world, s, c[0], c[1], c[2], true, local);
+    const [hx, hy, hz] = extentsIn(world, s, ext[0], ext[1], ext[2]);
+    let touched = false;
+    world._geometry[s].triangles(lx - hx, ly - hy, lz - hz, lx + hx, ly + hy, lz + hz, (t) => {
+      if (!touched && touch(shape, triangle(world, s, t), BARE, 0, tolerance, manifold, t) > 0) touched = true;
+    });
+    if (touched) hit(s);
   };
   const seen = new Set();
   const once = (s) => { if (!seen.has(s)) { seen.add(s); visit(s); } };

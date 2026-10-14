@@ -47,13 +47,21 @@
 // boxes overlap, so nothing has to be looked up: store() writes them after
 // the solve, and the next step's carry() reads them back. A patch's rolling
 // and spinning impulse is kept the same way, as one angular impulse.
+//
+// MESHES. A body against a mesh or a heightfield is one pair, but may touch
+// it along several directions at once: a box in a valley is pushed by both
+// slopes. triangle.js gives one manifold per direction, and the pair keeps a
+// Memory of each (pairs.js); a manifold starts from the remembered one whose
+// normal is nearest its own, so a box sliding from triangle to triangle of a
+// flat floor keeps its impulses all the way across.
 
 import { collide, Shape, Manifold, SPHERE, CAPSULE, BOX as BOX_KIND } from './collide.js';
+import { touchLevel, Touches } from './triangle.js';
 import { rotate } from './core/math.js';
 import { resized } from './core/slots.js';
 
 const DYNAMIC = 0, STATIC = 1;
-const BOX = 0, SPHERE_SHAPE = 1;   // World's shape codes
+const BOX = 0, SPHERE_SHAPE = 1, CAPSULE_SHAPE = 2, MESH = 3;   // World's shape codes; a heightfield is 4
 
 /**
  * A contact may sink this much of the smaller body's thinnest size, and the
@@ -89,6 +97,7 @@ export class Contacts {
     const grow = (name, Type, n) => { this[name] = this[name] ? resized(this[name], n) : new Type(n); };
     grow('a', Int32Array, m); grow('b', Int32Array, m);
     grow('pair', Int32Array, m);   // which pair in the pair list this manifold is
+    grow('sub', Int32Array, m);    // a mesh pair's: which of its Memory's manifolds this one is kept as; else -1
     grow('points', Uint8Array, m);
     grow('normal', Float64Array, 3 * m); grow('t1', Float64Array, 3 * m); grow('t2', Float64Array, 3 * m);
     grow('friction', Float64Array, m); grow('restitution', Float64Array, m); grow('tolerance', Float64Array, m);
@@ -137,6 +146,7 @@ const target = new Float64Array(P), massScale = new Float64Array(P), impulseScal
 
 const shapeA = new Shape(), shapeB = new Shape();
 const manifold = new Manifold();
+const touches = new Touches();
 const v3 = new Float64Array(3);
 
 /**
@@ -151,7 +161,7 @@ const v3 = new Float64Array(3);
  * woken stack is held up in the very step it wakes.
  */
 export function narrow(world, pairs, broadphase, next, from) {
-  const box = world._box, reach = world._motion, awake = world._awake;
+  const box = world._box, reach = world._motion, awake = world._awake, shape = world._shape;
   for (let p = from; p < pairs.active;) {
     if (!pairs.holds(p, broadphase)) {
       pairs.remove(p);   // the last pair moves into p, so p is looked at again
@@ -162,7 +172,12 @@ export function narrow(world, pairs, broadphase, next, from) {
     // motion, may not: nothing can touch this step, and nothing is carried.
     if (box[a6] > box[b6 + 3] || box[b6] > box[a6 + 3] || box[a6 + 1] > box[b6 + 4]
       || box[b6 + 1] > box[a6 + 4] || box[a6 + 2] > box[b6 + 5] || box[b6 + 2] > box[a6 + 5]) {
-      pairs.points[p] = 0;
+      pairs.forget(p);
+      p++;
+      continue;
+    }
+    if (shape[a] >= MESH || shape[b] >= MESH) {
+      level(world, pairs, p, a, b, next);
       p++;
       continue;
     }
@@ -171,39 +186,14 @@ export function narrow(world, pairs, broadphase, next, from) {
     const tolerance = Math.min(world._size[a], world._size[b]) * PIXEL;
     const margin = reach[a] + reach[b] + tolerance;
     if (collide(shapeA, shapeB, margin, tolerance, manifold) === 0) {
-      pairs.points[p] = 0;
+      pairs.forget(p);
       p++;
       continue;
     }
 
     // Static bodies are never awake, and _wake leaves them be.
     if (awake[a] !== awake[b]) world._wake(awake[a] ? b : a);
-
-    const m = next.count++;
-    next.ensure(next.count);
-    next.a[m] = a; next.b[m] = b; next.pair[m] = p;
-    next.points[m] = manifold.count;
-    for (let k = 0; k < 3; k++) next.normal[3 * m + k] = manifold.normal[k];
-    // Friction mixes as a geometric mean, so ice is slippery against
-    // anything; restitution takes the larger, so a bouncy ball bounces off
-    // anything. Box2D's rules.
-    next.friction[m] = Math.sqrt(world._friction[a] * world._friction[b]);
-    next.restitution[m] = Math.max(world._restitution[a], world._restitution[b]);
-    next.tolerance[m] = tolerance;
-    // The patch is the rolling body's: a ball's is the same on any floor,
-    // however thin. Between two dynamic bodies, the smaller one's.
-    const type = world._type;
-    next.patch[m] = PIXEL * (type[a] !== DYNAMIC ? world._size[b] : type[b] !== DYNAMIC ? world._size[a]
-      : Math.min(world._size[a], world._size[b]));
-    next.rollImpulse1[m] = 0; next.rollImpulse2[m] = 0; next.spinImpulse[m] = 0;
-    for (let k = 0; k < manifold.count; k++) {
-      const i = m * P + k;
-      next.pid[i] = manifold.ids[k];
-      next.separation[i] = manifold.separations[k];
-      for (let c = 0; c < 3; c++) next.point[3 * i + c] = manifold.points[3 * k + c];
-      next.normalImpulse[i] = 0; next.tangentImpulse1[i] = 0; next.tangentImpulse2[i] = 0;
-    }
-    basis(next, m);
+    const m = emit(world, next, p, a, b, manifold, 1, tolerance, -1);
     carry(pairs, p, next, m);
     p++;
   }
@@ -211,16 +201,100 @@ export function narrow(world, pairs, broadphase, next, from) {
 }
 
 /**
- * The pair's remembered impulses onto this step's points with the same
- * feature id. Friction is remembered as a vector in world space and laid onto
- * this step's tangents, since the tangents turn with the normal from step to step.
+ * Pair p, one of whose bodies is a mesh or a heightfield (never both: neither
+ * is ever dynamic): a manifold for each direction the other body touches it
+ * along, each started from the remembered manifold nearest its direction.
  */
-function carry(pairs, p, next, m) {
-  const remembered = pairs.points[p];
+function level(world, pairs, p, a, b, next) {
+  const turned = world._shape[a] >= MESH, g = turned ? a : b, o = turned ? b : a;
+  load(world, o, shapeA);
+  // A mesh is a surface, with no thickness of its own: the tolerance is the other body's.
+  const tolerance = world._size[o] * PIXEL, reach = world._motion;
+  const margin = reach[a] + reach[b] + tolerance;
+  // The other body's box, already grown by its motion, into the mesh's
+  // frame, and grown by the mesh's own motion: where its triangles can be met.
+  const box = world._box, o6 = 6 * o, g3 = 3 * g, g9 = 9 * g, A = world._axes, pos = world._position;
+  const cx = (box[o6] + box[o6 + 3]) * 0.5 - pos[g3], cy = (box[o6 + 1] + box[o6 + 4]) * 0.5 - pos[g3 + 1];
+  const cz = (box[o6 + 2] + box[o6 + 5]) * 0.5 - pos[g3 + 2];
+  const hx = (box[o6 + 3] - box[o6]) * 0.5, hy = (box[o6 + 4] - box[o6 + 1]) * 0.5, hz = (box[o6 + 5] - box[o6 + 2]) * 0.5;
+  const lx = A[g9] * cx + A[g9 + 1] * cy + A[g9 + 2] * cz;
+  const ly = A[g9 + 3] * cx + A[g9 + 4] * cy + A[g9 + 5] * cz;
+  const lz = A[g9 + 6] * cx + A[g9 + 7] * cy + A[g9 + 8] * cz;
+  const ex = Math.abs(A[g9]) * hx + Math.abs(A[g9 + 1]) * hy + Math.abs(A[g9 + 2]) * hz + reach[g];
+  const ey = Math.abs(A[g9 + 3]) * hx + Math.abs(A[g9 + 4]) * hy + Math.abs(A[g9 + 5]) * hz + reach[g];
+  const ez = Math.abs(A[g9 + 6]) * hx + Math.abs(A[g9 + 7]) * hy + Math.abs(A[g9 + 8]) * hz + reach[g];
+  const n = touchLevel(world._geometry[g], pos, A, g, shapeA, lx - ex, ly - ey, lz - ez, lx + ex, ly + ey, lz + ez,
+    margin, tolerance, touches);
+  if (n === 0) {
+    pairs.forget(p);
+    return;
+  }
+  const awake = world._awake;
+  if (awake[a] !== awake[b]) world._wake(awake[a] ? b : a);
+  const kept = pairs.memoryOf(p);
+  kept.taken.fill(0, 0, kept.count);
+  for (let k = 0; k < n; k++) {
+    // Normals come out from the other body; a pair's point from a to b.
+    const m = emit(world, next, p, a, b, touches.list[k], turned ? -1 : 1, tolerance, k);
+    let best = -1, most = 0;
+    for (let j = 0; j < kept.count; j++) {
+      if (kept.taken[j]) continue;
+      const d = kept.normal[3 * j] * next.normal[3 * m] + kept.normal[3 * j + 1] * next.normal[3 * m + 1]
+        + kept.normal[3 * j + 2] * next.normal[3 * m + 2];
+      if (d > most) { most = d; best = j; }
+    }
+    if (best < 0) continue;
+    kept.taken[best] = 1;
+    carry(kept, best, next, m);
+  }
+}
+
+/**
+ * Manifold mf of pair p, between slots a and b, as the next manifold in
+ * next, its normal times sign; returns its index. sub is which of a mesh
+ * pair's manifolds it is, or -1.
+ */
+function emit(world, next, p, a, b, mf, sign, tolerance, sub) {
+  const m = next.count++;
+  next.ensure(next.count);
+  next.a[m] = a; next.b[m] = b; next.pair[m] = p; next.sub[m] = sub;
+  next.points[m] = mf.count;
+  for (let k = 0; k < 3; k++) next.normal[3 * m + k] = sign * mf.normal[k];
+  // Friction mixes as a geometric mean, so ice is slippery against
+  // anything; restitution takes the larger, so a bouncy ball bounces off
+  // anything. Box2D's rules.
+  next.friction[m] = Math.sqrt(world._friction[a] * world._friction[b]);
+  next.restitution[m] = Math.max(world._restitution[a], world._restitution[b]);
+  next.tolerance[m] = tolerance;
+  // The patch is the rolling body's: a ball's is the same on any floor,
+  // however thin. Between two dynamic bodies, the smaller one's.
+  const type = world._type;
+  next.patch[m] = PIXEL * (type[a] !== DYNAMIC ? world._size[b] : type[b] !== DYNAMIC ? world._size[a]
+    : Math.min(world._size[a], world._size[b]));
+  next.rollImpulse1[m] = 0; next.rollImpulse2[m] = 0; next.spinImpulse[m] = 0;
+  for (let k = 0; k < mf.count; k++) {
+    const i = m * P + k;
+    next.pid[i] = mf.ids[k];
+    next.separation[i] = mf.separations[k];
+    for (let c = 0; c < 3; c++) next.point[3 * i + c] = mf.points[3 * k + c];
+    next.normalImpulse[i] = 0; next.tangentImpulse1[i] = 0; next.tangentImpulse2[i] = 0;
+  }
+  basis(next, m);
+  return m;
+}
+
+/**
+ * What "from" remembers at p (the pair list for pair p, or a mesh pair's
+ * Memory for its manifold p) onto this step's points with the same feature
+ * id. Friction is remembered as a vector in world space and laid onto this
+ * step's tangents, since the tangents turn with the normal from step to step.
+ */
+function carry(from, p, next, m) {
+  const remembered = from.points[p];
   if (remembered === 0) return;
   if (next.points[m] <= 2) {
     const p3 = 3 * p, m3 = 3 * m;
-    const lx = pairs.twist[p3], ly = pairs.twist[p3 + 1], lz = pairs.twist[p3 + 2];
+    const lx = from.twist[p3], ly = from.twist[p3 + 1], lz = from.twist[p3 + 2];
     next.rollImpulse1[m] = lx * next.t1[m3] + ly * next.t1[m3 + 1] + lz * next.t1[m3 + 2];
     next.rollImpulse2[m] = lx * next.t2[m3] + ly * next.t2[m3 + 1] + lz * next.t2[m3 + 2];
     next.spinImpulse[m] = lx * next.normal[m3] + ly * next.normal[m3 + 1] + lz * next.normal[m3 + 2];
@@ -229,9 +303,9 @@ function carry(pairs, p, next, m) {
     const i = m * P + k, id = next.pid[i];
     for (let j = 0; j < remembered; j++) {
       const o = p * P + j;
-      if (pairs.pid[o] !== id) continue;
-      next.normalImpulse[i] = pairs.normalImpulse[o];
-      const fx = pairs.friction[3 * o], fy = pairs.friction[3 * o + 1], fz = pairs.friction[3 * o + 2];
+      if (from.pid[o] !== id) continue;
+      next.normalImpulse[i] = from.normalImpulse[o];
+      const fx = from.friction[3 * o], fy = from.friction[3 * o + 1], fz = from.friction[3 * o + 2];
       next.tangentImpulse1[i] = fx * next.t1[3 * m] + fy * next.t1[3 * m + 1] + fz * next.t1[3 * m + 2];
       next.tangentImpulse2[i] = fx * next.t2[3 * m] + fy * next.t2[3 * m + 1] + fz * next.t2[3 * m + 2];
       break;
@@ -239,24 +313,42 @@ function carry(pairs, p, next, m) {
   }
 }
 
-/** After the solve: each pair remembers its points' ids and impulses, for the next step. */
+/**
+ * After the solve: each pair remembers its points' ids and impulses, for the
+ * next step; a mesh pair, each of its manifolds, with its normal, in its Memory.
+ */
 export function store(pairs, c) {
   for (let m = 0; m < c.count; m++) {
-    const p = c.pair[m], count = c.points[m], m3 = 3 * m, p3 = 3 * p;
-    pairs.points[p] = count;
-    const r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m], sp = c.spinImpulse[m];
-    pairs.twist[p3] = c.t1[m3] * r1 + c.t2[m3] * r2 + c.normal[m3] * sp;
-    pairs.twist[p3 + 1] = c.t1[m3 + 1] * r1 + c.t2[m3 + 1] * r2 + c.normal[m3 + 1] * sp;
-    pairs.twist[p3 + 2] = c.t1[m3 + 2] * r1 + c.t2[m3 + 2] * r2 + c.normal[m3 + 2] * sp;
-    for (let k = 0; k < count; k++) {
-      const i = m * P + k, o = p * P + k, m3 = 3 * m;
-      pairs.pid[o] = c.pid[i];
-      pairs.normalImpulse[o] = c.normalImpulse[i];
-      const l1 = c.tangentImpulse1[i], l2 = c.tangentImpulse2[i];
-      pairs.friction[3 * o] = c.t1[m3] * l1 + c.t2[m3] * l2;
-      pairs.friction[3 * o + 1] = c.t1[m3 + 1] * l1 + c.t2[m3 + 1] * l2;
-      pairs.friction[3 * o + 2] = c.t1[m3 + 2] * l1 + c.t2[m3 + 2] * l2;
+    const p = c.pair[m], sub = c.sub[m];
+    if (sub < 0) {
+      keep(pairs, p, c, m);
+      continue;
     }
+    // A mesh pair's manifolds come in order, so the last one sets the count.
+    const kept = pairs.memoryOf(p);
+    kept.ensure(sub + 1);
+    kept.count = sub + 1;
+    for (let k = 0; k < 3; k++) kept.normal[3 * sub + k] = c.normal[3 * m + k];
+    keep(kept, sub, c, m);
+  }
+}
+
+/** Manifold m's ids and impulses into "to" (the pair list, or a Memory) at p. */
+function keep(to, p, c, m) {
+  const count = c.points[m], m3 = 3 * m, p3 = 3 * p;
+  to.points[p] = count;
+  const r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m], sp = c.spinImpulse[m];
+  to.twist[p3] = c.t1[m3] * r1 + c.t2[m3] * r2 + c.normal[m3] * sp;
+  to.twist[p3 + 1] = c.t1[m3 + 1] * r1 + c.t2[m3 + 1] * r2 + c.normal[m3 + 1] * sp;
+  to.twist[p3 + 2] = c.t1[m3 + 2] * r1 + c.t2[m3 + 2] * r2 + c.normal[m3 + 2] * sp;
+  for (let k = 0; k < count; k++) {
+    const i = m * P + k, o = p * P + k;
+    to.pid[o] = c.pid[i];
+    to.normalImpulse[o] = c.normalImpulse[i];
+    const l1 = c.tangentImpulse1[i], l2 = c.tangentImpulse2[i];
+    to.friction[3 * o] = c.t1[m3] * l1 + c.t2[m3] * l2;
+    to.friction[3 * o + 1] = c.t1[m3 + 1] * l1 + c.t2[m3 + 1] * l2;
+    to.friction[3 * o + 2] = c.t1[m3 + 2] * l1 + c.t2[m3 + 2] * l2;
   }
 }
 
@@ -270,7 +362,8 @@ export function store(pairs, c) {
  * this: a 1 cm marble rolled at 1 m/s hopped a third of its radius and lost
  * 9% of its speed in 5 s. So a ball's anchor is its centre and a capsule's
  * the nearest point of its axis, which move with it as they should, and a
- * box's is the point itself, since a box's surface does turn with it.
+ * box's is the point itself, since a box's surface does turn with it, as a
+ * mesh's does.
  * Leaves the anchor's world offset at the start in v3: for a box, the
  * offset it was given, unchanged; a ball's, zero.
  */
@@ -282,7 +375,7 @@ function core(world, s, x, y, z, out, o) {
     return;
   }
   rotate(world._rotation, s * 4, x, y, z, true, v3);
-  if (shape === BOX) {
+  if (shape !== CAPSULE_SHAPE) {
     out[o] = v3[0]; out[o + 1] = v3[1]; out[o + 2] = v3[2];
     v3[0] = x; v3[1] = y; v3[2] = z;
     return;
@@ -292,7 +385,7 @@ function core(world, s, x, y, z, out, o) {
   rotate(world._rotation, s * 4, 0, out[o + 1], 0, false, v3);
 }
 
-/** A body's shape, placed, into s. */
+/** A body's shape, placed, into s. Not for a mesh or a heightfield, which are triangles (triangle.js). */
 export function load(world, slot, s) {
   const shape = world._shape[slot], d = world._dims, s3 = slot * 3;
   if (shape === BOX) {

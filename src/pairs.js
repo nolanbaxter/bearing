@@ -17,6 +17,12 @@
 // the boundary moves while the narrowphase is working through it. That order
 // depends only on the inputs, which keeps every step deterministic. A small
 // hash table, keyed by the two slots, says whether a pair is already listed.
+//
+// A pair with a mesh or a heightfield can touch along several directions at
+// once, a box in a valley pushed by both slopes, so it can have several
+// manifolds a step, and remembers each in a Memory of its own, matched from
+// step to step by direction (contact.js). Memories are reused, not made
+// afresh, as pairs come and go.
 
 import { resized } from './core/slots.js';
 
@@ -39,6 +45,9 @@ export class Pairs {
     this.normalImpulse = new Float64Array(0);
     this.friction = new Float64Array(0);   // the friction impulse at each point, as a world vector
     this.twist = new Float64Array(0);      // the pair's rolling and spinning friction, an angular impulse, world vector
+    /** A mesh pair's Memory, by pair; null for any other pair. */
+    this.memory = [];
+    this.spare = [];
     // The hash table: open addressing, linear probing, keys -1 where empty.
     this.slots = 0;
     this.keys = new Float64Array(0);
@@ -146,13 +155,15 @@ export class Pairs {
       if (this.idA[p] === ida && this.idB[p] === idb) return;
       // The same slots under new bodies: the old pair is stale, so it starts
       // over, among the awake pairs, since a new body is awake.
-      this.idA[p] = ida; this.idB[p] = idb; this.points[p] = 0;
+      this.idA[p] = ida; this.idB[p] = idb;
+      this.forget(p);
       if (p >= this.active) this.wake(p);
       return;
     }
     const p = this.count;
     this._grow(p + 1);
     this.a[p] = a; this.b[p] = b; this.idA[p] = ida; this.idB[p] = idb; this.points[p] = 0;
+    this.memory[p] = null;
     this._put(a, b, p);
     this.count++;
     this.wake(p);
@@ -161,6 +172,8 @@ export class Pairs {
   /** Takes pair p off the list; the pairs that fill its place come from the end of each run. */
   remove(p) {
     this._delete(this._find(this.a[p], this.b[p]));
+    const kept = this.memory[p];
+    if (kept) { kept.count = 0; this.spare.push(kept); }
     if (p < this.active) {
       const last = --this.active;
       if (p !== last) this._move(last, p);
@@ -168,6 +181,19 @@ export class Pairs {
     }
     const end = --this.count;
     if (p !== end) this._move(end, p);
+    this.memory[end] = null;
+  }
+
+  /** Pair p touched nothing this step: nothing to start the next from. */
+  forget(p) {
+    this.points[p] = 0;
+    const kept = this.memory[p];
+    if (kept) kept.count = 0;
+  }
+
+  /** Pair p's Memory, taken when it first needs one: a pair can become a mesh pair when a body is reshaped. */
+  memoryOf(p) {
+    return this.memory[p] || (this.memory[p] = this.spare.pop() || new Memory());
   }
 
   /** Moves asleep pair p into the awake run. Pairs below the boundary stay where they are. */
@@ -190,6 +216,7 @@ export class Pairs {
     this.normalImpulse.copyWithin(to * P, from * P, from * P + P);
     this.friction.copyWithin(to * P * 3, from * P * 3, from * P * 3 + P * 3);
     this.twist.copyWithin(to * 3, from * 3, from * 3 + 3);
+    this.memory[to] = this.memory[from];
     this.index[this._find(this.a[to], this.b[to])] = to;
   }
 
@@ -199,6 +226,9 @@ export class Pairs {
     swap(this.idA, i, j, 1); swap(this.idB, i, j, 1);
     swap(this.points, i, j, 1);
     swap(this.pid, i, j, P); swap(this.normalImpulse, i, j, P); swap(this.friction, i, j, 3 * P); swap(this.twist, i, j, 3);
+    const kept = this.memory[i];
+    this.memory[i] = this.memory[j];
+    this.memory[j] = kept;
     this.index[this._find(this.a[i], this.b[i])] = i;
     this.index[this._find(this.a[j], this.b[j])] = j;
   }
@@ -221,12 +251,47 @@ export class Pairs {
       let c = 16;
       while (c < this.count) c *= 2;
       this._alloc(c);
+      this.memory.length = Math.min(this.memory.length, c);
+      this.spare.length = 0;
     }
     if (this.slots > 16 && 8 * this.count <= this.slots) {
       let s = 16;
       while (s < 2 * this.count) s *= 2;
       this._rehash(s);
     }
+  }
+}
+
+/**
+ * What a mesh pair's manifolds left behind, for warm starting: per manifold,
+ * its normal and what Pairs keeps for one, grown by doubling.
+ */
+class Memory {
+  constructor() {
+    this.count = 0;
+    this.capacity = 0;
+    this.normal = new Float64Array(0);
+    this.taken = new Uint8Array(0);   // matched already this step
+    this.points = new Uint8Array(0);
+    this.pid = new Uint32Array(0);
+    this.normalImpulse = new Float64Array(0);
+    this.friction = new Float64Array(0);
+    this.twist = new Float64Array(0);
+    this.ensure(1);
+  }
+
+  ensure(n) {
+    if (n <= this.capacity) return;
+    let c = Math.max(this.capacity, 1);
+    while (c < n) c *= 2;
+    this.normal = resized(this.normal, 3 * c);
+    this.taken = resized(this.taken, c);
+    this.points = resized(this.points, c);
+    this.pid = resized(this.pid, c * P);
+    this.normalImpulse = resized(this.normalImpulse, c * P);
+    this.friction = resized(this.friction, c * P * 3);
+    this.twist = resized(this.twist, c * 3);
+    this.capacity = c;
   }
 }
 

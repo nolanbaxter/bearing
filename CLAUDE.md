@@ -83,6 +83,19 @@ These were made with Nolan and override the rules below where they differ.
   placed from current position and rotation; bodies that left their fat box mid-step are found
   through a per-step stray list, and queries never write to the tree. GJK lives in `src/gjk.js`
   for casts now and CCD and hulls later.
+- **Meshes and heightfields** (2026-10-14, milestone 9, approved): `shape: 'mesh'` (`vertices`,
+  `indices`) and `shape: 'heightfield'` (`heights`, `columns`, `spacing`; x along columns, z along
+  rows, centred; each cell cut from its lowest-x-and-z corner to its highest), and `readGlb(bytes,
+  { node })` exported beside World and Body. Static by default, kinematic allowed, dynamic throws
+  (compound shapes come later); no mass, density or inertia (`a mesh has no mass`). Two-sided.
+  Zero-area triangles left out. A mesh's `_size` is 0: its contacts and queries take the other
+  shape's tolerance. Per mesh pair: triangles under the other body's box, one manifold per
+  direction (normals within FLAT²/2), points sorted by id and reduced to four; each pair keeps a
+  Memory of its manifolds, matched by normal, for warm starting. Seams (`src/mesh.js` edge flags,
+  flat within FLAT = 2^-20 of edge length): a contact at a seam is dropped, never turned into the
+  face (that ghosted a ball 29 mm off a crest), except a ball over the triangle to the tolerance;
+  clip points on seams are dropped, a box's own corners never. `readGlb` takes bytes, not a URL;
+  Draco, meshopt and quantized positions throw naming the extension.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

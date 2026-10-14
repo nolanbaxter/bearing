@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { World } from '../src/bearing.js';
+import { World, readGlb } from '../src/bearing.js';
 import { suite, test, thrown } from './test.js';
 
 suite('errors');
@@ -44,7 +44,25 @@ const gone = () => {
   return { world, body };
 };
 
-const OPTIONS = 'type, shape, size, radius, height, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity';
+const OPTIONS = 'type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, position, rotation, velocity, angularVelocity';
+
+/** The smallest .glb: one node, 'floor', showing one triangle; `json` adds to its JSON. */
+function glb(json = {}) {
+  const corners = new Float32Array([0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  let text = JSON.stringify({
+    asset: { version: '2.0' }, nodes: [{ name: 'floor', mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' }],
+    bufferViews: [{ buffer: 0, byteLength: 36 }], buffers: [{ byteLength: 36 }], ...json,
+  });
+  while (text.length % 4) text += ' ';
+  const j = new TextEncoder().encode(text), out = new Uint8Array(20 + j.length + 8 + 36), v = new DataView(out.buffer);
+  v.setUint32(0, 0x46546c67, true); v.setUint32(4, 2, true); v.setUint32(8, out.length, true);
+  v.setUint32(12, j.length, true); v.setUint32(16, 0x4e4f534a, true); out.set(j, 20);
+  v.setUint32(20 + j.length, 36, true); v.setUint32(24 + j.length, 0x004e4942, true);
+  out.set(new Uint8Array(corners.buffer), 28 + j.length);
+  return out;
+}
 
 /** [entry, the call, the exact message]. */
 const cases = [
@@ -87,7 +105,16 @@ const cases = [
       [e, run({ Mass: 5 }), `${call}: unknown option 'Mass' (did you mean 'mass'?)`],
       [e, run({ banana: 1 }), `${call}: unknown option 'banana' (the options are ${OPTIONS})`],
       [e, run({ type: 'fixed' }), `${call}: type must be 'dynamic', 'static' or 'kinematic', got 'fixed'`],
-      [e, run({ shape: 'cube' }), `${call}: shape must be 'box', 'sphere' or 'capsule', got 'cube'`],
+      [e, run({ shape: 'cube' }), `${call}: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got 'cube'`],
+      [e, run({ shape: 'mesh', type: 'dynamic' }), `${call}: type must be 'static' or 'kinematic' for a mesh, got 'dynamic'`],
+      [e, run({ shape: 'heightfield', type: 'static', mass: 5 }), `${call}: a heightfield has no mass`],
+      [e, run({ shape: 'mesh', type: 'static', vertices: [0, 0, NaN] }), `${call}: vertices must be finite numbers, three to a vertex, got NaN at index 2`],
+      [e, run({ shape: 'mesh', type: 'static', vertices: [0, 0, 0], indices: [0, 0, 1] }),
+        `${call}: indices must be whole numbers below the vertex count (1), three to a triangle, got 1 at index 2`],
+      [e, run({ shape: 'heightfield', type: 'static', columns: 1 }), `${call}: columns must be a whole number, 2 or more, got 1`],
+      [e, run({ shape: 'heightfield', type: 'static', spacing: 0 }), `${call}: spacing must be a positive number, got 0`],
+      [e, run({ shape: 'heightfield', type: 'static', heights: [0, 0, 0] }),
+        `${call}: heights must be finite numbers, rows of columns (2), 2 rows or more, got 3 numbers`],
       [e, run({ radius: 0.5 }), `${call}: a box has no radius`],
       [e, run({ shape: 'sphere', height: 2 }), `${call}: a sphere has no height`],
       [e, run({ size: [1, 0, 1] }), `${call}: size must be 3 positive numbers, got 1,0,1`],
@@ -213,6 +240,17 @@ const cases = [
   ['body-applyimpulse', () => fresh().body.applyImpulse([0, 1, 0], null), 'applyImpulse: point must be 3 finite numbers, got null'],
   ['body-applyangularimpulse', () => fresh().body.applyAngularImpulse([0, '1', 0]), "applyAngularImpulse: impulse must be 3 finite numbers, got 0,'1',0"],
   ['body-destroy', () => gone().body.destroy(), 'destroy: this world was destroyed'],
+
+  ['readglb', () => readGlb(glb(), 5), 'readGlb: options must be an object, got 5'],
+  ['readglb', () => readGlb(glb(), { nod: 'floor' }), "readGlb: unknown option 'nod' (did you mean 'node'?)"],
+  ['readglb', () => readGlb(glb(), { scale: 2 }), "readGlb: unknown option 'scale' (the options are node)"],
+  ['readglb', () => readGlb(glb(), { node: 0 }), 'readGlb: node must be a string, got 0'],
+  ['readglb', () => readGlb(glb(), { node: 'roof' }), "readGlb: node must be the name of a node in the file, got 'roof'"],
+  ['readglb', () => readGlb('level.glb'), "readGlb: bytes must be an ArrayBuffer or a typed array, got 'level.glb'"],
+  ['readglb', () => readGlb(new Uint8Array(12)), "readGlb: bytes must be a binary glTF 2.0 file (.glb), got a file that doesn't start with glTF"],
+  ['readglb', () => readGlb(glb({ extensionsRequired: ['EXT_meshopt_compression'] })),
+    "readGlb: the file needs EXT_meshopt_compression, which Bearing doesn't read; export it without that"],
+  ['readglb', () => readGlb(glb().subarray(0, 60)), 'readGlb: the file is damaged: a chunk runs past the end of the file'],
 ];
 
 test('every case throws exactly its message', () => {

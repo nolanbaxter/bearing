@@ -2,7 +2,7 @@
 //   npx -y -p typescript@7 tsc --noEmit --strict --target es2022 --module nodenext --lib es2022 test/types.ts
 // Each @ts-expect-error is a mistake the types must refuse; tsc fails if one is let through.
 
-import { World, Body } from '../src/bearing.js';
+import { World, Body, readGlb } from '../src/bearing.js';
 import type { BodyOptions, BodyInfo, Vec3 } from '../src/bearing.js';
 
 export function examples(): void {
@@ -100,4 +100,26 @@ export function mistakes(world: World, body: Body): void {
   world.transforms = new Float32Array(0);
   const options: BodyOptions = { shape: 'capsule', height: 2 };
   void options;
+}
+
+export function level(bytes: ArrayBuffer): void {
+  const world = new World();
+  const ramp = world.addBody({ shape: 'mesh', vertices: [0, 0, 0, 4, 2, 0, 4, 2, 3, 0, 0, 3], indices: [0, 1, 2, 0, 2, 3] });
+  world.addBody({ shape: 'heightfield', heights: new Float32Array(9), columns: 3, spacing: 10 });
+  world.addBody({ shape: 'mesh', ...readGlb(bytes), type: 'kinematic', velocity: [1, 0, 0] });
+  world.addBody({ shape: 'mesh', ...readGlb(new Uint8Array(bytes), { node: 'stairs' }), position: [0, 0, 20] });
+  world.setBody(ramp, { heights: [0, 0, 0, 0], shape: 'heightfield' });
+  const info = world.bodyOf(ramp);
+  if (info.shape === 'heightfield') info.columns.toFixed();
+  if (info.shape === 'mesh') info.indices.length.toFixed();
+  // @ts-expect-error triangles have no mass: a mesh is never dynamic
+  world.addBody({ shape: 'mesh', type: 'dynamic' });
+  // @ts-expect-error a mesh has no mass
+  world.addBody({ shape: 'mesh', mass: 5 });
+  // @ts-expect-error a box has no heights: shape: 'heightfield' was forgotten
+  world.addBody({ heights: [0, 0, 0, 0] });
+  // @ts-expect-error a heightfield has no vertices
+  world.addBody({ shape: 'heightfield', vertices: [0, 0, 0] });
+  // @ts-expect-error readGlb takes the file's bytes, not its name
+  readGlb('level.glb');
 }
