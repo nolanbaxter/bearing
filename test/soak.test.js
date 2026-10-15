@@ -244,7 +244,13 @@ await test('a pile landing past sensors and cleared 30 times: event storage, sen
   }
   await collect();
   const grown = heap() - before;
-  assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
+  // As the mesh test's: V8 compiling this scene's paths, not Bearing's data.
+  // Measured on Node 22, growth climbed to about 285 KB by round 70 and then
+  // held, and with --jitless it was 5 KB after 50 rounds; Node 20 reached
+  // 303 KB here. A round's handles and events, kept, hold about 130 KB, so a
+  // kept round would show as 2.6 MB over the 20 measured rounds: 1 MB tells
+  // the two apart. Its storage is held to its size above, round by round.
+  assert.ok(grown < 1024 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
 });
 
 await test('chains and ragdoll-like trees made, swung and removed 30 times: joint storage, trees and memory come back', async () => {
