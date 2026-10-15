@@ -202,7 +202,13 @@ await test('meshes and heightfields made, landed on and removed 30 times: their 
   await collect();
   assert.equal(mesh.deref(), undefined, 'a removed mesh\'s triangles are still held');
   const grown = heap() - before;
-  assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
+  // V8 goes on compiling the mesh paths for far longer than the other tests'
+  // warm-up: measured on Node 22, growth climbed to about 450 KB by round 90
+  // and then held, and with --jitless it was 27 KB after 150 rounds. Node 20
+  // reached 278 KB here. One mesh and heightfield hold 166 KB, measured, so a
+  // level kept each round would show as 3.3 MB over the 20 measured rounds,
+  // and a third of one as 1.1 MB: 1 MB tells the two apart.
+  assert.ok(grown < 1024 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
 });
 
 await test('a pile landing past sensors and cleared 30 times: event storage, sensor pairs and memory come back', async () => {
