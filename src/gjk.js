@@ -38,6 +38,9 @@ const PROGRESS = 1 / 1073741824;   // 2^-30, written out: src/ uses no **
  */
 const ROUNDS = 64;
 
+/** A tetrahedron is flat where its fourth point's sine off a face, squared, is under this: (2^-26)². */
+const FLAT = 1 / 4503599627370496;   // 2^-52
+
 // The simplex: up to four points of the difference, with the points of A and
 // B each came from, for the closest points at the end. Module scratch, since
 // nothing re-enters this.
@@ -218,6 +221,13 @@ function triangle(i, j, k) {
  * The tetrahedron's nearest face to the origin, or false if the origin is
  * inside it. A face counts only if the origin is on its far side from the
  * fourth point; of those, the one whose nearest point is nearest wins.
+ *
+ * A flat tetrahedron, its fourth point in the plane of the other three to
+ * rounding, holds nothing inside, and every face's sides read as 0: then
+ * every face counts. Two boxes with faces in one plane make one, as a rod
+ * passing a wall's edge did, and taking it for the origin inside gave a
+ * distance of 0 for boxes 0.22 mm apart. Flat is a sine below 2^-26 between
+ * the fourth point and the face, half a double's bits: rounding's own size.
  */
 function tetrahedron() {
   let best = Infinity, bestFace = -1;
@@ -232,8 +242,10 @@ function tetrahedron() {
     const vx = w[3 * k] - ax, vy = w[3 * k + 1] - ay, vz = w[3 * k + 2] - az;
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
     const toOrigin = -(nx * ax + ny * ay + nz * az);
-    const toFourth = nx * (w[3 * o] - ax) + ny * (w[3 * o + 1] - ay) + nz * (w[3 * o + 2] - az);
-    if (toOrigin * toFourth >= 0) continue;   // the origin is on the fourth point's side
+    const ox = w[3 * o] - ax, oy = w[3 * o + 1] - ay, oz = w[3 * o + 2] - az;
+    const toFourth = nx * ox + ny * oy + nz * oz;
+    const flat = toFourth * toFourth <= FLAT * (nx * nx + ny * ny + nz * nz) * (ox * ox + oy * oy + oz * oz);
+    if (!flat && toOrigin * toFourth >= 0) continue;   // the origin is on the fourth point's side
     outside = true;
     W.set(w); PA.set(pa); PB.set(pb);
     count = 4;

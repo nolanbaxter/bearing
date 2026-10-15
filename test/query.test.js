@@ -304,8 +304,9 @@ test('a body struck so hard it leaves its fat box in a step is still found befor
   world.addBody({ type: 'static', size: [100, 1, 100], position: [0, -0.5, 0] });
   const marble = world.addBody({ shape: 'sphere', radius: 0.01, position: [0, 0.01, 0] });
   for (let i = 0; i < 30; i++) world.step(1 / 60);
-  // A heavy ball, fast, into the marble from the side.
-  const striker = world.addBody({ shape: 'sphere', radius: 0.3, density: 8000, position: [-0.4, 0.3, 0], velocity: [30, 0, 0] });
+  // A heavy ball, fast, into the marble from the side, at its own height: a
+  // ball much bigger would wedge it into the floor (see docs/API.md's Contacts).
+  const striker = world.addBody({ shape: 'sphere', radius: 0.01, density: 50000, position: [-0.1, 0.01, 0], velocity: [30, 0, 0] });
   world.step(1 / 60);
   const p = marble.position;
   const fat = world._broadphase.trees[1].box, o = 6 * world._broadphase.leaf[marble.slot];

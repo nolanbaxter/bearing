@@ -322,7 +322,7 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 | `position` | `[0, 0, 0]` | Where the body's centre is, in metres. |
 | `rotation` | `[0, 0, 0, 1]` | A quaternion `[x, y, z, w]`, normalized as it comes in. |
 | `velocity` | `[0, 0, 0]` | m/s. Not for a static body. |
-| `angularVelocity` | `[0, 0, 0]` | rad/s about each world axis. Not for a static body. |
+| `angularVelocity` | `[0, 0, 0]` | rad/s about each world axis. Not for a static body. A body other than a sphere spins at most half a turn a step, which the step holds it to; see [Contacts](#contacts). |
 
 Returns: a [`Body`](#body).
 
@@ -1229,6 +1229,23 @@ into each other, slide no more than friction allows, and bounce as much as their
 - **Contacts start before touching.** A pair close enough to meet within the step gets its contact
   early, so a falling box is stopped at the floor rather than sinking in and being pushed back out,
   and a fast body doesn't pass through a thin one between two steps.
+- **Fast bodies meet where they would meet.** A pair not yet touching that moves against itself by
+  more than its tolerance in the step is first asked when, within the step, its shapes would touch,
+  following each body's velocity, gravity and spin. If they wouldn't, it gets no contact, so a ball
+  passing a box's corner with room to spare, or flying through a gap wider than itself, keeps its
+  velocity exactly. If they would, its contact is made where both bodies will be at that moment,
+  with the real normal and points of impact, and the solver lets the pair close to exactly there.
+  Nothing needs flagging: a 1 cm ball at 500 m/s stops on a 1 cm wall, at any angle, and on a mesh,
+  a heightfield or a thin dynamic box; a 10 cm rod at 200 m/s spinning at up to 80 rad/s stops on
+  a 2 cm wall. Pairs at rest, or moving slowly against each other, never ask, and cost nothing
+  more. Against a mesh or heightfield the contact is still made where the step starts, so a fast
+  body skimming past a mesh's edge can still be touched by it.
+- **Spin is capped at half a turn a step, but for a sphere.** A body's contacts are found once a
+  step, and a body turning more than half a turn in one would meet the world on sides they never
+  saw: a 10 cm rod spun at 400 rad/s and dropped on another came off it at 9,600 rad/s before the
+  cap. So a body other than a sphere turns at most π radians a step, 188 rad/s at 60 Hz, and more
+  with smaller steps; Box2D and Jolt cap at a quarter turn. A sphere's contacts don't depend on how
+  it spins, so it spins as fast as it is made to.
 - **Only what can touch is looked at.** Each body sits in a tree of nested boxes, inside a box a
   little bigger than itself and stretched a few steps ahead along its velocity. Only a body that
   leaves its box is looked up again, and only bodies whose boxes overlap are tested in detail, so a
@@ -1248,7 +1265,13 @@ into each other, slide no more than friction allows, and bounce as much as their
   higher than its tolerance, √(2 g tolerance): below that, a body settles instead of bouncing for
   ever on rounding.
 
-Notes: a contact's patch also holds things a point contact wouldn't. A ball rests on a slope
+Notes: one case the solver can't settle in a step is a very light body wedged between two much
+heavier ones meeting it at an angle: a 1 cm marble 225,000 times lighter than what it is caught
+between, pressed by two contacts 20° apart, can be squeezed into one of them before the solver
+works it out. It is pushed back out over the next steps, at the tolerance a substep. Struck
+square-on, or by bodies nearer its own weight, it isn't.
+
+A contact's patch also holds things a point contact wouldn't. A ball rests on a slope
 gentler than its rolling resistance, 0.57° (tan θ = 0.01), and rolls down a steeper one. A box
 standing on an edge stays up while its centre is within its tolerance of being over the edge: a
 1 m cube 0.41° past balance stands, and 0.45° past falls. Friction 0 leaves no friction across a
@@ -1425,8 +1448,13 @@ for (const e of world.contacts(coin)) {
   woken, unless they then move apart.
 - **A touch the step couldn't foresee comes a step late.** Contacts are found from how bodies are
   moving when the step starts. A resting body knocked into another in the middle of the step meets
-  it unforeseen, and that touch begins at the next step, 1/60 s later at 60 Hz. In a scene of
-  bouncing and knocked bodies, 5 of 3,209 touches were.
+  it unforeseen, as does a spinning box whose contact held one corner while another swung down, and
+  that touch begins at the next step, 1/60 s later at 60 Hz. In a scene of bouncing and knocked
+  bodies, 12 of 3,251 pair-steps were.
+- **Round against round, the line is a little soft.** The step measures a pair's gap along the
+  normal its contact had when the step began. Two balls (or capsules) sliding past each other by d
+  in a step are measured off by up to about d² over their size: 0.3 mm for two 40 cm balls passing
+  at 0.9 m/s. Against a flat face the normal holds, and there is no such error.
 - **Events cost nothing when nothing changes.** The step writes an event only when a pair starts or
   stops touching, into storage it reuses, and builds objects only when you call `contacts()`.
   Measured on a settled pile of 1,000 boxes kept awake, and while it landed, steps cost the same as
@@ -1563,6 +1591,9 @@ One limit is hard, and it is derived rather than chosen:
   `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`. Joints
   have ids made the same way, so as many joints, apart from the bodies:
   `addJoint: a world holds at most 16777216 joints (the slot field of an id is 24 bits)`.
+
+One rate is capped, and the cap is documented where it acts: a body other than a sphere spins at
+most half a turn a step, π / dt rad/s (188 rad/s at 60 Hz). See [Contacts](#contacts).
 
 A slot can be reused 536,870,911 times (2^29 − 1) before it is retired and never handed out
 again, so no old id can ever match a new body. Reused once a step at 60 Hz, that is 280 years, so

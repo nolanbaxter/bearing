@@ -148,8 +148,15 @@ test('the pairs a step touches are exactly those checking every pair would find'
       const [a, b] = key.split('-').map(Number);
       return awake(a) || awake(b);
     });
+    // Every such pair is listed for the narrowphase, and every contact made
+    // is one of them. A listed pair can have no contact: time of impact
+    // (impact.js) found its bodies pass each other this step.
+    const listed = new Set(Array.from({ length: world._pairs.count }, (_, p) => `${world._pairs.a[p]}-${world._pairs.b[p]}`));
+    const missing = expected.filter((key) => !listed.has(key));
+    assert.deepEqual(missing, [], `step ${checked}: pairs the broadphase missed`);
     const found = touching(world);
-    assert.deepEqual(found, expected, `step ${checked}`);
+    const stray = found.filter((key) => !expected.includes(key));
+    assert.deepEqual(stray, [], `step ${checked}: contacts no pair within reach accounts for`);
     checked++;
     touched += found.length;
   });

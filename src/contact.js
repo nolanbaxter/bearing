@@ -64,6 +64,7 @@ import { collide, Shape, Manifold, SPHERE, CAPSULE, BOX as BOX_KIND } from './co
 import { touchLevel, Touches } from './triangle.js';
 import { rotate } from './core/math.js';
 import { resized } from './core/slots.js';
+import { impact, posed, UNSURE } from './impact.js';
 
 const DYNAMIC = 0, STATIC = 1;
 const BOX = 0, SPHERE_SHAPE = 1, CAPSULE_SHAPE = 2, MESH = 3;   // World's shape codes; a heightfield is 4
@@ -114,6 +115,13 @@ export class Contacts {
     grow('separation', Float64Array, p);
     grow('point', Float64Array, 3 * p);
     grow('ra', Float64Array, 3 * p); grow('rb', Float64Array, 3 * p);
+    // From a contact's point to b's end of it. A contact found where the step
+    // starts has its point midway between the two surfaces, a hair apart, and
+    // each body reaches it, so this is 0; one found at the moment of impact
+    // (impact.js) joins two points that start the step apart, maybe metres,
+    // so its point is a's end and this the way to b's, and each body's lever
+    // reaches its own end.
+    grow('shift', Float64Array, 3 * p);
     grow('la', Float64Array, 3 * p); grow('lb', Float64Array, 3 * p);
     grow('adjusted', Float64Array, p);
     grow('gap', Float64Array, m);   // its points' least separation as the last pass saw it: at the step's end
@@ -203,6 +211,27 @@ export function narrow(world, pairs, broadphase, next, from) {
       p++;
       continue;
     }
+    // Not touching yet, and moving against each other by more than a pixel:
+    // do they meet this step, and where? (impact.js.) A contact found where
+    // the step starts is wrong by no more than how far the pair moves against
+    // itself in the step, so within a pixel there is nothing to ask.
+    shifted = false;
+    const moves = least(manifold) > tolerance ? moving(world, a, b) : 0;
+    if (moves > tolerance) {
+      // At the moment they meet, every point within reach of the rest of the
+      // step, so a rod striking a wall with one end has its other end's
+      // contact too, before it swings in: points of the faces that meet, so
+      // no plane off a corner (see impact.js).
+      const dt = world._stepDt, t = impact(world, a, b, shapeA, shapeB, dt, tolerance);
+      world._impacts++;
+      const ahead = t >= 0 ? moves * (1 - t / dt) + 2 * tolerance : 0;
+      if (t === -1 || (t !== UNSURE && collide(shapeA, shapeB, ahead, tolerance, manifold) === 0)) {
+        pairs.forget(p);
+        p++;
+        continue;
+      }
+      if (t !== UNSURE) back(world, a, b, t, manifold);
+    }
 
     // Static bodies are never awake, and _wake leaves them be.
     if (awake[a] !== awake[b]) world._wake(awake[a] ? b : a);
@@ -212,6 +241,81 @@ export function narrow(world, pairs, broadphase, next, from) {
   }
   return next.count;
 }
+
+/** The least separation of a manifold's points. */
+function least(mf) {
+  let s = Infinity;
+  for (let k = 0; k < mf.count; k++) if (mf.separations[k] < s) s = mf.separations[k];
+  return s;
+}
+
+/**
+ * How far slots a and b can move against each other in the step, at most:
+ * their relative speed, what gravity adds, and the fastest any point of
+ * either can move by turning, over the step.
+ */
+function moving(world, a, b) {
+  const v = world._velocity, w = world._angular, g = world._gravity, dt = world._stepDt, a3 = 3 * a, b3 = 3 * b;
+  const ga = world._type[a] === DYNAMIC ? world._gravityScale[a] : 0, gb = world._type[b] === DYNAMIC ? world._gravityScale[b] : 0;
+  const dx = v[b3] - v[a3], dy = v[b3 + 1] - v[a3 + 1], dz = v[b3 + 2] - v[a3 + 2];
+  const gs = gb - ga, gl = Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]) * Math.abs(gs);
+  const turning = Math.sqrt(w[a3] * w[a3] + w[a3 + 1] * w[a3 + 1] + w[a3 + 2] * w[a3 + 2]) * world._reach[a]
+    + Math.sqrt(w[b3] * w[b3] + w[b3 + 1] * w[b3 + 1] + w[b3 + 2] * w[b3 + 2]) * world._reach[b];
+  return (Math.sqrt(dx * dx + dy * dy + dz * dz) + 0.5 * gl * dt + turning) * dt;
+}
+
+/**
+ * Manifold mf, found where the bodies are at time t of the step, back to the
+ * step's start: each point's two ends, a's and b's, carried back with their
+ * bodies; the point becomes a's end, SHIFT the way from it to b's, and the
+ * separation how far apart they are along the normal. So the solver, closing
+ * the pair as it moves, lets it close to exactly the impact.
+ */
+function back(world, a, b, t, mf) {
+  posed(0, t, CA, QA);
+  posed(3, t, CB, QB);
+  const p = world._position, q = world._rotation, a3 = 3 * a, b3 = 3 * b;
+  const nx = mf.normal[0], ny = mf.normal[1], nz = mf.normal[2];
+  for (let k = 0; k < mf.count; k++) {
+    const k3 = 3 * k, half = 0.5 * mf.separations[k];
+    const px = mf.points[k3], py = mf.points[k3 + 1], pz = mf.points[k3 + 2];
+    carried(world, a, QA, px - nx * half - CA[0], py - ny * half - CA[1], pz - nz * half - CA[2]);
+    const ax = p[a3] + v3[0], ay = p[a3 + 1] + v3[1], az = p[a3 + 2] + v3[2];
+    carried(world, b, QB, px + nx * half - CB[0], py + ny * half - CB[1], pz + nz * half - CB[2]);
+    const bx = p[b3] + v3[0] - ax, by = p[b3 + 1] + v3[1] - ay, bz = p[b3 + 2] + v3[2] - az;
+    mf.separations[k] = bx * nx + by * ny + bz * nz;
+    mf.points[k3] = ax; mf.points[k3 + 1] = ay; mf.points[k3 + 2] = az;
+    SHIFT[k3] = bx; SHIFT[k3 + 1] = by; SHIFT[k3 + 2] = bz;
+  }
+  shifted = true;
+}
+
+/**
+ * A point of slot s, offset (x, y, z) from its centre where it is at time t
+ * (turned by qt), carried back to where s starts the step, as an offset into
+ * v3: turned back as the solver's anchor turns (core()). A box's point turns
+ * with it. A ball's anchor is its centre, so its point doesn't turn at all,
+ * and a capsule's is on its axis, so only that part turns. Turned back whole,
+ * the point of a ball spinning fast was carried round its side, its gap read
+ * 4 cm wider than the solver held, and two balls met with nothing between.
+ */
+function carried(world, s, qt, x, y, z) {
+  const shape = world._shape[s];
+  if (shape === SPHERE_SHAPE) { v3[0] = x; v3[1] = y; v3[2] = z; return; }
+  rotate(qt, 0, x, y, z, true, v3);
+  if (shape !== CAPSULE_SHAPE) { rotate(world._rotation, 4 * s, v3[0], v3[1], v3[2], false, v3); return; }
+  const half = (world._dims[3 * s + 1] - 2 * world._dims[3 * s]) * 0.5;
+  const c = v3[1] < -half ? -half : v3[1] > half ? half : v3[1];
+  // The radial part, from the axis to the point, as it is in the world at t.
+  rotate(qt, 0, 0, c, 0, false, v3);
+  const rx = x - v3[0], ry = y - v3[1], rz = z - v3[2];
+  rotate(world._rotation, 4 * s, 0, c, 0, false, v3);
+  v3[0] += rx; v3[1] += ry; v3[2] += rz;
+}
+const CA = new Float64Array(3), CB = new Float64Array(3), QA = new Float64Array(4), QB = new Float64Array(4);
+/** back()'s shifts, for emit() to keep; `shifted` says the manifold has them. */
+const SHIFT = new Float64Array(12);
+let shifted = false;
 
 /**
  * Pair p, one of whose bodies is a mesh or a heightfield (never both: neither
@@ -290,6 +394,7 @@ function emit(world, next, p, a, b, mf, sign, tolerance, sub) {
     next.pid[i] = mf.ids[k];
     next.separation[i] = mf.separations[k];
     for (let c = 0; c < 3; c++) next.point[3 * i + c] = mf.points[3 * k + c];
+    for (let c = 0; c < 3; c++) next.shift[3 * i + c] = shifted ? SHIFT[3 * k + c] : 0;
     next.normalImpulse[i] = 0; next.tangentImpulse1[i] = 0; next.tangentImpulse2[i] = 0;
   }
   basis(next, m);
@@ -469,7 +574,7 @@ export function prepare(world, c) {
       const i = m * P + k, i3 = 3 * i;
       const px = c.point[i3], py = c.point[i3 + 1], pz = c.point[i3 + 2];
       const rax = px - p[a3], ray = py - p[a3 + 1], raz = pz - p[a3 + 2];
-      const rbx = px - p[b3], rby = py - p[b3 + 1], rbz = pz - p[b3 + 2];
+      const rbx = px + c.shift[i3] - p[b3], rby = py + c.shift[i3 + 1] - p[b3 + 1], rbz = pz + c.shift[i3 + 2] - p[b3 + 2];
       c.ra[i3] = rax; c.ra[i3 + 1] = ray; c.ra[i3 + 2] = raz;
       c.rb[i3] = rbx; c.rb[i3 + 1] = rby; c.rb[i3 + 2] = rbz;
       // Separation as the bodies move during the step is the starting
@@ -809,9 +914,9 @@ export function touched(world, pairs, c) {
     }
     const a3 = 3 * c.a[hit], b3 = 3 * c.b[hit], d3 = 3 * deepest, h3 = 3 * hit;
     events.begin(pairs.idA[p], pairs.idB[p],
-      c.point[d3] + (p3[a3] - start[a3] + p3[b3] - start[b3]) * 0.5,
-      c.point[d3 + 1] + (p3[a3 + 1] - start[a3 + 1] + p3[b3 + 1] - start[b3 + 1]) * 0.5,
-      c.point[d3 + 2] + (p3[a3 + 2] - start[a3 + 2] + p3[b3 + 2] - start[b3 + 2]) * 0.5,
+      c.point[d3] + (c.shift[d3] + p3[a3] - start[a3] + p3[b3] - start[b3]) * 0.5,
+      c.point[d3 + 1] + (c.shift[d3 + 1] + p3[a3 + 1] - start[a3 + 1] + p3[b3 + 1] - start[b3 + 1]) * 0.5,
+      c.point[d3 + 2] + (c.shift[d3 + 2] + p3[a3 + 2] - start[a3 + 2] + p3[b3 + 2] - start[b3 + 2]) * 0.5,
       c.normal[h3], c.normal[h3 + 1], c.normal[h3 + 2], speed);
   }
 }

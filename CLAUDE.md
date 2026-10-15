@@ -133,6 +133,16 @@ These were made with Nolan and override the rules below where they differ.
   that factor. Stops and motors are pinned to their joint's own hold rows. Jointed bodies don't
   tumble. Joints solved before contacts in each pass; joined dynamic bodies share islands.
   Bearing's own `atan`/`atan2` in `core/math.js`.
+- **Continuous collision** (2026-10-15, milestone 13, approved): speculative contacts stay; a pair
+  not touching that moves against itself by more than its tolerance in the step (`moving()` in
+  `src/contact.js`) asks `impact()` (`src/impact.js`, conservative advancement over velocity,
+  gravity and capped spin, GJK distances, 32 rounds then UNSURE keeps the start's contact). No
+  meeting: no contact. Meeting at t: the manifold found at t (every point within the rest of the
+  step's reach) is carried back to the start as the solver anchors it (`carried()`: a box's point
+  turns, a ball's doesn't, a capsule's axis part does), with a per-point `shift` from a's end to
+  b's. Mesh and heightfield pairs aren't asked. Spin cap `SPIN` = π a step, not for spheres,
+  applied as each substep starts (`_accelerate`); after the solve it undid a corner strike's spin.
+  `world._impacts` counts for the off-means-off test.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

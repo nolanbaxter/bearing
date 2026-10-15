@@ -114,6 +114,17 @@ const DAMPING_RATIO = 10;
 // than a pixel in it and can fall asleep before it moves, such as a box on a
 // slope within 0.05° of its friction angle.
 const SLEEP_TIME = 1;
+
+// SPIN: the most a body other than a sphere turns in a step, π, half a turn.
+// Its contacts are found once a step, where the step starts or at the moment
+// of impact (contact.js, impact.js), and a body turning faster than that
+// meets the world on sides those contacts never saw: measured, a 10 cm rod
+// spun at 400 rad/s and dropped on another ended at 9,600 rad/s, and a chain
+// of thin boxes whipping its end blew apart. Box2D 3 and Jolt cap spin at a
+// quarter turn a step (47 rad/s at 60 Hz); half a turn (188 rad/s at 60 Hz)
+// held every case measured, and scales with the step. A sphere's contacts
+// don't depend on how it spins, so it spins as fast as it is made to.
+const SPIN = Math.PI;
 const BODY_OPTIONS = [
   'type', 'shape', 'size', 'radius', 'height', 'vertices', 'indices', 'heights', 'columns', 'spacing',
   'density', 'mass', 'inertia',
@@ -245,6 +256,8 @@ export class World {
     this._joints = new Joints();
     /** Steps that ran the joint solver: for the off-means-off test, which reads it. */
     this._jointSteps = 0;
+    /** Times of impact worked out (contact.js): for the off-means-off test, which reads it. */
+    this._impacts = 0;
     this._substeps = o.substeps === undefined ? SUBSTEPS : wholeFromOne('World', 'substeps', o.substeps);
     /** Steps that ran the contact solver: for the off-means-off test, which reads it. */
     this._solverSteps = 0;
@@ -1101,7 +1114,8 @@ export class World {
     const list = this._awakeList, n = this._awakeCount, type = this._type;
     const v = this._velocity, w = this._angular, scale = this._gravityScale;
     const gx = this._gravity[0] * h, gy = this._gravity[1] * h, gz = this._gravity[2] * h;
-    const damping = this._damping, angularDamping = this._angularDamping;
+    const damping = this._damping, angularDamping = this._angularDamping, shape = this._shape;
+    const most = SPIN / (h * this._substeps);
     for (let i = 0; i < n; i++) {
       const s = list[i];
       if (type[s] !== DYNAMIC) continue;
@@ -1117,6 +1131,18 @@ export class World {
       if (angularDamping[s] !== 0) {
         const k = 1 / (1 + h * angularDamping[s]);
         w[s3] *= k; w[s3 + 1] *= k; w[s3 + 2] *= k;
+      }
+      // At most half a turn a step, but for a sphere: see SPIN. Capped as
+      // each substep starts, as Box2D 3 does, so a contact within it can
+      // still turn a body as fast as it must: a rod struck at one end turns
+      // about it, and capped after the solve it went on into the wall. Time
+      // of impact (impact.js) predicts a body's path with the same cap.
+      if (shape[s] !== SPHERE) {
+        const w2 = w[s3] * w[s3] + w[s3 + 1] * w[s3 + 1] + w[s3 + 2] * w[s3 + 2];
+        if (w2 > most * most) {
+          const k = most / Math.sqrt(w2);
+          w[s3] *= k; w[s3 + 1] *= k; w[s3 + 2] *= k;
+        }
       }
     }
   }

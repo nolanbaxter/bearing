@@ -407,12 +407,37 @@ energy in 50 s, so a jointed body turns plainly and its energy only falls. Ragdo
 `bench/compare.html` (see `bench/RESULTS.md`). Worlds without joints: the same results to the bit,
 and the same speed within noise (−2.0%, +2.5%, +0.3% on the 1,000-box pile).
 
-**13. Continuous collision ⬜**
+**13. Continuous collision ✅** *(approved and done 2026-10-15)*
 *Concepts:* tunnelling; time of impact; conservative advancement; swept volumes.
-Time of impact for fast bodies, switched on where speed against size calls for it, from a derived
-threshold rather than a setting the user must find *(proposal)*.
-*Done when:* a 1 cm ball at 500 m/s hits a 1 cm wall, every time; CCD costs nothing when nothing
-is fast.
+Speculative contacts stay, which already stopped fast bodies; a pair not yet touching that moves
+against itself by more than its tolerance in the step is first asked when it meets (conservative
+advancement, with each body's velocity, gravity and spin). Not this step: no contact. At time t:
+its contact is made where the bodies will be then, and the solver lets it close to exactly there.
+No ghost hits, no flag, no options. Spin is capped at half a turn a step, spheres excepted.
+*Done when:* a 1 cm ball at 500 m/s hits a 1 cm wall, every time, also at angles, on meshes and
+heightfields, and against a dynamic box; no ghost hits past a box's edge at 1–300 m/s, and a ball
+through a gap wider than it comes out at its speed; a 10 cm rod at 200 m/s spinning at up to
+80 rad/s never passes a 2 cm wall; the spin cap gains no energy and milestone 12's thin-box chain
+stays together; CCD costs nothing when nothing is fast.
+*Result:* `src/impact.js` (time of impact) and the impact contacts in `src/contact.js`, held by
+`test/ccd.test.js`: 0 of 60 1 cm balls at 500 m/s through a 1 cm wall at 0°, 30° and 60°, 0 of 20
+through a mesh wall, a heightfield or a thin dynamic box, and two meeting head on bounce back; a
+ball passing a box's edge 1 cm to 20 cm clear at 1 to 300 m/s keeps its velocity to the bit (before:
+slowed or turned by up to 73% of its speed at 5 m/s with 1 cm to spare, and every time at
+100 m/s with 20 cm); a ball through a 30 cm gap comes out
+at its speed; a 10 cm rod at 200 m/s spinning at 30 to 80 rad/s, 0 of 25 through a 2 cm wall
+(before: 28 of 50); a rod spun at 400 rad/s onto another only loses energy, and a 30-link chain of
+thin boxes falls 20 s and holds every joint within a millimetre. Found on the way, each measured:
+an impact contact must be carried back to the step's start as the solver anchors it (a ball's at
+its centre), or a spinning ball's gap read 4 cm wide and two balls met with nothing between; GJK
+called a flat simplex "inside", so boxes 0.22 mm apart read touching; capping spin after the solve
+undid the spin a corner strike gives a rod, so the cap acts as each substep starts; and an impact
+contact needs every point within reach of the rest of the step, not only the first, or a struck rod
+swings its other end through. Left as limits, documented: against a mesh or heightfield the contact
+is still made where the step starts, so ghost hits off a mesh's edges remain; and a body very much
+lighter than two it is wedged between at an angle (225,000:1, contacts 20° apart) can be squeezed
+into one for a step. Speed on the settled 1,000-box pile against the last commit: within noise
+(+3.9%, +2.5%, −6.2%).
 
 **14. Convex hulls and compound shapes ⬜**
 *Concepts:* quickhull; mass properties of polyhedra; compound shapes; centres of mass apart from the origin.
@@ -620,3 +645,10 @@ Winding's way, copied before the first one:
   sideways reaches that whipping, and blows up. Box2D 3 and Jolt cap spin at a quarter turn a step
   (47 rad/s at 60 Hz) for this; a cap of a half turn stopped every case measured. It is milestone
   13's (fast motion), or sooner.
+- **2026-10-15.** Milestone 13 done, as approved: time of impact for pairs moving against
+  themselves by more than a pixel, and a spin cap of half a turn a step, spheres excepted. The
+  events test's "a step late" now covers a spinning box meeting with a corner its contact didn't
+  hold, and its line between touching and not is as wide as a fixed normal's error for two round
+  bodies sliding past each other (d² over their size); both were in the code before, and the new
+  paths of fast bodies found them. Mesh and heightfield pairs keep their speculative contacts: a
+  time of impact against each triangle is a bigger change, for when a game needs it.

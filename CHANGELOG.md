@@ -123,3 +123,17 @@ All notable changes to Bearing are recorded here. The format follows
   a Joint, got …`.
 - Bearing's own `atan` and `atan2` in `core/math.js`, exact operations only, within 1 ulp of
   `Math.atan2`, for joint angles that are the same on every machine.
+- Fast bodies meet where they would meet. A pair not yet touching that moves against itself by
+  more than its tolerance in a step is asked when its shapes would touch, following each body's
+  velocity, gravity and spin (conservative advancement), and gets its contact at that moment, or
+  none. A ball passing a corner with room to spare, or through a gap wider than itself, keeps its
+  velocity exactly, where before it could be stopped at any speed; a 10 cm rod at 200 m/s spinning
+  at up to 80 rad/s stops on a 2 cm wall, where before it passed 28 times in 50. Nothing to flag
+  and no option; pairs at rest never ask.
+- A body other than a sphere spins at most half a turn a step, π / dt rad/s, 188 rad/s at 60 Hz.
+  Faster, its contacts missed the sides it turned onto: a 10 cm rod spun at 400 rad/s gained energy
+  from them until it reached 9,600 rad/s, and a chain of thin boxes whipping its end blew apart.
+- Contact events: a touch the step couldn't foresee now also includes a spinning box meeting with a
+  corner its contact didn't hold, and comes a step late like the others.
+- Fixed: GJK called two shapes 0.22 mm apart touching when its last four points lay flat, which made
+  a rod's time of impact stop short.

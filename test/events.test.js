@@ -36,33 +36,49 @@ function shapeOf(world, body) {
 function reference(world, bodies) {
   const touching = new Set(), close = new Set(), m = new Manifold();
   const placed = bodies.filter((b) => b.alive).map((b) => ({ body: b, ...shapeOf(world, b) }));
+  // The step measures a pair's gap along the normal its contact had when the
+  // step began, so a pair that slid past itself by d in the step is measured
+  // off by up to about d² over its size when both are round: for those, the
+  // line is that wide. (Against a flat face the normal holds as they slide,
+  // and turning carries a contact's anchors with the bodies exactly.)
+  const c = world._contacts, slots = world._slots, st = world._start, slip = new Map();
+  for (let n = 0; n < c.count; n++) {
+    const a = c.a[n], b = c.b[n], n3 = 3 * n, d = [0, 1, 2].map((k) => world._position[3 * b + k] - st[3 * b + k] - world._position[3 * a + k] + st[3 * a + k]);
+    const along = d[0] * c.normal[n3] + d[1] * c.normal[n3 + 1] + d[2] * c.normal[n3 + 2];
+    const round = (world._shape[a] === 1 || world._shape[a] === 2) && (world._shape[b] === 1 || world._shape[b] === 2);
+    if (round) slip.set(key(slots.id(a), slots.id(b)), Math.max(0, d[0] ** 2 + d[1] ** 2 + d[2] ** 2 - along ** 2));
+  }
   for (let i = 0; i < placed.length; i++) {
     for (let j = i + 1; j < placed.length; j++) {
       const A = placed[i], B = placed[j], ta = A.desc.type, tb = B.desc.type, sa = A.desc.sensor, sb = B.desc.sensor;
       if (sa && sb) continue;
       if (!sa && !sb && ta !== 'dynamic' && tb !== 'dynamic') continue;
       if (ta === 'static' && tb === 'static') continue;
-      const tolerance = Math.min(A.size, B.size) / 200;
-      if (collide(A.shape, B.shape, tolerance + 1e-6 * Math.min(A.size, B.size), tolerance, m) === 0) continue;
+      const size = Math.min(A.size, B.size), tolerance = size / 200, k = key(A.body.id, B.body.id);
+      const line = 1e-6 * size + (slip.get(k) ?? 0) / size;
+      if (collide(A.shape, B.shape, tolerance + line, tolerance, m) === 0) continue;
       const least = Math.min(...m.separations.subarray(0, m.count));
-      const k = key(A.body.id, B.body.id);
-      if (Math.abs(least - tolerance) < 1e-6 * Math.min(A.size, B.size)) close.add(k);
+      if (Math.abs(least - tolerance) < line) close.add(k);
       else if (least <= tolerance) touching.add(k);
     }
   }
   // What the solver pushed: its own contacts, read back, by their bodies'
   // slots (the pair list is reordered as islands fall asleep at a step's end).
-  const c = world._contacts, slots = world._slots;
   for (let n = 0; n < c.count; n++) {
     for (let k = 0; k < c.points[n]; k++) {
       if (c.maxNormalImpulse[n * 4 + k] > 0) touching.add(key(slots.id(c.a[n]), slots.id(c.b[n])));
     }
   }
-  // And which pairs the step had a contact for: one it hadn't foreseen, a
-  // resting body knocked into another in the middle of the step, is only
-  // seen at the next.
+  // And which touches the step foresaw: a contact that pushed, or read the
+  // pair within its tolerance. One it didn't, a resting body knocked into
+  // another in the middle of the step, or a turning body meeting with a
+  // corner its contact didn't hold, is only seen at the next.
   const foreseen = new Set();
-  for (let n = 0; n < c.count; n++) foreseen.add(key(slots.id(c.a[n]), slots.id(c.b[n])));
+  for (let n = 0; n < c.count; n++) {
+    let seen = c.gap[n] <= c.tolerance[n];
+    for (let k = 0; k < c.points[n]; k++) seen ||= c.maxNormalImpulse[n * 4 + k] > 0;
+    if (seen) foreseen.add(key(slots.id(c.a[n]), slots.id(c.b[n])));
+  }
   return { touching, close, foreseen };
 }
 
