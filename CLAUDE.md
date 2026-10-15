@@ -106,6 +106,19 @@ These were made with Nolan and override the rules below where they differ.
   Sensors: no manifold; checked after the step at final positions (`World._senseAll`, `query.js`
   `sense()`); see everything but sensors, never two static; wake nothing; queries skip them.
   Unforeseen mid-step touches begin a step late (documented).
+- **Character bodies and rotation locks** (2026-10-15, milestone 11, approved; "controller" renamed
+  "bodies", Nolan: it reads no input): `type: 'character'`, options `maxSlope` (π/4) and
+  `stepHeight` (height ÷ 9; null follows the size), `world.groundOf(body)` → `{ body, point,
+  normal } | null`, and `lockRotation: [x, y, z]` (world axes) on any body. `src/character.js` runs
+  before the step: push out (`deepest`), own motion (follow the ground plane, slide up to 4 casts,
+  climb steps measured from the lowest point, snap down), ground check (ledge probe: a steep contact
+  is ground if a pixel ball dropped past it finds walkable ground at its height within a step of
+  the feet), then carry by the ground's velocity; it is placed where it ends up and stands still
+  through the solve (moved at constant speed it shoved crates it reached). Casts slide: in contact,
+  stopped only if the move goes deeper than it is by more than rounding. Velocity after a step is
+  its own (`_walk`). Characters never sleep, block on everything they'd collide with, push nothing,
+  are pushed by nothing. Locks: exact inverse of the inertia on the free axes; no tumble; spin on
+  locked axes kept 0.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

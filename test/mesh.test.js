@@ -353,7 +353,7 @@ test('bodyOf gives back a mesh and a heightfield that addBody copies, and setBod
   const mesh = world.addBody({ ...floor(2, 1), position: [1, 2, 3], friction: 0.2 });
   const copy = world.bodyOf(mesh);
   assert.deepEqual(Object.keys(copy), ['type', 'shape', 'vertices', 'indices', 'friction', 'restitution', 'damping',
-    'angularDamping', 'gravityScale', 'layers', 'mask', 'sensor', 'position', 'rotation']);
+    'angularDamping', 'gravityScale', 'layers', 'mask', 'sensor', 'lockRotation', 'position', 'rotation']);
   const again = world.addBody(copy);
   assert.deepEqual(world.bodyOf(again), copy);
   // A triangle with no area is left out: nothing could touch it.

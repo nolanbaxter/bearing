@@ -34,6 +34,10 @@ density unless you give one), no tolerances to tune, and nothing to size in adva
   renderer has to draw again. 32 collision layers, with a mask per body for what it collides with.
 - **Queries**: raycasts (nearest, or every hit), shape casts and overlap tests, exact for every
   shape and quick through the same tree the contacts use.
+- **Character bodies**: a body the game gives a velocity to, that walks rather than flies: it slides
+  along walls, walks up slopes and steps up stairs to a limit, stays on the ground going down them,
+  falls and lands, and rides moving platforms. Rotation locks keep a body upright, or a 2.5D game in
+  its plane. See [Character bodies](docs/API.md#characters).
 - **Contact events and sensors**: which bodies began and stopped touching in each step, with where
   and how hard they met, read after the step; what touches a body now; and sensors, zones that
   report what enters them and push nothing. See [Contact events and sensors](docs/API.md#events).
@@ -68,8 +72,8 @@ node serve.js
 
 Then open <http://localhost:8080/demo/>: a 210-box pyramid, a stack, bouncing balls, boxes on
 slopes either side of their friction, a moving platform, a mixed pile, 2,000 balls raining down,
-bodies tumbling over a heightfield of hills and down a ramp read from a `.glb`, and two colours on
-separate layers, with what each step costs, and how many bodies are asleep,
+bodies tumbling over a heightfield of hills and down a ramp read from a `.glb`, a character walking
+a route up stairs and down a ramp, and two colours on separate layers, with what each step costs, and how many bodies are asleep,
 shown live. Bearing draws nothing, so the demo is drawn by
 [Winding](https://github.com/nolanbaxter/winding), loaded from jsDelivr at a pinned version; it
 needs a browser with WebGPU. The demo is not part of the package, and no test needs it.

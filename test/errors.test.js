@@ -44,7 +44,7 @@ const gone = () => {
   return { world, body };
 };
 
-const OPTIONS = 'type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, position, rotation, velocity, angularVelocity';
+const OPTIONS = 'type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, lockRotation, maxSlope, stepHeight, position, rotation, velocity, angularVelocity';
 
 /** The smallest .glb: one node, 'floor', showing one triangle; `json` adds to its JSON. */
 function glb(json = {}) {
@@ -104,7 +104,12 @@ const cases = [
       [e, run({ postion: [0, 0, 0] }), `${call}: unknown option 'postion' (did you mean 'position'?)`],
       [e, run({ Mass: 5 }), `${call}: unknown option 'Mass' (did you mean 'mass'?)`],
       [e, run({ banana: 1 }), `${call}: unknown option 'banana' (the options are ${OPTIONS})`],
-      [e, run({ type: 'fixed' }), `${call}: type must be 'dynamic', 'static' or 'kinematic', got 'fixed'`],
+      [e, run({ type: 'fixed' }), `${call}: type must be 'dynamic', 'static', 'kinematic' or 'character', got 'fixed'`],
+      [e, run({ maxSlope: 0.5 }), `${call}: a dynamic body has no maxSlope`],
+      [e, run({ type: 'character', maxSlope: 2 }), `${call}: maxSlope must be an angle from 0 to π/2, in radians, got 2`],
+      [e, run({ type: 'character', stepHeight: -0.1 }), `${call}: stepHeight must be 0 or more, or null to follow the size, got -0.1`],
+      [e, run({ lockRotation: true }), `${call}: lockRotation must be 3 true or false values, got true`],
+      [e, run({ shape: 'heightfield', type: 'character' }), `${call}: type must be 'static' or 'kinematic' for a heightfield, got 'character'`],
       [e, run({ shape: 'cube' }), `${call}: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got 'cube'`],
       [e, run({ shape: 'mesh', type: 'dynamic' }), `${call}: type must be 'static' or 'kinematic' for a mesh, got 'dynamic'`],
       [e, run({ shape: 'heightfield', type: 'static', mass: 5 }), `${call}: a heightfield has no mass`],
@@ -158,6 +163,10 @@ const cases = [
   ['world-contacts', () => gone().world.contacts(), 'contacts: this world was destroyed'],
   ['world-contacts', () => fresh().world.contacts({ id: 1 }), 'contacts: body must be a Body, got an object'],
   ['world-contacts', () => new World().contacts(fresh().body), 'contacts: that body belongs to another world'],
+  ['world-groundof', () => { const { world, body } = gone(); world.groundOf(body); }, 'groundOf: this world was destroyed'],
+  ['world-groundof', () => fresh().world.groundOf('hero'), "groundOf: body must be a Body, got 'hero'"],
+  ['world-groundof', () => new World().groundOf(fresh().body), 'groundOf: that body belongs to another world'],
+  ['world-groundof', () => { const { world, body } = dead(); world.groundOf(body); }, 'groundOf: this body was removed'],
   ['world-touching', () => { const { world, body } = gone(); world.touching(body); }, 'touching: this world was destroyed'],
   ['world-touching', () => fresh().world.touching(null), 'touching: body must be a Body, got null'],
   ['world-touching', () => new World().touching(fresh().body), 'touching: that body belongs to another world'],

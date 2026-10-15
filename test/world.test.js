@@ -22,7 +22,7 @@ test('addBody({}) makes a 1 m box of water at rest at the origin', () => {
   assert.deepEqual(world.bodyOf(body), {
     type: 'dynamic', shape: 'box', size: [1, 1, 1], density: 1000,
     friction: 0.5, restitution: 0, damping: 0, angularDamping: 0, gravityScale: 1,
-    layers: 1, mask: 0xffffffff, sensor: false,
+    layers: 1, mask: 0xffffffff, sensor: false, lockRotation: [false, false, false],
     position: [0, 0, 0], rotation: [0, 0, 0, 1], velocity: [0, 0, 0], angularVelocity: [0, 0, 0],
   });
   assert.deepEqual(world.addBody().position, [0, 0, 0]);

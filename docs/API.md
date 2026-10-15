@@ -49,7 +49,7 @@ These hold everywhere, so one learned is one learned for good.
 <a id="contents"></a>
 ## Contents
 
-[World](#world-class) · [Body](#body) · [Meshes and heightfields](#meshes) · [Contacts](#contacts) · [Contact events and sensors](#events) · [Layers and masks](#layers) · [Sleeping](#sleeping) · [Queries](#queries) · [Determinism](#determinism) · [Limits](#limits)
+[World](#world-class) · [Body](#body) · [Meshes and heightfields](#meshes) · [Character bodies](#characters) · [Contacts](#contacts) · [Contact events and sensors](#events) · [Layers and masks](#layers) · [Sleeping](#sleeping) · [Queries](#queries) · [Determinism](#determinism) · [Limits](#limits)
 
 <a id="index"></a>
 ## Index
@@ -60,11 +60,11 @@ Every call, setting and entry, A to Z by its name.
 
 **B** &nbsp; [`world.body()`](#world-body) · [`world.bodyCount`](#world-bodycount) · [`world.bodyOf()`](#world-bodyof)
 
-**C** &nbsp; [Contact events and sensors](#events) · [Contacts](#contacts) · [`world.contacts()`](#world-contacts)
+**C** &nbsp; [Character bodies](#characters) · [Contact events and sensors](#events) · [Contacts](#contacts) · [`world.contacts()`](#world-contacts)
 
 **D** &nbsp; [`body.destroy()`](#body-destroy) · [`world.destroy()`](#world-destroy) · [Determinism](#determinism)
 
-**G** &nbsp; [`world.gravity`](#world-gravity)
+**G** &nbsp; [`world.gravity`](#world-gravity) · [`world.groundOf()`](#world-groundof)
 
 **I** &nbsp; [`body.id`](#body-id) · [`body.inertia`](#body-inertia)
 
@@ -130,7 +130,7 @@ world.gravity = [0, 0, 0];         // drifting in space
 world.gravity = [0, -9.81, 0];     // and back
 ```
 
-Notes: static and kinematic bodies are not pulled by gravity. See [`addBody`](#world-addbody)'s
+Notes: static and kinematic bodies are not pulled by gravity, and a character only in the air. See [`addBody`](#world-addbody)'s
 `type`. Changing it wakes every sleeping body, since what held one at rest may not now.
 
 <a id="world-substeps"></a>
@@ -281,7 +281,7 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 
 | Option | Default | Meaning |
 |---|---|---|
-| `type` | `'dynamic'`; `'static'` for a mesh or heightfield | `'dynamic'`: moved by gravity, and later by contacts and forces. `'static'`: never moves unless you move it, as the ground. `'kinematic'`: moves at the velocity you give it, ignoring gravity, as a lift or a moving platform. A mesh or heightfield can't be dynamic. |
+| `type` | `'dynamic'`; `'static'` for a mesh or heightfield | `'dynamic'`: moved by gravity, and later by contacts and forces. `'static'`: never moves unless you move it, as the ground. `'kinematic'`: moves at the velocity you give it, ignoring gravity, as a lift or a moving platform. `'character'`: moves at the velocity you give it, but collides as a person walking does; see [Character bodies](#characters). A mesh or heightfield can't be dynamic or a character. |
 | `shape` | `'box'` | `'box'`, `'sphere'`, `'capsule'`, `'mesh'` or `'heightfield'`; the last two are level geometry, see [Meshes and heightfields](#meshes). |
 | `size` | `[1, 1, 1]` | A box's full width, height and depth, along its own x, y and z, in metres. |
 | `radius` | `0.5` | A sphere's or capsule's radius, in metres. |
@@ -302,6 +302,9 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 | `layers` | `1` | Which of 32 layers the body is in, one bit each: the first layer only. See [Layers and masks](#layers). |
 | `mask` | `0xffffffff` | Which layers it collides with, one bit each: all of them. |
 | `sensor` | `false` | A sensor reports what overlaps it and pushes nothing. See [Contact events and sensors](#events). |
+| `lockRotation` | `[false, false, false]` | The world axes it never turns about, x, y and z: `[true, false, true]` keeps it upright. See [Character bodies](#characters). |
+| `maxSlope` | `π / 4` (45°) | A character's steepest walkable ground, in radians, from 0 to π/2: about where walking turns into climbing, the slope friction 1 can hold. Characters only. |
+| `stepHeight` | its height ÷ 9 | The tallest step a character walks up, in metres: a capsule's height, a box's, or a sphere's diameter, over 9. Building codes cap a stair's rise near 0.2 m, a ninth of a 1.8 m person, so a 20 cm toy climbs 2.2 cm. `null` follows the size again. Characters only. |
 | `position` | `[0, 0, 0]` | Where the body's centre is, in metres. |
 | `rotation` | `[0, 0, 0, 1]` | A quaternion `[x, y, z, w]`, normalized as it comes in. |
 | `velocity` | `[0, 0, 0]` | m/s. Not for a static body. |
@@ -309,7 +312,7 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 
 Returns: a [`Body`](#body).
 
-Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `addBody: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got …`; `addBody: a <shape> has no <option>`; `addBody: type must be 'static' or 'kinematic' for a <shape>, got 'dynamic'`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: vertices must be finite numbers, three to a vertex, got …`; `addBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `addBody: columns must be a whole number, 2 or more, got …`; `addBody: spacing must be a positive number, got …`; `addBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `addBody: friction must be 0 or more, got …`; `addBody: restitution must be from 0 to 1, got …`; `addBody: damping must be 0 or more, got …`; `addBody: angularDamping must be 0 or more, got …`; `addBody: gravityScale must be a finite number, got …`; `addBody: layers must be a whole number that fits in 32 bits, got …`; `addBody: mask must be a whole number that fits in 32 bits, got …`; `addBody: sensor must be true or false, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a static body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
+Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, lockRotation, maxSlope, stepHeight, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static', 'kinematic' or 'character', got …`; `addBody: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got …`; `addBody: a <shape> has no <option>`; `addBody: type must be 'static' or 'kinematic' for a <shape>, got …`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: vertices must be finite numbers, three to a vertex, got …`; `addBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `addBody: columns must be a whole number, 2 or more, got …`; `addBody: spacing must be a positive number, got …`; `addBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `addBody: friction must be 0 or more, got …`; `addBody: restitution must be from 0 to 1, got …`; `addBody: damping must be 0 or more, got …`; `addBody: angularDamping must be 0 or more, got …`; `addBody: gravityScale must be a finite number, got …`; `addBody: layers must be a whole number that fits in 32 bits, got …`; `addBody: mask must be a whole number that fits in 32 bits, got …`; `addBody: sensor must be true or false, got …`; `addBody: lockRotation must be 3 true or false values, got …`; `addBody: maxSlope must be an angle from 0 to π/2, in radians, got …`; `addBody: stepHeight must be 0 or more, or null to follow the size, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a <type> body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
 
 ```js
 const ground = world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
@@ -330,7 +333,7 @@ has (`got 10 numbers`), rather than every number in it.
 Changes any of the options [`addBody`](#world-addbody) took, with the same names, defaults and
 checks, and leaves the rest as they are.
 
-Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static' or 'kinematic', got …`; `setBody: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got …`; `setBody: a <shape> has no <option>`; `setBody: type must be 'static' or 'kinematic' for a <shape>, got 'dynamic'`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: vertices must be finite numbers, three to a vertex, got …`; `setBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `setBody: columns must be a whole number, 2 or more, got …`; `setBody: spacing must be a positive number, got …`; `setBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `setBody: friction must be 0 or more, got …`; `setBody: restitution must be from 0 to 1, got …`; `setBody: damping must be 0 or more, got …`; `setBody: angularDamping must be 0 or more, got …`; `setBody: gravityScale must be a finite number, got …`; `setBody: layers must be a whole number that fits in 32 bits, got …`; `setBody: mask must be a whole number that fits in 32 bits, got …`; `setBody: sensor must be true or false, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a static body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
+Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, lockRotation, maxSlope, stepHeight, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static', 'kinematic' or 'character', got …`; `setBody: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got …`; `setBody: a <shape> has no <option>`; `setBody: type must be 'static' or 'kinematic' for a <shape>, got …`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: vertices must be finite numbers, three to a vertex, got …`; `setBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `setBody: columns must be a whole number, 2 or more, got …`; `setBody: spacing must be a positive number, got …`; `setBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `setBody: friction must be 0 or more, got …`; `setBody: restitution must be from 0 to 1, got …`; `setBody: damping must be 0 or more, got …`; `setBody: angularDamping must be 0 or more, got …`; `setBody: gravityScale must be a finite number, got …`; `setBody: layers must be a whole number that fits in 32 bits, got …`; `setBody: mask must be a whole number that fits in 32 bits, got …`; `setBody: sensor must be true or false, got …`; `setBody: lockRotation must be 3 true or false values, got …`; `setBody: maxSlope must be an angle from 0 to π/2, in radians, got …`; `setBody: stepHeight must be 0 or more, or null to follow the size, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a <type> body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
 
 ```js
 world.setBody(crate, { size: [2, 1, 1] });           // twice as long, and twice as heavy
@@ -355,7 +358,8 @@ A copy of the body's options as they are now, in the form [`addBody`](#world-add
 `world.addBody(world.bodyOf(body))` makes a copy of it. Changing the result changes nothing; pass
 it to [`setBody`](#world-setbody) for that.
 
-Returns: `{ type, shape, …sizes, mass or density, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, position, rotation, velocity, angularVelocity }`.
+Returns: `{ type, shape, …sizes, mass or density, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, lockRotation, maxSlope, stepHeight, position, rotation, velocity, angularVelocity }`.
+A character's `maxSlope` always, and its `stepHeight` only if it was given one.
 `layers` and `mask` come back unsigned, from 0 to 4294967295, whichever way they were given.
 The sizes are the shape's own: `size` for a box, `radius` for a sphere, `radius` and `height` for a
 capsule, `vertices` and `indices` for a mesh, as plain arrays, and `heights`, `columns` and
@@ -536,6 +540,29 @@ Notes: a body removed since is still taken, so its last events can be read: they
 step after its removal, and its handle in them reads `alive` as `false`; compare handles by `id`.
 The handles in an event can be kept; the arrays are fresh each call.
 
+<a id="world-groundof"></a>
+### `world.groundOf(body)` → `{ body, point, normal } | null`
+
+What a character stands on, as of the last step: whether it can jump, what it is standing on, and
+how steep that is there. See [Character bodies](#characters).
+
+Returns: `{ body, point, normal }`, or `null` while it is in the air. `body` is the [`Body`](#body)
+under it, `point` where it stands on it, and `normal` that ground's unit direction up out of it
+there, world-space arrays of 3, fresh copies. `null` for a body that isn't a character.
+
+Throws: `groundOf: this world was destroyed`; `groundOf: body must be a Body, got …`; `groundOf: that body belongs to another world`; `groundOf: this body was removed`.
+
+```js
+const hero = world.addBody({ type: 'character', shape: 'capsule', radius: 0.3, height: 1.8, position: [0, 0.9, 0] });
+world.step(1 / 60);
+const ground = world.groundOf(hero);
+if (ground) console.log('standing on', ground.body.id, 'a slope of', Math.acos(ground.normal[1]), 'rad');
+```
+
+Notes: standing on the edge of a step, a character's round bottom meets the lip at a slant, but
+what it stands on is the tread, so `normal` is the tread's. A character moved by hand has no
+ground until the next step.
+
 <a id="world-touching"></a>
 ### `world.touching(body)` → `Array`
 
@@ -562,8 +589,9 @@ kept, and listed. A body moved by hand since the last step is listed as it was a
 Moves the world on by `dt` seconds, exactly: there is no hidden accumulator, so call it from
 your loop's fixed update, once per step. A dynamic body is pulled by gravity, pushed by whatever
 it touches, and moves and turns at its velocities, after any forces and torques applied since the
-last step have acted; a kinematic body moves and turns as its velocities say; a static body stays
-put.
+last step have acted; a kinematic body moves and turns as its velocities say; a character goes as
+far along its velocity as the world lets it (see [Character bodies](#characters)); a static body
+stays put.
 
 Throws: `step: this world was destroyed`; `step: dt must be a positive number of seconds, got …`.
 
@@ -691,8 +719,8 @@ Throws: `mass: this world was destroyed`; `mass: this body was removed`; `body.m
 console.log(ball.mass);   // 523.6 for a 0.5 m ball of water
 ```
 
-Notes: a static or kinematic body acts as if it were infinitely heavy. Its mass is kept, and used
-if it is made dynamic.
+Notes: a static, kinematic or character body acts as if it were infinitely heavy. Its mass is
+kept, and used if it is made dynamic.
 
 <a id="body-inertia"></a>
 ### `body.inertia` → `[x, y, z]`
@@ -849,6 +877,9 @@ Throws: `setAngularVelocity: this world was destroyed`; `setAngularVelocity: thi
 crate.setAngularVelocity(0, Math.PI, 0);   // half a turn a second about Y
 ```
 
+Notes: about an axis the body is locked about ([`lockRotation`](#world-addbody)), its spin stays 0:
+only the free axes are set.
+
 <a id="body-applyforce"></a>
 ### `body.applyForce(force, point)` → `Body`
 
@@ -882,8 +913,8 @@ Throws: `applyTorque: this world was destroyed`; `applyTorque: this body was rem
 crate.applyTorque([0, 200, 0]);   // spin it up about Y, this step
 ```
 
-Notes: as [`applyForce`](#body-applyforce): one step, adding up, nothing for a static or kinematic
-body.
+Notes: as [`applyForce`](#body-applyforce): one step, adding up, nothing for a static, kinematic or
+character body. A body's [`lockRotation`](#world-addbody) axes take nothing.
 
 <a id="body-applyimpulse"></a>
 ### `body.applyImpulse(impulse, point)` → `Body`
@@ -899,7 +930,7 @@ crate.applyImpulse([0, 0, -500], [2.4, 1, 0]);   // kicked near one edge: it sli
 ```
 
 Notes: unlike a force, it doesn't wait for a step: [`velocity`](#body-velocity) reads the change
-straight away. Nothing for a static or kinematic body.
+straight away. Nothing for a static, kinematic or character body.
 
 <a id="body-applyangularimpulse"></a>
 ### `body.applyAngularImpulse(impulse)` → `Body`
@@ -913,7 +944,8 @@ Throws: `applyAngularImpulse: this world was destroyed`; `applyAngularImpulse: t
 ball.applyAngularImpulse([0, 50, 0]);   // set it spinning about Y
 ```
 
-Notes: nothing for a static or kinematic body.
+Notes: nothing for a static, kinematic or character body, nor about an axis the body is locked
+about ([`lockRotation`](#world-addbody)).
 
 <a id="body-destroy"></a>
 ### `body.destroy()`
@@ -1014,7 +1046,9 @@ into each other, slide no more than friction allows, and bounce as much as their
 
 - **Who pushes whom.** Dynamic bodies push each other. A kinematic body pushes dynamic ones and is
   never pushed back, so a moving platform carries what stands on it. Static and kinematic bodies
-  don't collide with each other, since neither would move.
+  don't collide with each other, since neither would move. A character finds its own way, by
+  casting through the world, and stands like a wall to what runs into it; see
+  [Character bodies](#characters).
 - **Materials mix.** Two bodies' frictions combine as their geometric mean, √(a · b), so ice is
   slippery against anything; their restitutions as the larger, so a bouncy ball bounces off
   anything.
@@ -1058,6 +1092,69 @@ gentler than its rolling resistance, 0.57° (tan θ = 0.01), and rolls down a st
 standing on an edge stays up while its centre is within its tolerance of being over the edge: a
 1 m cube 0.41° past balance stands, and 0.45° past falls. Friction 0 leaves no friction across a
 patch, so a ball spinning in place on ice spins on, though its rolling still slows.
+
+<a id="characters"></a>
+## Character bodies
+
+A person, a creature, a vehicle driven like one: a body the game moves where it wants, that still
+collides with the world as something walking does. Physics engines call this a character
+controller; it reads no input. The game gives it a velocity, as it would a kinematic body, and
+Bearing works out where it can actually go.
+
+```js
+const hero = world.addBody({ type: 'character', shape: 'capsule', radius: 0.3, height: 1.8, position: [0, 0.9, 0] });
+
+// Each fixed step: the velocity the game wants, keeping the one it falls or rises at.
+const ground = world.groundOf(hero);
+const jump = false;   // the game's own decision
+hero.setVelocity(2, ground && jump ? 5 : hero.velocity[1], 0);
+world.step(1 / 60);
+```
+
+Neither of the other moving types makes a good person. A dynamic body slides down slopes under
+friction, tips over, bounces off the edge of every stair and is launched by ramps. A kinematic one
+walks through walls. A character:
+
+- **Slides along walls.** It keeps the part of its motion along whatever it meets: walking into a
+  wall at 30° to it, it goes on along the wall at cos 30° of its speed.
+- **Walks up slopes up to `maxSlope`,** at the speed it is given across the ground, so a hill
+  doesn't slow it. Ground steeper than that is a wall it can't walk up, and dropped onto it, it
+  slides down.
+- **Steps up onto anything up to `stepHeight`** that blocks its feet: stairs, kerbs, the edge of a
+  platform. Taller is a wall.
+- **Stays on the ground going down** slopes and stairs, rather than stepping off into the air.
+- **Falls under gravity in the air, and lands.** On the ground the ground holds it, and
+  [`groundOf`](#world-groundof) says what it stands on.
+- **Rides what it stands on,** moving with a platform, a lift or a crate as they move, then walking
+  on them; a rotating platform carries it round its centre without turning which way it faces.
+- **Up is against gravity,** so its slopes and steps stay right if gravity changes, and with none,
+  it is +y.
+
+Its velocity, read after a step, is what it did of its own accord: walking into a wall drops the
+part into the wall, landing drops the fall, and on the ground its vertical speed is 0. So a game
+sets the speed it walks at, keeps `velocity[1]`, and sets it to jump.
+
+- **What blocks it:** everything it would collide with, by its own layers and mask, dynamic bodies
+  and other characters included. It doesn't push a crate it walks up to, and is never pushed: what
+  lands on it or runs into it is held, as by a wall. Pushing things is the game's to decide, with
+  [`applyImpulse`](#body-applyimpulse). It carries nothing on its head as it walks. Sensors see it.
+- **How it moves:** before each step, by casting its shape through the world, as
+  [`shapeCast`](#world-shapecast) does, and stopping where that says; then it stands there through
+  the step. A few casts a step for each character: built for tens or hundreds of them, not
+  thousands. It doesn't sleep, so whatever it stands on can always carry it.
+- **Its shape:** any of a box, a sphere or a capsule. A capsule is best: its round bottom rides up
+  small edges, and its round sides slide along corners.
+
+Notes: forces and impulses don't move a character, as they don't a kinematic body. Its rotation is
+the game's: it turns only as its angular velocity or [`setRotation`](#body-setrotation) say.
+
+**Rotation locks.** [`lockRotation`](#world-addbody), on any body, names the world axes it never
+turns about: `[true, false, true]` keeps a dynamic capsule upright, still free to turn about y to
+face a way, for a character moved by forces; `[true, true, false]` lets a 2.5D game's bodies turn
+only in the screen's plane. A locked axis is one nothing turns it about, as if its inertia there
+were endless: contacts, torques and impulses can't, and its spin about it stays 0. Bodies built in
+one plane, locked to turn only in it, push each other only within it, so they stay in it, to the
+bit, and there is no position lock to need.
 
 <a id="events"></a>
 ## Contact events and sensors
@@ -1153,7 +1250,9 @@ tune; [`world.sleeping`](#world-sleeping) switches it off.
 - **Islands sleep together.** Bodies touching each other form an island, and an island sleeps
   only when every body in it has stopped, and wakes all at once. If the bottom box of a stack
   slept while the top one still moved, the top one would push on a body that couldn't answer.
-  Static and kinematic bodies join no island, or everything on one floor would be one island.
+  Static, kinematic and character bodies join no island, or everything on one floor would be
+  one island. A character never sleeps, so whatever it stands on can always carry it; a
+  kinematic body sleeps once it is told no speed at all.
 - **Stopped means gone nowhere you could see.** A body counts as stopped while no point of it
   strays more than its contact tolerance, about a pixel, from where it came to rest. Moving
   steadily, that is under 5 mm/s for a 1 m box and 0.05 mm/s for a 1 cm marble; buzzing in place,

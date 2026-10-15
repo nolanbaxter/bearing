@@ -7,8 +7,11 @@ export type Vec3 = readonly [number, number, number] | Float32Array | Float64Arr
 /** A quaternion [x, y, z, w]: a plain array, or a typed array of length 4. */
 export type Quat = readonly [number, number, number, number] | Float32Array | Float64Array;
 
-/** 'dynamic' is moved by gravity; 'static' never moves unless moved; 'kinematic' moves at its velocity. */
-export type BodyType = 'dynamic' | 'static' | 'kinematic';
+/**
+ * 'dynamic' is moved by gravity; 'static' never moves unless moved; 'kinematic' moves at its
+ * velocity; 'character' moves at its velocity as far as the world lets it, walking.
+ */
+export type BodyType = 'dynamic' | 'static' | 'kinematic' | 'character';
 export type Shape = 'box' | 'sphere' | 'capsule' | 'mesh' | 'heightfield';
 /** A list of numbers: a plain array or any typed array. */
 export type Numbers = ArrayLike<number>;
@@ -47,6 +50,12 @@ interface BodyCommon {
   mask?: number;
   /** Reports what overlaps it and pushes nothing, default false. */
   sensor?: boolean;
+  /** The world axes it never turns about, x, y and z, default [false, false, false]. */
+  lockRotation?: readonly [boolean, boolean, boolean];
+  /** A character's steepest walkable ground, radians from 0 to π/2, default π/4. Characters only. */
+  maxSlope?: number;
+  /** The tallest step a character walks up, m, default its height ÷ 9; null follows its size. Characters only. */
+  stepHeight?: number | null;
   /** m, default [0, 0, 0]. */
   position?: Vec3;
   /** Quaternion [x, y, z, w], default [0, 0, 0, 1]. Normalized as it comes in. */
@@ -84,7 +93,9 @@ export interface CapsuleOptions extends BodyCommon, NoLevelSizes {
 }
 
 /** Level geometry: static unless made kinematic, never dynamic, with no mass, density or inertia. */
-interface LevelCommon extends Omit<BodyCommon, 'type' | 'density' | 'mass' | 'inertia'> {
+interface LevelCommon extends Omit<BodyCommon, 'type' | 'density' | 'mass' | 'inertia' | 'maxSlope' | 'stepHeight'> {
+  maxSlope?: never;
+  stepHeight?: never;
   /** Default 'static'. */
   type?: 'static' | 'kinematic';
   density?: never;
@@ -154,6 +165,11 @@ interface BodyInfoCommon {
   /** Unsigned, 0 to 4294967295. */
   mask: number;
   sensor: boolean;
+  lockRotation: [boolean, boolean, boolean];
+  /** A character's. */
+  maxSlope?: number;
+  /** A character's, if it was given one. */
+  stepHeight?: number;
   position: [number, number, number];
   rotation: [number, number, number, number];
   /** Absent for a static body. */
@@ -171,7 +187,15 @@ export type BodyInfo =
   | (LevelInfoCommon & { shape: 'heightfield'; heights: number[]; columns: number; spacing: number });
 
 /** A mesh's or heightfield's: never dynamic, and no mass, density or inertia. */
-type LevelInfoCommon = Omit<BodyInfoCommon, 'type' | 'mass' | 'density' | 'inertia'> & { type: 'static' | 'kinematic' };
+type LevelInfoCommon = Omit<BodyInfoCommon, 'type' | 'mass' | 'density' | 'inertia' | 'maxSlope' | 'stepHeight'> & { type: 'static' | 'kinematic' };
+
+/** What world.groundOf finds under a character. */
+export interface Ground {
+  body: Body;
+  point: [number, number, number];
+  /** Unit, up out of the ground: a tread's, even on its edge. */
+  normal: [number, number, number];
+}
 
 /** Two bodies began touching in the last step: where, which way (from a to b), and how fast they met, m/s. */
 export interface BeginEvent {
@@ -293,6 +317,8 @@ export class World {
   contacts(body?: Body): ContactEvent[];
   /** Every body touching this one as of the last step, or overlapping it where either is a sensor. */
   touching(body: Body): Body[];
+  /** What a character stands on, as of the last step; null in the air, or for any other body. */
+  groundOf(body: Body): Ground | null;
   /** A handle for an id. Doesn't check the body is alive. */
   body(id: number): Body;
   /** Moves the world on by dt seconds, exactly. */

@@ -97,3 +97,14 @@ All notable changes to Bearing are recorded here. The format follows
   pushes nothing; bodies pass through it on exactly the path they'd take without it. Sensors see
   every body but other sensors, never two static bodies, wake nothing, and queries pass through
   them. Events and sensors cost nothing when nothing changes.
+- Character bodies: `addBody({ type: 'character' })`, moved at the velocity the game gives it, as a
+  kinematic body is, but colliding as a person walking does. It slides along walls, walks up ground
+  no steeper than `maxSlope` (45° by default) at the speed it is given, steps up onto anything no
+  taller than `stepHeight` (a ninth of its height), stays on the ground going down slopes and
+  stairs, falls under gravity in the air and lands, and rides what it stands on. Its velocity reads
+  what it did: the part into a wall goes, and landing stops the fall. `world.groundOf(body)` says
+  what it stands on, where, and how steep. It reads no input; physics engines call this a character
+  controller.
+- `lockRotation: [x, y, z]` on any body: the world axes it never turns about. `[true, false, true]`
+  keeps a dynamic capsule upright; `[true, true, false]` keeps a 2.5D game's bodies turning only in
+  their plane, where they also stay, to the bit.

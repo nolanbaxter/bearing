@@ -36,10 +36,15 @@ import { Body } from './body.js';
 import { Shape, Manifold, SPHERE as SPHERE_KIND, CAPSULE as CAPSULE_KIND, BOX as BOX_KIND } from './collide.js';
 import { ray, shapeCast as cast, overlap as overlapping, sense } from './query.js';
 import { Events, END } from './events.js';
+import { walk, settle, CHARACTER } from './character.js';
+import { lockedInverse } from './contact.js';
+import { cos } from './core/math.js';
 import { Mesh, Heightfield } from './mesh.js';
 
-const TYPES = ['dynamic', 'static', 'kinematic'];
-const DYNAMIC = 0, STATIC = 1, KINEMATIC = 2;
+const TYPES = ['dynamic', 'static', 'kinematic', 'character'];
+const DYNAMIC = 0, STATIC = 1, KINEMATIC = 2;   // and CHARACTER, 3, from character.js
+/** Options only a character has. */
+const WALKING = ['maxSlope', 'stepHeight'];
 
 const SHAPES = ['box', 'sphere', 'capsule', 'mesh', 'heightfield'];
 const BOX = 0, SPHERE = 1, CAPSULE = 2, MESH = 3;   // a heightfield is 4: shape >= MESH is level geometry
@@ -109,6 +114,7 @@ const BODY_OPTIONS = [
   'type', 'shape', 'size', 'radius', 'height', 'vertices', 'indices', 'heights', 'columns', 'spacing',
   'density', 'mass', 'inertia',
   'friction', 'restitution', 'damping', 'angularDamping', 'gravityScale', 'layers', 'mask', 'sensor',
+  'lockRotation', 'maxSlope', 'stepHeight',
   'position', 'rotation', 'velocity', 'angularVelocity',
 ];
 
@@ -129,7 +135,11 @@ const DEFAULTS = Object.freeze({
   friction: 0.5, restitution: 0, damping: 0, angularDamping: 0, gravityScale: 1,
   // In the first layer, and colliding with all 32: everything collides with
   // everything until told otherwise (rule 110).
-  layers: 1, mask: 0xffffffff, sensor: false,
+  layers: 1, mask: 0xffffffff, sensor: false, lockRotation: [false, false, false],
+  // A character walks up ground as steep as friction 1 can hold, 45°: about
+  // where walking turns into climbing, and Unity's, Godot's, Rapier's and
+  // PhysX's default. Its step height follows its size (see _write).
+  maxSlope: Math.PI / 4, stepHeight: 0, stepGiven: false,
   position: [0, 0, 0], rotation: [0, 0, 0, 1], velocity: [0, 0, 0], angularVelocity: [0, 0, 0],
 });
 
@@ -186,6 +196,15 @@ const COLUMNS = [
   ['_slept', Int32Array, 1],         // the bodies that fell asleep in the last step, dense
   ['_staticMoved', Uint8Array, 1],   // 1 for a static body moved or changed since the last step
   ['_sensor', Uint8Array, 1],        // 1 for a sensor: it reports what it overlaps, and pushes nothing
+  ['_lock', Uint8Array, 1],          // bit k: it never turns about world axis k
+  // Characters (character.js):
+  ['_maxSlope', Float64Array, 1],
+  ['_slopeCos', Float64Array, 1],    // cos(maxSlope): ground whose normal is this near up is walkable
+  ['_stepHeight', Float64Array, 1],
+  ['_stepGiven', Uint8Array, 1],
+  ['_ground', Float64Array, 1],      // the id of what it stands on, or -1
+  ['_groundAt', Float64Array, 6],    // where it stands on it, and the ground's normal there
+  ['_walk', Float64Array, 3],        // its own velocity, through a step that moves it by more
   // The moved list (see moved()):
   ['_movedAt', Float64Array, 1],     // the step it last moved in; stepCount + 1 if set by hand since
   ['_seen', Uint32Array, 1],         // for moved(), so a body is listed once
@@ -253,8 +272,11 @@ export class World {
     this._sensed = new Int32Array(0);
     this._sensedCount = 0;
     this._sensorCount = 0;
+    this._characterCount = 0;
     /** Steps that asked about sensor pairs: for the off-means-off test, which reads it. */
     this._sensorPasses = 0;
+    /** Steps that moved characters: for the same. */
+    this._characterSteps = 0;
     // Queries (query.js): bodies that ended the last step outside their fat
     // boxes, listed by the first query after the step, and anything that
     // adds, removes or moves a body by hand since.
@@ -406,6 +428,11 @@ export class World {
       if (spec.inertiaGiven) out.inertia = [...spec.inertia];
     }
     for (const k of MATERIAL) out[k] = spec[k];
+    out.lockRotation = [...spec.lockRotation];
+    if (spec.type === 'character') {
+      out.maxSlope = spec.maxSlope;
+      if (spec.stepGiven) out.stepHeight = spec.stepHeight;
+    }
     out.position = [...spec.position];
     out.rotation = [...spec.rotation];
     if (spec.type !== 'static') {
@@ -460,6 +487,22 @@ export class World {
    * where either is a sensor. Found through the broadphase tree, from the
    * body's own box: the bodies near it, not every pair in the world.
    */
+  /**
+   * What a character stands on, as of the last step: { body, point, normal },
+   * fresh copies, or null in the air. null for any other body, which no step
+   * looks for ground under.
+   */
+  groundOf(body) {
+    const s = this._slotOfBody('groundOf', body);
+    if (this._type[s] !== CHARACTER || this._ground[s] < 0) return null;
+    const a = this._groundAt, g6 = 6 * s;
+    return {
+      body: new Body(this, this._ground[s]),
+      point: [a[g6], a[g6 + 1], a[g6 + 2]],
+      normal: [a[g6 + 3], a[g6 + 4], a[g6 + 5]],
+    };
+  }
+
   touching(body) {
     const s = this._slotOfBody('touching', body);
     const bp = this._broadphase, pairs = this._pairs, slots = this._slots, t = bp.which[s], out = [];
@@ -611,6 +654,11 @@ export class World {
     // moved by hand disturbed, brings its pairs back among the awake ones.
     if (this._wakePending) this._syncPairs();
     if (this._movedStatics.length > 0) this._clearStatics();
+    // Characters find where they can go before anything moves (character.js).
+    if (this._characterCount > 0) {
+      this._characterSteps++;
+      walk(this, dt);
+    }
 
     // Only awake bodies move in a step; static and sleeping ones' `previous`
     // already equals their transform. A body that fell asleep at the end of
@@ -692,7 +740,11 @@ export class World {
       at[s] = step;
     }
     this._stepDt = 0;
+    if (this._characterCount > 0) settle(this);
     if (this._sensedCount > 0) this._senseAll();
+    // Bodies out of their fat boxes are listed afresh for the next query: a
+    // character's casts listed them as the step began.
+    this._straysAt = -1;
     // Both give storage back after a burst, by the world's quarter rule.
     this._events.trim();
     if (this._sensed.length > 16 && this._sensedCount <= this._sensed.length / 4) {
@@ -736,7 +788,10 @@ export class World {
       // A kinematic body moves only as it is told, so it is still exactly
       // while told nothing: measured by distance, a slow platform, a 10 m one
       // at 1 cm/s, would count as still, fall asleep and stop.
-      if (type[s] === KINEMATIC ? v[s3] === 0 && v[s3 + 1] === 0 && v[s3 + 2] === 0
+      // A character never sleeps, so whatever it stands on can always carry it.
+      // ponytail: a few casts a step for each one standing still; let them
+      // sleep, woken by their ground moving, if a scene of thousands measures it.
+      if (type[s] === CHARACTER ? false : type[s] === KINEMATIC ? v[s3] === 0 && v[s3 + 1] === 0 && v[s3 + 2] === 0
         && w[s3] === 0 && w[s3 + 1] === 0 && w[s3 + 2] === 0 : strayed < size[s] * PIXEL) {
         still[s] += dt;
         if (still[s] >= SLEEP_TIME) ready = true;
@@ -1035,7 +1090,9 @@ export class World {
       // the same moment about every axis, and then its angular velocity is
       // its angular momentum over one number, constant, so the plain update
       // below is already exact. A kinematic body turns as it is told.
-      if (turning && type[s] === DYNAMIC && (I[s3] !== I[s3 + 1] || I[s3 + 1] !== I[s3 + 2])) {
+      // A body locked about any axis turns only as its locks allow, held there
+      // as by a constraint, so it doesn't tumble as a free one does.
+      if (turning && type[s] === DYNAMIC && this._lock[s] === 0 && (I[s3] !== I[s3 + 1] || I[s3 + 1] !== I[s3 + 2])) {
         tumble(q, s4, I, this._invInertia, s3, w, h);
       } else if (turning) {
         // q += h/2 (ω, 0) q, with ω in world space, then back to unit length.
@@ -1145,6 +1202,14 @@ export class World {
    */
   _turn(s, x, y, z) {
     const s3 = s * 3, s4 = s * 4;
+    if (this._lock[s] !== 0) {
+      // About its free axes only: the inverse of its inertia there (contact.js).
+      lockedInverse(TURN.place(0, 0, 0, this._rotation, s4).axes, 0, this._inertia, s3, this._lock[s], M6, 0);
+      this._angular[s3] += M6[0] * x + M6[1] * y + M6[2] * z;
+      this._angular[s3 + 1] += M6[1] * x + M6[3] * y + M6[4] * z;
+      this._angular[s3 + 2] += M6[2] * x + M6[4] * y + M6[5] * z;
+      return;
+    }
     const inv = this._invInertia;
     rotate(this._rotation, s4, x, y, z, true, v3);
     rotate(this._rotation, s4, v3[0] * inv[s3], v3[1] * inv[s3 + 1], v3[2] * inv[s3 + 2], false, v3);
@@ -1257,6 +1322,7 @@ export class World {
   /** After a teleport: drawn there, stamped, filed afresh, and what a static body held woken. */
   _moved(s) {
     this._place(s);
+    this._ground[s] = -1;   // a character moved by hand stands on nothing it stood on
     this._stamp(s);
     if (this._type[s] === STATIC) this._markStatic(s);
     this._boundsOf(s, 0, 0);
@@ -1269,6 +1335,7 @@ export class World {
     if (this._type[s] === STATIC) fail(caller, `a static body has no ${name}`);
     this._wake(s);
     (name === 'velocity' ? this._velocity : this._angular).set(value, s * 3);
+    if (name !== 'velocity') this._unlocked(s);
   }
 
   // Forces and impulses. Each checks its arguments whatever the body's type,
@@ -1345,6 +1412,8 @@ export class World {
     this._torque.fill(0, s * 3, s * 3 + 3);
     this._geometry[s] = null;
     if (this._sensor[s] === 1) { this._sensor[s] = 0; this._sensorCount--; }
+    // The next body in the slot starts its count afresh, whatever its type.
+    if (this._type[s] === CHARACTER) { this._type[s] = DYNAMIC; this._characterCount--; }
     this._epoch++;
     // What it was holding up, or resting on, wakes: its own island now, and
     // anything asleep against it at the next step, which finds it gone.
@@ -1423,6 +1492,10 @@ export class World {
       layers: this._layers[s],
       mask: this._mask[s],
       sensor: this._sensor[s] === 1,
+      lockRotation: [(this._lock[s] & 1) !== 0, (this._lock[s] & 2) !== 0, (this._lock[s] & 4) !== 0],
+      maxSlope: this._maxSlope[s],
+      stepHeight: this._stepHeight[s],
+      stepGiven: this._stepGiven[s] === 1,
       position: [this._position[s3], this._position[s3 + 1], this._position[s3 + 2]],
       rotation: [this._rotation[s4], this._rotation[s4 + 1], this._rotation[s4 + 2], this._rotation[s4 + 3]],
       velocity: [this._velocity[s3], this._velocity[s3 + 1], this._velocity[s3 + 2]],
@@ -1433,6 +1506,7 @@ export class World {
   /** Writes a checked spec into the columns. `placed`: the transform was set by hand. */
   _write(s, spec, placed) {
     const s3 = s * 3;
+    this._characterCount += (spec.type === 'character' ? 1 : 0) - (this._type[s] === CHARACTER ? 1 : 0);
     this._type[s] = TYPES.indexOf(spec.type);
     const shape = SHAPES.indexOf(spec.shape);
     this._shape[s] = shape;
@@ -1492,7 +1566,25 @@ export class World {
     this._rotation.set(spec.rotation, s * 4);
     this._velocity.set(spec.velocity, s3);
     this._angular.set(spec.angularVelocity, s3);
-    if (placed) this._place(s);
+    this._lock[s] = (spec.lockRotation[0] ? 1 : 0) | (spec.lockRotation[1] ? 2 : 0) | (spec.lockRotation[2] ? 4 : 0);
+    this._unlocked(s);
+    this._maxSlope[s] = spec.maxSlope;
+    this._slopeCos[s] = cos(spec.maxSlope);
+    this._stepGiven[s] = spec.stepGiven ? 1 : 0;
+    // Unless given, a ninth of its height: building codes cap a stair's rise
+    // near 0.2 m, a ninth of a 1.8 m person, and so it scales with its size.
+    this._stepHeight[s] = spec.stepGiven ? spec.stepHeight : tallness(spec) / 9;
+    if (placed) {
+      this._place(s);
+      this._ground[s] = -1;
+    }
+  }
+
+  /** Slot s's spin about any axis it is locked about, which stays zero: setting it is kept to the free axes. */
+  _unlocked(s) {
+    const lock = this._lock[s], s3 = 3 * s;
+    if (lock === 0) return;
+    for (let k = 0; k < 3; k++) if (lock >> k & 1) this._angular[s3 + k] = 0;
   }
 
   /** Copies a slot's position and rotation out to `transforms`, and to `previous`, for a teleport. */
@@ -1544,8 +1636,9 @@ function resolve(caller, base, given) {
     if (has(k) && !SHAPE_SIZES[shape].includes(k)) fail(caller, `a ${shape} has no ${k}`);
   }
   if (level) {
-    // Its triangles enclose nothing, so it has no mass to fall with or turn.
-    if (type === 'dynamic') fail(caller, `type must be 'static' or 'kinematic' for a ${shape}, got 'dynamic'`);
+    // Its triangles enclose nothing, so it has no mass to fall with or turn,
+    // nor anything to walk with.
+    if (type === 'dynamic' || type === 'character') fail(caller, `type must be 'static' or 'kinematic' for a ${shape}, got '${type}'`);
     for (const k of ['mass', 'density', 'inertia']) if (has(k)) fail(caller, `a ${shape} has no ${k}`);
   }
   // A new shape starts from its own defaults; sizes of the old one don't carry over.
@@ -1606,6 +1699,30 @@ function resolve(caller, base, given) {
   const layers = has('layers') ? bits(caller, 'layers', given.layers) : base.layers;
   const mask = has('mask') ? bits(caller, 'mask', given.mask) : base.mask;
   const sensor = has('sensor') ? flag(caller, 'sensor', given.sensor) : base.sensor;
+  let lockRotation = base.lockRotation;
+  if (has('lockRotation')) {
+    const l = given.lockRotation;
+    if (!(l !== null && typeof l === 'object' && l.length === 3 && [0, 1, 2].every((k) => typeof l[k] === 'boolean'))) {
+      fail(caller, `lockRotation must be 3 true or false values, got ${show(l)}`);
+    }
+    lockRotation = [l[0], l[1], l[2]];
+  }
+  if (type !== 'character') for (const k of WALKING) if (has(k)) fail(caller, `a ${type} body has no ${k}`);
+  let maxSlope = base.maxSlope;
+  if (has('maxSlope')) {
+    const a = given.maxSlope;
+    if (typeof a !== 'number' || !(a >= 0 && a <= Math.PI / 2)) fail(caller, `maxSlope must be an angle from 0 to π/2, in radians, got ${show(a)}`);
+    maxSlope = a;
+  }
+  // null is a value here, as for inertia: the step height follows the size again.
+  let stepHeight = base.stepHeight, stepGiven = base.stepGiven;
+  if (given.stepHeight === null) stepGiven = false;
+  else if (has('stepHeight')) {
+    const h = given.stepHeight;
+    if (typeof h !== 'number' || !(h >= 0) || h === Infinity) fail(caller, `stepHeight must be 0 or more, or null to follow the size, got ${show(h)}`);
+    stepHeight = h;
+    stepGiven = true;
+  }
 
   const position = has('position') ? vec3(caller, 'position', given.position) : base.position;
   const rotation = has('rotation') ? quat(caller, 'rotation', given.rotation) : base.rotation;
@@ -1623,9 +1740,17 @@ function resolve(caller, base, given) {
   return {
     type, shape, size, radius, height, geometry, density, mass, massGiven, inertia, inertiaGiven,
     friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor,
-    position, rotation, velocity, angularVelocity,
+    lockRotation, maxSlope, stepHeight, stepGiven, position, rotation, velocity, angularVelocity,
   };
 }
+
+/** How tall a shape stands along its own y: a capsule's height, a box's, a sphere's diameter. */
+function tallness(spec) {
+  return spec.shape === 'box' ? spec.size[1] : spec.shape === 'capsule' ? spec.height : 2 * spec.radius;
+}
+
+/** _turn's scratch: the body's axes, and its locked inverse inertia; it isn't re-entered. */
+const TURN = new Shape(), M6 = new Float64Array(6);
 
 /** The material options, in the order bodyOf lists them. */
 const MATERIAL = ['friction', 'restitution', 'damping', 'angularDamping', 'gravityScale', 'layers', 'mask', 'sensor'];

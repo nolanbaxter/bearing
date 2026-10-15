@@ -144,3 +144,19 @@ export function events(): void {
   // @ts-expect-error sensor is true or false
   world.addBody({ sensor: 1 });
 }
+
+export function characters(): void {
+  const world = new World();
+  const hero = world.addBody({ type: 'character', shape: 'capsule', radius: 0.3, height: 1.8, maxSlope: Math.PI / 3, stepHeight: 0.25 });
+  world.setBody(hero, { stepHeight: null });
+  const ground = world.groundOf(hero);
+  if (ground) ground.normal[1].toFixed(), ground.body.id.toFixed();
+  hero.setVelocity(2, ground ? 5 : hero.velocity[1], 0);
+  const upright = world.addBody({ shape: 'capsule', lockRotation: [true, false, true] });
+  const locks: [boolean, boolean, boolean] = world.bodyOf(upright).lockRotation;
+  void locks;
+  // @ts-expect-error a mesh is level geometry, not a character
+  world.addBody({ shape: 'mesh', type: 'character' });
+  // @ts-expect-error lockRotation names three axes
+  world.addBody({ lockRotation: [true, false] });
+}

@@ -57,7 +57,7 @@ met and measured.
 | Sleeping | Islands; a resting pile sleeps, a touch wakes it. A list of the bodies that moved, so an engine copies only those. |
 | Queries | Raycast (nearest, and all hits), shape cast, overlap test. |
 | Events | Contact begin, stay and end, and sensors (triggers), read after a step as plain data. |
-| Gameplay | A character controller: walk, slide along walls, climb steps and slopes, stand on moving platforms. |
+| Gameplay | Character bodies: walk, slide along walls, climb steps and slopes, stand on moving platforms. |
 | Joints | Fixed, ball, hinge, slider, and distance/spring, with limits and motors. |
 | CCD | Fast small bodies don't pass through thin walls. |
 | Data | `world.save()` and `World.load(data)`, exact. `world.debugLines()` as a `Float32Array`. Content read from a `.glb` with no dependency. |
@@ -343,12 +343,38 @@ awake, bit-identical results.
 
 ### Part three: gameplay
 
-**11. Character controller and rotation locks ⬜**
-*Concepts:* kinematic character movement; move-and-slide; ground detection; step offsets and slope limits.
-A kinematic capsule that walks, slides along walls, climbs steps and slopes up to a limit, stays
-on the ground going down them, and rides moving platforms. Rotation locks, for upright dynamic
-characters and 2.5D games *(proposal)*.
-*Done when:* scripted walks over a test level end where hand-worked answers say.
+**11. Character bodies and rotation locks ✅** *(approved and done 2026-10-15)*
+*Concepts:* kinematic character movement; move-and-slide; ground detection; step heights and slope limits.
+`type: 'character'`: a body moved at the velocity the game gives it, as a kinematic one, that
+collides as a person walking does: slides along walls, walks up slopes to `maxSlope` (π/4) and
+steps to `stepHeight` (its height ÷ 9), stays on the ground going down them, falls and lands under
+gravity, and rides moving bodies. `world.groundOf(body)`: what it stands on, or `null`. Bearing
+never sees input. `lockRotation: [x, y, z]` on any body: world axes it never turns about, for
+upright dynamic characters and 2.5D games. No `lockPosition`: in-plane contacts keep bodies in
+their plane.
+*Done when:* scripted walks over a test level end where hand-worked answers say: along a wall at
+v·cos 30°; up 15 cm stairs and not a 30 cm riser; up a 30° slope by d·tan 30° and not up 60°; down
+slopes and stairs without leaving the ground; carried by a platform; stopped by a ceiling; landing
+on the floor. An upright capsule doesn't tip; a 2.5D stack keeps every z to the bit.
+*Result:* `type: 'character'`, `maxSlope`, `stepHeight`, `world.groundOf(body)` and `lockRotation`
+(`src/character.js`, casts in `src/query.js`'s `sweep()` and `deepest()`, locks in `src/contact.js`'s
+`lockedInverse()`), held by `test/character.test.js`, every answer worked by hand: walked 2 m in
+1 s at 2 m/s to 1e-9; slid along a wall at 30° at 2 cos 30° m/s, heading along it, to 1e-9; up
+15 cm stairs onto the top tread and stopped by the 30 cm riser, both to a pixel (3 mm), and back
+down never leaving the ground; a 20 cm character climbs 2 cm and not 3 cm; up a 30° slope at the
+speed asked with its feet at x tan 30° + r (1/cos 30° − 1), and stopped at the foot of 60°, to a
+pixel; dropped onto 60°, slid down; down 20° at 4 m/s and 44° at 15 m/s without leaving the ground;
+carried 2.0000 and 3.0000 m by a 2 m/s platform, and down with a lift; head stopped at a 3 m
+ceiling; blocked by a crate it doesn't move; a capsule locked upright doesn't tip and still turns;
+a knocked-over 2.5D stack keeps every z and its out-of-plane turn at exactly 0. Found on the way:
+a cast in contact must stop only if the move goes deeper than it is by more than rounding (a
+floor's normal 2e-14 off up stalled walking); a round bottom meets a stair's lip at a slant, so a
+contact too steep to stand on is probed just past for the tread, within a step of the feet; its
+own motion is worked out against its platform where the step finds it, then carried, or it rode a
+descending lift 1.7 cm up; and moved by the step at constant speed it pushed a crate it only
+reached (600 N·s into 1,000 kg), so it is placed before the solve and stands still through it.
+Undoing any of six pieces fails a test. Worlds without characters or locks: same results to the
+bit, and the same speed within noise (five alternating runs, −5% to +9%).
 
 **12. Joints ⬜**
 *Concepts:* constraints and their Jacobians; degrees of freedom; limits and motors; mass ratios.
@@ -483,7 +509,7 @@ Each milestone that adds API is a minor version. Fixes between them are patches.
 | 0.5.0 | 8 | Queries. |
 | 0.6.0 | 9 | Triangle meshes, heightfields, `.glb`. |
 | 0.7.0 | 10 | Contact events and sensors. |
-| 0.8.0 | 11 | The character controller and rotation locks. |
+| 0.8.0 | 11 | Character bodies and rotation locks. |
 | 0.9.0 | 12 | Joints. |
 | 0.10.0 | 13 | Continuous collision. |
 | 0.11.0 | 14 | Convex hulls and compound shapes. |
@@ -554,3 +580,7 @@ Winding's way, copied before the first one:
   ball ends its impact step at the surface), and measuring settled it: bodies knocked away by
   others within a step are pushed yet end it apart, about one contact in 30 in a bouncing scene.
   So both stay, and the test scene has bouncing boxes and a paddle to hold the push to it.
+- **2026-10-15.** Milestone 11 renamed from "Character controller" to "Character bodies", with
+  Nolan: "controller" is the industry's word (Unity, PhysX, Rapier, Jolt), but it reads as input
+  handling, and nothing here touches input. A character is a body type the game gives a velocity
+  to, as it does a kinematic one.

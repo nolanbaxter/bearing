@@ -86,7 +86,7 @@ function inward(world, s, x, y, z, isPoint, out) {
 }
 
 /** Slot s's shape where it is now, into out. */
-function place(world, s, out) {
+export function place(world, s, out) {
   load(world, s, out);   // its kind and size; the axes load copies are the step's, so replaced:
   const p = world._position, s3 = 3 * s;
   return out.place(p[s3], p[s3 + 1], p[s3 + 2], world._rotation, 4 * s);
@@ -298,7 +298,7 @@ export function ray(world, ox, oy, oz, dx, dy, dz, maxT, mask, ignore, hit, near
  * it. Returns -1 for no touch, with the normal (from the body towards the
  * cast) in `normal` and the point on the body in `point` otherwise.
  */
-function advance(cast, b, scale, ox, oy, oz, dx, dy, dz, maxT) {
+function advance(cast, b, scale, ox, oy, oz, dx, dy, dz, maxT, sliding = false) {
   const ra = radius(cast), rb = radius(b), tolerance = scale * PIXEL;
   // Cores closer than this are meeting: GJK's closest points are rounding
   // there, half a double's bits of the shapes' size, and give no direction.
@@ -308,6 +308,18 @@ function advance(cast, b, scale, ox, oy, oz, dx, dy, dz, maxT) {
     cast.center[0] = ox + t * dx; cast.center[1] = oy + t * dy; cast.center[2] = oz + t * dz;
     const d = closest(cast, b, near), gap = d - ra - rb;
     if (gap < tolerance) {
+      // Sliding (a character, see sweep()): already in contact at the start,
+      // it is stopped only if the move could take it further in than it is,
+      // or than touching, by more than rounding. The gap between two convex
+      // shapes, one sliding straight, never closes faster than it starts to,
+      // so that rate over the whole move is the furthest in it can get. So
+      // moving off the body doesn't stop it, nor moving along it, even with
+      // rounding's tilt into it (a floor's normal 2e-14 off up) from rounding's
+      // depth in it (1e-16).
+      if (sliding && i === 0 && d > meeting) {
+        const opening = ((near.a[0] - near.b[0]) * dx + (near.a[1] - near.b[1]) * dy + (near.a[2] - near.b[2]) * dz) / d;
+        if (opening >= 0 || gap + opening * maxT >= Math.min(gap, 0) - meeting) return -1;
+      }
       if (d > meeting) {
         // Apart, or touching: the normal runs from the body's core to the cast's.
         const nx = (near.a[0] - near.b[0]) / d, ny = (near.a[1] - near.b[1]) / d, nz = (near.a[2] - near.b[2]) / d;
@@ -463,4 +475,148 @@ export function sense(world, a, b, tolerance, out) {
 function senseTriangle(t) {
   if (senseOut.count > 0) return;
   touch(senseShape, triangle(senseWorld, senseSlot, t), BARE, senseTolerance, senseTolerance, senseOut, t);
+}
+
+// ---- for character bodies (character.js) ----
+//
+// The same casts as shapeCast, but run inside the step, so with no closures
+// and nothing allocated: module state, and named visitors. A character is
+// blocked by what it would collide with, by its own layers and mask both
+// ways, and never by a sensor or itself. And a cast that starts in contact
+// with a body and moves off it, or along it, isn't stopped by it (advance's
+// `sliding`): a character walking on a floor is always within a pixel of it.
+
+let sweepWorld = null, sweepShape = null, sweepSelf = -1, sweepOther = -1, sweepBest = -1;
+let sweepOx = 0, sweepOy = 0, sweepOz = 0, sweepDx = 0, sweepDy = 0, sweepDz = 0, sweepMax = 0;
+let sweepGx = 0, sweepGy = 0, sweepGz = 0;
+const sweepNormal = new Float64Array(3), sweepPoint = new Float64Array(3);
+let levelSlot = -1, levelBest = -1, levelMax = 0;
+const levelNormal = new Float64Array(3), levelPoint = new Float64Array(3), levelHalf = new Float64Array(3);
+
+/** Whether character slot s is blocked by slot o: as the two would collide, both ways, and o isn't `other`. */
+function blocks(world, s, o, other) {
+  return o !== s && o !== other && world._sensor[o] === 0
+    && (world._layers[s] & world._mask[o]) !== 0 && (world._layers[o] & world._mask[s]) !== 0;
+}
+
+/**
+ * Slides `cast` (slot self's shape, placed where the move starts) along the
+ * unit (dx, dy, dz) for up to maxT, and returns the first slot it would
+ * touch, or -1. Into out: [distance, normal (from the body towards the cast),
+ * point]. Leaves out slot `other` as well as self, or none if -1.
+ */
+export function sweep(world, cast, self, other, dx, dy, dz, maxT, out) {
+  sweepWorld = world; sweepShape = cast; sweepSelf = self; sweepOther = other; sweepBest = -1;
+  sweepOx = cast.center[0]; sweepOy = cast.center[1]; sweepOz = cast.center[2];
+  sweepDx = dx; sweepDy = dy; sweepDz = dz; sweepMax = maxT;
+  extents(cast, ext);
+  sweepGx = ext[0]; sweepGy = ext[1]; sweepGz = ext[2];
+  const trees = world._broadphase.trees;
+  for (let k = 0; k < trees.length; k++) sweepMax = walk(trees[k], sweepOx, sweepOy, sweepOz, dx, dy, dz, sweepMax, sweepGx, sweepGy, sweepGz, sweepVisit);
+  const loose = strays(world);
+  for (let i = 0; i < loose.length; i++) sweepVisit(loose[i]);
+  cast.center[0] = sweepOx; cast.center[1] = sweepOy; cast.center[2] = sweepOz;
+  if (sweepBest >= 0) {
+    out[0] = sweepMax;
+    out[1] = sweepNormal[0]; out[2] = sweepNormal[1]; out[3] = sweepNormal[2];
+    out[4] = sweepPoint[0]; out[5] = sweepPoint[1]; out[6] = sweepPoint[2];
+  }
+  sweepWorld = null; sweepShape = null;
+  return sweepBest;
+}
+
+function sweepVisit(s) {
+  const world = sweepWorld;
+  if (!blocks(world, sweepSelf, s, sweepOther)) return sweepMax;
+  const t = world._shape[s] >= MESH ? sweepLevel(s)
+    : advance(sweepShape, place(world, s, body), scaleOf(world, s, sweepShape), sweepOx, sweepOy, sweepOz, sweepDx, sweepDy, sweepDz, sweepMax, true);
+  if (t < 0) return sweepMax;
+  sweepBest = s;
+  sweepMax = t;
+  sweepNormal.set(normal);
+  sweepPoint.set(point);
+  return sweepMax;
+}
+
+/** sweepVisit's cast against a mesh or heightfield in slot s: castLevel, with nothing allocated. */
+function sweepLevel(s) {
+  const world = sweepWorld;
+  inward(world, s, sweepOx, sweepOy, sweepOz, true, local);
+  const lx = local[0], ly = local[1], lz = local[2];
+  inward(world, s, sweepDx, sweepDy, sweepDz, false, dir);
+  const ux = dir[0], uy = dir[1], uz = dir[2];
+  extentsIn(world, s, sweepGx, sweepGy, sweepGz, levelHalf);
+  levelSlot = s; levelBest = -1; levelMax = sweepMax;
+  world._geometry[s].ray(lx, ly, lz, ux, uy, uz, sweepMax, levelHalf[0], levelHalf[1], levelHalf[2], sweepTriangle);
+  if (levelBest < 0) return -1;
+  normal.set(levelNormal);
+  point.set(levelPoint);
+  return levelMax;
+}
+
+function sweepTriangle(t) {
+  const at = advance(sweepShape, triangle(sweepWorld, levelSlot, t), size(sweepShape), sweepOx, sweepOy, sweepOz, sweepDx, sweepDy, sweepDz, levelMax, true);
+  if (at >= 0) {
+    levelBest = t; levelMax = at;
+    levelNormal.set(normal); levelPoint.set(point);
+  }
+  return levelMax;
+}
+
+let deepWorld = null, deepShape = null, deepSelf = -1, deepSlot = -1, deepSep = 0, deepTolerance = 0, deepLevel = -1;
+let deepGx = 0, deepGy = 0, deepGz = 0;   // the shape's half-extents: ext is strays()' scratch too
+const deepNormal = new Float64Array(3);
+
+/**
+ * The deepest overlap of `shape` (slot self's, placed) with anything that
+ * blocks it: into out [separation, normal], the separation negative and the
+ * normal from the shape towards the body, as collide() gives them; returns
+ * the slot, or -1 if it overlaps nothing. A mesh's seams count as seams, so
+ * a character overlapping a flat floor is pushed up, not off an edge.
+ */
+export function deepest(world, shape, self, out) {
+  deepWorld = world; deepShape = shape; deepSelf = self; deepSlot = -1; deepSep = 0;
+  extents(shape, ext);
+  deepGx = ext[0]; deepGy = ext[1]; deepGz = ext[2];
+  const c = shape.center, trees = world._broadphase.trees;
+  for (let k = 0; k < trees.length; k++) {
+    trees[k].query(c[0] - deepGx, c[1] - deepGy, c[2] - deepGz, c[0] + deepGx, c[1] + deepGy, c[2] + deepGz, deepVisit);
+  }
+  const loose = strays(world);
+  for (let i = 0; i < loose.length; i++) deepVisit(loose[i]);
+  if (deepSlot >= 0) { out[0] = deepSep; out[1] = deepNormal[0]; out[2] = deepNormal[1]; out[3] = deepNormal[2]; }
+  deepWorld = null; deepShape = null;
+  return deepSlot;
+}
+
+function deepVisit(s) {
+  const world = deepWorld;
+  if (!blocks(world, deepSelf, s, -1)) return;
+  deepTolerance = scaleOf(world, s, deepShape) * PIXEL;
+  if (world._shape[s] < MESH) {
+    if (collide(deepShape, place(world, s, body), 0, deepTolerance, manifold) > 0) deepKeep(s);
+    return;
+  }
+  const c = deepShape.center;
+  inward(world, s, c[0], c[1], c[2], true, local);
+  const lx = local[0], ly = local[1], lz = local[2];
+  extentsIn(world, s, deepGx, deepGy, deepGz, levelHalf);
+  deepLevel = s;
+  world._geometry[s].triangles(lx - levelHalf[0], ly - levelHalf[1], lz - levelHalf[2],
+    lx + levelHalf[0], ly + levelHalf[1], lz + levelHalf[2], deepTriangle);
+}
+
+function deepTriangle(t) {
+  const g = deepWorld._geometry[deepLevel];
+  if (touch(deepShape, triangle(deepWorld, deepLevel, t), g.edge(t), 0, deepTolerance, manifold, t) > 0) deepKeep(deepLevel);
+}
+
+/** The manifold just found, if deeper than the deepest so far. */
+function deepKeep(s) {
+  let least = 0;
+  for (let k = 0; k < manifold.count; k++) if (manifold.separations[k] < least) least = manifold.separations[k];
+  if (least >= deepSep) return;
+  deepSep = least;
+  deepSlot = s;
+  deepNormal.set(manifold.normal);
 }

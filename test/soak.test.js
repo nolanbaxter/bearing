@@ -241,6 +241,37 @@ await test('a pile landing past sensors and cleared 30 times: event storage, sen
   assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
 });
 
+await test('characters made, walked about a level and removed 30 times: nothing of them stays', async () => {
+  const world = new World();
+  world.addBody({ type: 'static', size: [40, 1, 40], position: [0, -0.5, 0] });
+  for (let k = 0; k < 4; k++) world.addBody({ type: 'static', size: [1, 0.15 * (k + 1), 6], position: [2 + k, 0.075 * (k + 1), 0] });
+  const lift = world.addBody({ type: 'kinematic', size: [3, 0.4, 3], position: [-4, 0.2, 0], velocity: [0, 0.5, 0] });
+  world.step(1 / 60);
+  let before = 0;
+  for (let round = 0; round < 30; round++) {
+    if (round === WARM) {
+      await collect();
+      before = heap();
+    }
+    const walkers = [];
+    for (let k = 0; k < 20; k++) {
+      walkers.push(world.addBody({ type: 'character', shape: 'capsule', radius: 0.3, height: 1.8, position: [(k % 5) * 1.5 - 4, 1.5, Math.floor(k / 5) * 1.5 - 2] }));
+    }
+    for (let s = 0; s < 40; s++) {
+      for (const c of walkers) c.setVelocity(s < 20 ? 2 : -2, c.velocity[1], 0.3);
+      world.step(1 / 60);
+    }
+    if (round % 2) lift.setVelocity(0, -0.5, 0); else lift.setVelocity(0, 0.5, 0);
+    for (const c of walkers) world.remove(c);
+    world.step(1 / 60);
+    assert.equal(world._characterCount, 0, `round ${round}: characters counted`);
+    assert.equal(world.bodyCount, 6, `round ${round}: bodies left`);
+  }
+  await collect();
+  const grown = heap() - before;
+  assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
+});
+
 await test('removed bodies\' handles and destroyed worlds are collected', async () => {
   const world = new World();
   let handle = world.addBody({});

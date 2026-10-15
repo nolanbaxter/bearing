@@ -490,6 +490,7 @@ export function prepare(world, c) {
 function inverseInertia(world, s) {
   const o = s * 6, out = world._invI;
   if (world._type[s] !== DYNAMIC) { out.fill(0, o, o + 6); return; }
+  if (world._lock[s] !== 0) { lockedInverse(world._axes, s * 9, world._inertia, s * 3, world._lock[s], out, o); return; }
   const ax = world._axes, a9 = s * 9, inv = world._invInertia, s3 = s * 3;
   const i0 = inv[s3], i1 = inv[s3 + 1], i2 = inv[s3 + 2];
   // Columns of R are the body's axes; entry (r, c) is Σ_k R_rk R_ck / I_k.
@@ -503,6 +504,51 @@ function inverseInertia(world, s) {
   out[o + 4] = x1 * x2 * i0 + y1 * y2 * i1 + z1 * z2 * i2;   // yz
   out[o + 5] = x2 * x2 * i0 + y2 * y2 * i1 + z2 * z2 * i2;   // zz
 }
+
+/**
+ * The world inverse inertia of a body that may not turn about some world
+ * axes (bit k of `lock` for axis k), into out[o..o+5] as xx xy xz yy yz zz.
+ * A locked axis is one no torque turns it about: as if its inertia there were
+ * endless. So this is the inverse of its world inertia taken on the free axes
+ * alone, with nothing on the locked ones. Cutting the locked rows out of the
+ * free inverse instead would be right only when the free axes are the body's
+ * own principal axes. The body's axes are at ax[a9..a9+8], its principal
+ * moments at I[i3..i3+2].
+ */
+export function lockedInverse(ax, a9, I, i3, lock, out, o) {
+  const i0 = I[i3], i1 = I[i3 + 1], i2 = I[i3 + 2];
+  const x0 = ax[a9], x1 = ax[a9 + 1], x2 = ax[a9 + 2];
+  const y0 = ax[a9 + 3], y1 = ax[a9 + 4], y2 = ax[a9 + 5];
+  const z0 = ax[a9 + 6], z1 = ax[a9 + 7], z2 = ax[a9 + 8];
+  // R diag(I) Rᵀ, entry (r, c) = Σ_k R_rk R_ck I_k: the world inertia.
+  M6[0] = x0 * x0 * i0 + y0 * y0 * i1 + z0 * z0 * i2;
+  M6[1] = x0 * x1 * i0 + y0 * y1 * i1 + z0 * z1 * i2;
+  M6[2] = x0 * x2 * i0 + y0 * y2 * i1 + z0 * z2 * i2;
+  M6[3] = x1 * x1 * i0 + y1 * y1 * i1 + z1 * z1 * i2;
+  M6[4] = x1 * x2 * i0 + y1 * y2 * i1 + z1 * z2 * i2;
+  M6[5] = x2 * x2 * i0 + y2 * y2 * i1 + z2 * z2 * i2;
+  out.fill(0, o, o + 6);
+  let first = -1, second = -1;
+  for (let k = 0; k < 3; k++) {
+    if (lock >> k & 1) continue;
+    if (first < 0) first = k; else second = k;
+  }
+  if (first < 0) return;
+  const ff = SYM[4 * first];
+  if (second < 0) {
+    if (M6[ff] > 0) out[o + ff] = 1 / M6[ff];
+    return;
+  }
+  // Two free axes: the 2x2 inverse.
+  const ss = SYM[4 * second], fs = SYM[3 * first + second];
+  const det = M6[ff] * M6[ss] - M6[fs] * M6[fs];
+  if (!(det > 0)) return;
+  out[o + ff] = M6[ss] / det; out[o + ss] = M6[ff] / det; out[o + fs] = -M6[fs] / det;
+}
+
+const M6 = new Float64Array(6);
+/** Where entry (r, c) of a symmetric 3x3 sits in xx xy xz yy yz zz: SYM[3r + c]. */
+const SYM = new Int8Array([0, 1, 2, 1, 3, 4, 2, 4, 5]);
 
 /**
  * The effective mass along unit d at a contact: 1 / (1/ma + 1/mb +
