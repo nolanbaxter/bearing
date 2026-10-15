@@ -42,7 +42,15 @@ pre { white-space: pre-wrap; font: 13px/1.5 ui-monospace, monospace; background:
 // nothing else is timed. The first block of every scene is a warm-up and
 // isn't counted. Each scene is run RUNS times, the median kept.
 //
-//   ?scene=pyramid   only these scenes, comma-separated (stack, pyramid, pile, rays, bigpile)
+// RAGDOLLS are 11 boxes each, a 1.8 m person, with ball joints at the neck,
+// spine, shoulders and hips and hinges at the elbows and knees, and no
+// limits: cannon-es's hinge has none and Rapier's ball joint has no cone in
+// its JavaScript API, so a scene with them wouldn't be the same scene. Every
+// engine is told not to collide parts a joint joins, as Bearing does by
+// default: Rapier per joint, Jolt by a group filter, cannon-es per constraint.
+// Their quality is the widest any joint has opened at the end.
+//
+//   ?scene=pyramid   only these scenes, comma-separated (stack, pyramid, pile, rays, bigpile, ragdolls)
 //   &runs=1          runs per scene
 //   &only=Bearing,Rapier
 //   &auto=1          start at once (for a headless run; results also on window.bench)
@@ -63,10 +71,18 @@ const ENGINES = {
       const world = new B.World();
       world.addBody({ type: 'static', size: [200, 1, 200], position: [0, -0.5, 0] });
       // The defaults are the scene: a 1 m box, water's density (1,000 kg), friction 0.5.
-      const bodies = scene.boxes.map((b) => world.addBody({ position: b.p, rotation: b.q }));
+      const bodies = scene.ragdolls ? [] : scene.boxes.map((b) => world.addBody({ position: b.p, rotation: b.q }));
+      for (const o of scene.ragdolls ?? []) {
+        const first = bodies.length;
+        for (const part of PARTS) bodies.push(world.addBody({ size: part.size, position: plus(o, part.at) }));
+        for (const j of JOINTS) {
+          world.addJoint({ type: j.type, a: bodies[first + j.a], b: bodies[first + j.b], anchor: plus(o, j.at), ...(j.axis ? { axis: j.axis } : {}) });
+        }
+      }
       return {
         step: () => world.step(DT),
         position: (i) => bodies[i].position,
+        rotation: (i) => bodies[i].rotation,
         asleep: () => bodies.reduce((n, b) => n + (b.asleep ? 1 : 0), 0),
         mass: () => bodies[0].mass,
         ray: (o, d, max) => world.raycast(o, d, { maxDistance: max })?.distance ?? -1,
@@ -86,12 +102,27 @@ const ENGINES = {
       world.timestep = DT;
       const floor = world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(0, -0.5, 0));
       world.createCollider(R.ColliderDesc.cuboid(100, 0.5, 100).setFriction(0.5).setRestitution(0), floor);
-      const bodies = scene.boxes.map((b) => {
+      const bodies = scene.ragdolls ? [] : scene.boxes.map((b) => {
         const body = world.createRigidBody(R.RigidBodyDesc.dynamic()
           .setTranslation(b.p[0], b.p[1], b.p[2]).setRotation({ x: b.q[0], y: b.q[1], z: b.q[2], w: b.q[3] }));
         world.createCollider(R.ColliderDesc.cuboid(0.5, 0.5, 0.5).setDensity(1000).setFriction(0.5).setRestitution(0), body);
         return body;
       });
+      const v = (a) => ({ x: a[0], y: a[1], z: a[2] });
+      for (const o of scene.ragdolls ?? []) {
+        const first = bodies.length;
+        for (const part of PARTS) {
+          const c = plus(o, part.at), body = world.createRigidBody(R.RigidBodyDesc.dynamic().setTranslation(c[0], c[1], c[2]));
+          world.createCollider(R.ColliderDesc.cuboid(part.size[0] / 2, part.size[1] / 2, part.size[2] / 2).setDensity(1000).setFriction(0.5).setRestitution(0), body);
+          bodies.push(body);
+        }
+        for (const j of JOINTS) {
+          // Anchors in each body's own frame; every part starts unturned.
+          const la = minus(j.at, PARTS[j.a].at), lb = minus(j.at, PARTS[j.b].at);
+          const data = j.type === 'ball' ? R.JointData.spherical(v(la), v(lb)) : R.JointData.revolute(v(la), v(lb), v(j.axis));
+          world.createImpulseJoint(data, bodies[first + j.a], bodies[first + j.b], true).setContactsEnabled(false);
+        }
+      }
       const ray = new R.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
       return {
         step: () => world.step(),
@@ -102,6 +133,7 @@ const ENGINES = {
           return hit ? hit.timeOfImpact ?? hit.toi : -1;
         },
         position: (i) => { const t = bodies[i].translation(); return [t.x, t.y, t.z]; },
+        rotation: (i) => { const r = bodies[i].rotation(); return [r.x, r.y, r.z, r.w]; },
         asleep: () => bodies.reduce((n, b) => n + (b.isSleeping() ? 1 : 0), 0),
         mass: () => bodies[0].mass(),
         free: () => world.free(),
@@ -139,10 +171,15 @@ const ENGINES = {
       J.destroy(settings);
       const system = jolt.GetPhysicsSystem(), bodies = system.GetBodyInterface();
       system.SetGravity(new J.Vec3(0, -G, 0));
-      const add = (shape, p, q, motion, layer) => {
+      const add = (shape, p, q, motion, layer, group) => {
         const make = new J.BodyCreationSettings(shape, new J.RVec3(p[0], p[1], p[2]), new J.Quat(q[0], q[1], q[2], q[3]), motion, layer);
         make.mFriction = 0.5;
         make.mRestitution = 0;
+        if (group) {
+          make.mCollisionGroup.SetGroupFilter(group[0]);
+          make.mCollisionGroup.SetGroupID(group[1]);
+          make.mCollisionGroup.SetSubGroupID(group[2]);
+        }
         const body = bodies.CreateBody(make);
         J.destroy(make);
         bodies.AddBody(body.GetID(), motion === J.EMotionType_Static ? J.EActivation_DontActivate : J.EActivation_Activate);
@@ -151,7 +188,38 @@ const ENGINES = {
       add(new J.BoxShape(new J.Vec3(100, 0.5, 100), 0.05, null), [0, -0.5, 0], [0, 0, 0, 1], J.EMotionType_Static, STILL);
       // Jolt's shapes are water's density by default too: 1,000 kg for a 1 m box.
       const box = new J.BoxShape(new J.Vec3(0.5, 0.5, 0.5), 0.05, null);
-      const list = scene.boxes.map((b) => add(box, b.p, b.q, J.EMotionType_Dynamic, MOVING));
+      const list = scene.ragdolls ? [] : scene.boxes.map((b) => add(box, b.p, b.q, J.EMotionType_Dynamic, MOVING));
+      // A ragdoll's parts that a joint joins don't collide: Jolt's group filter.
+      const joined = new J.GroupFilterTable(PARTS.length);
+      for (const j of JOINTS) joined.DisableCollision(j.a, j.b);
+      (scene.ragdolls ?? []).forEach((o, r) => {
+        const first = list.length;
+        PARTS.forEach((part, k) => {
+          const half = part.size.map((x) => x / 2);
+          // Jolt's rounded corners, its convex radius, can be at most half the thinnest side.
+          const shape = new J.BoxShape(new J.Vec3(half[0], half[1], half[2]), Math.min(0.05, Math.min(...half) / 2), null);
+          list.push(add(shape, plus(o, part.at), [0, 0, 0, 1], J.EMotionType_Dynamic, MOVING, [joined, r, k]));
+        });
+        for (const j of JOINTS) {
+          const at = new J.RVec3(...plus(o, j.at));
+          let make;
+          if (j.type === 'ball') {
+            make = new J.PointConstraintSettings();
+            make.mPoint1 = at;
+            make.mPoint2 = at;
+          } else {
+            make = new J.HingeConstraintSettings();
+            make.mPoint1 = at;
+            make.mPoint2 = at;
+            const axis = new J.Vec3(...j.axis), normal = new J.Vec3(...(j.axis[0] ? [0, 1, 0] : [1, 0, 0]));
+            make.mHingeAxis1 = axis; make.mHingeAxis2 = axis;
+            make.mNormalAxis1 = normal; make.mNormalAxis2 = normal;
+          }
+          make.mSpace = J.EConstraintSpace_WorldSpace;
+          system.AddConstraint(make.Create(list[first + j.a], list[first + j.b]));
+          J.destroy(make);
+        }
+      });
       // Jolt's ray query, as its examples cast one: a ray, settings, a
       // collector for the nearest hit, and its layer, body and shape filters.
       const cast = new J.RRayCast(), castSettings = new J.RayCastSettings();
@@ -170,6 +238,7 @@ const ENGINES = {
           return nearest.HadHit() ? nearest.mHit.mFraction * max : -1;
         },
         position: (i) => { const p = list[i].GetPosition(); return [p.GetX(), p.GetY(), p.GetZ()]; },
+        rotation: (i) => { const r = list[i].GetRotation(); return [r.GetX(), r.GetY(), r.GetZ(), r.GetW()]; },
         asleep: () => list.reduce((n, b) => n + (b.IsActive() ? 0 : 1), 0),
         mass: () => 1 / list[0].GetMotionProperties().GetInverseMass(),
         free: () => J.destroy(jolt),
@@ -186,11 +255,28 @@ const ENGINES = {
       world.defaultContactMaterial.restitution = 0;
       world.addBody(new C.Body({ mass: 0, shape: new C.Box(new C.Vec3(100, 0.5, 100)), position: new C.Vec3(0, -0.5, 0) }));
       const box = new C.Box(new C.Vec3(0.5, 0.5, 0.5));
-      const bodies = scene.boxes.map((b) => {
+      const bodies = scene.ragdolls ? [] : scene.boxes.map((b) => {
         const body = new C.Body({ mass: 1000, shape: box, position: new C.Vec3(...b.p), quaternion: new C.Quaternion(...b.q) });
         world.addBody(body);
         return body;
       });
+      for (const o of scene.ragdolls ?? []) {
+        const first = bodies.length;
+        for (const part of PARTS) {
+          // cannon-es takes a mass, not a density: water's, times the volume.
+          const body = new C.Body({ mass: 1000 * part.size[0] * part.size[1] * part.size[2], shape: new C.Box(new C.Vec3(...part.size.map((x) => x / 2))), position: new C.Vec3(...plus(o, part.at)) });
+          world.addBody(body);
+          bodies.push(body);
+        }
+        for (const j of JOINTS) {
+          const A = bodies[first + j.a], B = bodies[first + j.b];
+          const la = new C.Vec3(...minus(j.at, PARTS[j.a].at)), lb = new C.Vec3(...minus(j.at, PARTS[j.b].at));
+          const c = j.type === 'ball' ? new C.PointToPointConstraint(A, la, B, lb)
+            : new C.HingeConstraint(A, B, { pivotA: la, pivotB: lb, axisA: new C.Vec3(...j.axis), axisB: new C.Vec3(...j.axis) });
+          c.collideConnected = false;
+          world.addConstraint(c);
+        }
+      }
       const result = new C.RaycastResult(), from = new C.Vec3(), to = new C.Vec3();
       return {
         step: () => world.step(DT),
@@ -202,6 +288,7 @@ const ENGINES = {
           return result.hasHit ? result.distance : -1;
         },
         position: (i) => { const p = bodies[i].position; return [p.x, p.y, p.z]; },
+        rotation: (i) => { const q = bodies[i].quaternion; return [q.x, q.y, q.z, q.w]; },
         asleep: () => bodies.reduce((n, b) => n + (b.sleepState === C.Body.SLEEPING ? 1 : 0), 0),
         mass: () => bodies[0].mass,
         free: () => {},
@@ -235,6 +322,39 @@ function pile(n) {
   return boxes;
 }
 
+/**
+ * A ragdoll: 11 boxes, a 1.8 m person standing in a T, feet at y = 0, each
+ * part's size and centre; then its joints, between parts by number, where
+ * each is, and a hinge's axis.
+ */
+const PARTS = [
+  { size: [0.32, 0.2, 0.2], at: [0, 1, 0] },          // pelvis
+  { size: [0.36, 0.45, 0.22], at: [0, 1.325, 0] },    // chest
+  { size: [0.2, 0.24, 0.22], at: [0, 1.67, 0] },      // head
+  { size: [0.28, 0.1, 0.1], at: [-0.32, 1.5, 0] },    // arms, upper and fore, left then right
+  { size: [0.26, 0.08, 0.08], at: [-0.59, 1.5, 0] },
+  { size: [0.28, 0.1, 0.1], at: [0.32, 1.5, 0] },
+  { size: [0.26, 0.08, 0.08], at: [0.59, 1.5, 0] },
+  { size: [0.14, 0.44, 0.14], at: [-0.09, 0.68, 0] }, // legs, thigh and shin, left then right
+  { size: [0.12, 0.44, 0.12], at: [-0.09, 0.24, 0] },
+  { size: [0.14, 0.44, 0.14], at: [0.09, 0.68, 0] },
+  { size: [0.12, 0.44, 0.12], at: [0.09, 0.24, 0] },
+];
+const JOINTS = [
+  { type: 'ball', a: 1, b: 0, at: [0, 1.1, 0] },
+  { type: 'ball', a: 2, b: 1, at: [0, 1.55, 0] },
+  { type: 'ball', a: 3, b: 1, at: [-0.18, 1.5, 0] },
+  { type: 'hinge', a: 4, b: 3, at: [-0.46, 1.5, 0], axis: [0, 1, 0] },
+  { type: 'ball', a: 5, b: 1, at: [0.18, 1.5, 0] },
+  { type: 'hinge', a: 6, b: 5, at: [0.46, 1.5, 0], axis: [0, 1, 0] },
+  { type: 'ball', a: 7, b: 0, at: [-0.09, 0.9, 0] },
+  { type: 'hinge', a: 8, b: 7, at: [-0.09, 0.46, 0], axis: [1, 0, 0] },
+  { type: 'ball', a: 9, b: 0, at: [0.09, 0.9, 0] },
+  { type: 'hinge', a: 10, b: 9, at: [0.09, 0.46, 0], axis: [1, 0, 0] },
+];
+const plus = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const minus = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+
 const SCENES = {
   stack: {
     name: '10-box stack', seconds: 10, phases: [[0, 10]], stands: true,
@@ -253,6 +373,14 @@ const SCENES = {
   // pile, as it starts, each asking for the nearest hit within 100 m.
   rays: { name: '10,000 rays into 1,000 boxes', rays: 10000, boxes: pile(1000) },
   bigpile: { name: '10,000-box pile', seconds: 1, phases: [[0, 1]], runs: 1, boxes: pile(10000) },
+  // Two layers of 16, the upper dropped 2.4 m onto the lower, shifted so they land on each other.
+  ragdolls: {
+    name: '32 ragdolls', seconds: 8, phases: [[0, 4], [4, 8]], runs: 1, mass: 12.8,
+    ragdolls: Array.from({ length: 32 }, (_, i) => {
+      const layer = i >> 4, k = i & 15;
+      return [((k & 3) - 1.5) * 1.6 + layer * 0.5, 0.2 + layer * 2.4, ((k >> 2) - 1.5) + layer * 0.3];
+    }),
+  },
 };
 
 // ---- running ----
@@ -342,6 +470,23 @@ async function runScene(key, names, libs) {
 
 /** What each engine's scene looks like at the end: the quality next to the time. */
 function check(scene, world) {
+  if (scene.ragdolls) {
+    // The widest any joint has opened: each end where its body's pose puts it.
+    let gap = 0, fell = 0;
+    const end = (i, local) => {
+      const p = world.position(i), q = world.rotation(i), [x, y, z, w] = q;
+      const tx = 2 * (y * local[2] - z * local[1]), ty = 2 * (z * local[0] - x * local[2]), tz = 2 * (x * local[1] - y * local[0]);
+      return [p[0] + local[0] + w * tx + (y * tz - z * ty), p[1] + local[1] + w * ty + (z * tx - x * tz), p[2] + local[2] + w * tz + (x * ty - y * tx)];
+    };
+    scene.ragdolls.forEach((o, r) => {
+      for (const j of JOINTS) {
+        const a = end(r * PARTS.length + j.a, minus(j.at, PARTS[j.a].at)), b = end(r * PARTS.length + j.b, minus(j.at, PARTS[j.b].at));
+        gap = Math.max(gap, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+      }
+      for (let k = 0; k < PARTS.length; k++) if (world.position(r * PARTS.length + k)[1] < -1) fell++;
+    });
+    return { gap, fell, asleep: world.asleep(), mass: world.mass() };
+  }
   let strayed = 0, sank = 0, fell = 0;
   scene.boxes.forEach((b, i) => {
     const p = world.position(i);
@@ -364,7 +509,14 @@ function table({ scene, ms, quality, hits }) {
     return lines.join('\n');
   }
   const lines = [`### ${scene.name}, ${scene.seconds} s`, ''];
-  if (scene.stands) {
+  if (scene.ragdolls) {
+    const heads = scene.phases.map(([a, b]) => `ms per step, ${a}–${b} s`);
+    lines.push(`| Engine | ${heads.join(' | ')} | widest joint gap at the end | asleep at the end | fell through |`, `|---|${heads.map(() => '---|').join('')}---|---|---|`);
+    for (const n of names) {
+      const qy = quality[n];
+      lines.push(`| ${n} | ${ms[n].map(ms3).join(' | ')} | ${mm(qy.gap)} | ${qy.asleep} of ${scene.ragdolls.length * PARTS.length} | ${qy.fell} |`);
+    }
+  } else if (scene.stands) {
     lines.push('| Engine | ms per step | stands | strayed | sank |', '|---|---|---|---|---|');
     for (const n of names) {
       const qy = quality[n], stands = qy.strayed < 0.1 && qy.sank < 0.1 && qy.fell === 0;
@@ -401,8 +553,8 @@ async function main() {
     const result = await runScene(key, names, libs);
     results.push(result);
     // Masses must agree, or the scenes differ.
-    const masses = result.quality ? names.map((n) => result.quality[n].mass) : [1000];
-    if (masses.some((m) => Math.abs(m - 1000) > 1e-6)) out.textContent += `\n\nMASSES DIFFER: ${names.map((n, i) => `${n} ${masses[i]}`).join(', ')}`;
+    const want = result.scene.mass ?? 1000, masses = result.quality ? names.map((n) => result.quality[n].mass) : [want];
+    if (masses.some((m) => Math.abs(m - want) > 1e-6 * want)) out.textContent += `\n\nMASSES DIFFER: ${names.map((n, i) => `${n} ${masses[i]}`).join(', ')}`;
     out.textContent = `${header}\n\n${results.map(table).join('\n\n')}`;
   }
   say('done');

@@ -44,6 +44,13 @@ const gone = () => {
   return { world, body };
 };
 
+/** A world with a body and a ball joint holding it to a point. */
+const joined = () => {
+  const { world, body } = fresh();
+  return { world, body, joint: world.addJoint({ a: body }) };
+};
+
+const JOINT_OPTIONS = 'type, a, b, anchor, anchorB, axis, min, max, length, cone, motorSpeed, motorForce, frequency, dampingRatio, collide';
 const OPTIONS = 'type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, lockRotation, maxSlope, stepHeight, position, rotation, velocity, angularVelocity';
 
 /** The smallest .glb: one node, 'floor', showing one triangle; `json` adds to its JSON. */
@@ -157,8 +164,63 @@ const cases = [
   ['world-bodyof', () => { const { world, body } = dead(); world.bodyOf(body); }, 'bodyOf: this body was removed'],
 
   ['world-remove', () => { const { world, body } = gone(); world.remove(body); }, 'remove: this world was destroyed'],
-  ['world-remove', () => fresh().world.remove(undefined), 'remove: body must be a Body, got undefined'],
+  ['world-remove', () => fresh().world.remove(undefined), 'remove: handle must be a Body or a Joint, got undefined'],
   ['world-remove', () => new World().remove(fresh().body), 'remove: that body belongs to another world'],
+  ['world-remove', () => new World().remove(joined().joint), 'remove: that joint belongs to another world'],
+
+  ['world-jointcount', () => gone().world.jointCount, 'jointCount: this world was destroyed'],
+  ['world-jointcount', () => { fresh().world.jointCount = 2; }, 'world.jointCount is read only'],
+  ...['addJoint', 'setJoint'].flatMap((call) => {
+    const run = (o) => () => {
+      const { world, body } = fresh();
+      if (call === 'addJoint') return world.addJoint(o !== null && typeof o === 'object' ? { a: body, ...o } : o);
+      return world.setJoint(world.addJoint({ a: body }), o);
+    };
+    const name = call === 'addJoint' ? 'options' : 'changes';
+    const e = `world-${call.toLowerCase()}`;
+    return [
+      [e, () => { const { world, joint, body } = joined(); world.destroy(); return call === 'addJoint' ? world.addJoint({ a: body }) : world.setJoint(joint, {}); }, `${call}: this world was destroyed`],
+      [e, run('hinge'), `${call}: ${name} must be an object, got 'hinge'`],
+      [e, run({ anchr: [0, 0, 0] }), `${call}: unknown option 'anchr' (did you mean 'anchor'?)`],
+      [e, run({ banana: 1 }), `${call}: unknown option 'banana' (the options are ${JOINT_OPTIONS})`],
+      [e, run({ type: 'weld' }), `${call}: type must be 'fixed', 'ball', 'hinge', 'slider' or 'distance', got 'weld'`],
+      [e, run({ type: 'fixed', axis: [1, 0, 0] }), `${call}: a fixed joint has no axis`],
+      [e, run({ anchor: [0, 0] }), `${call}: anchor must be 3 finite numbers, got 0,0`],
+      [e, run({ anchorB: 'x' }), `${call}: anchorB must be 3 finite numbers, got 'x'`],
+      [e, run({ type: 'hinge', axis: [0, 0, 0] }), `${call}: axis must be 3 finite numbers, not all zero, got 0,0,0`],
+      [e, run({ type: 'distance', length: -1 }), `${call}: length must be 0 or more, got -1`],
+      [e, run({ cone: 4 }), `${call}: cone must be an angle from 0 to π, in radians, got 4`],
+      [e, run({ type: 'hinge', motorSpeed: NaN }), `${call}: motorSpeed must be a finite number, got NaN`],
+      [e, run({ type: 'slider', motorForce: -1 }), `${call}: motorForce must be 0 or more, got -1`],
+      [e, run({ type: 'distance', frequency: Infinity }), `${call}: frequency must be 0 or more, got Infinity`],
+      [e, run({ type: 'distance', dampingRatio: '1' }), `${call}: dampingRatio must be 0 or more, got '1'`],
+      [e, run({ type: 'hinge', min: 4 }), `${call}: min must be from -π to π, in radians, or -Infinity, got 4`],
+      [e, run({ max: -Infinity }), `${call}: max must be from -π to π, in radians, or Infinity, got -Infinity`],
+      [e, run({ type: 'slider', min: NaN }), `${call}: min must be a number or -Infinity, got NaN`],
+      [e, run({ type: 'slider', max: -Infinity }), `${call}: max must be a number or Infinity, got -Infinity`],
+      [e, run({ type: 'distance', min: -1 }), `${call}: min must be 0 or more, got -1`],
+      [e, run({ type: 'distance', max: -2 }), `${call}: max must be 0 or more, or Infinity, got -2`],
+      [e, run({ type: 'slider', min: 2, max: 1 }), `${call}: min must be at most max (1), got 2`],
+      [e, run({ collide: 'yes' }), `${call}: collide must be true or false, got 'yes'`],
+    ];
+  }),
+  ['world-addjoint', () => fresh().world.addJoint({}), 'addJoint: a must be a Body of this world, got undefined'],
+  ['world-addjoint', () => { const { world, body } = dead(); world.addJoint({ a: body }); }, 'addJoint: a was removed'],
+  ['world-addjoint', () => { const { world, body } = fresh(); world.addJoint({ a: body, b: 5 }); }, 'addJoint: b must be a Body of this world, or null, got 5'],
+  ['world-addjoint', () => { const { world, body } = fresh(); const b = world.addBody({}); world.remove(b); world.addJoint({ a: body, b }); }, 'addJoint: b was removed'],
+  ['world-addjoint', () => { const { world, body } = fresh(); world.addJoint({ a: body, b: body }); }, 'addJoint: a and b must be different bodies'],
+  ['world-addjoint', () => { const { world, body } = fresh(); world._joints.slots.limit = 2; world.addJoint({ a: body }); world.addJoint({ a: body }); world.addJoint({ a: body }); },
+    'addJoint: a world holds at most 16777216 joints (the slot field of an id is 24 bits)'],
+  ['world-setjoint', () => fresh().world.setJoint(5, {}), 'setJoint: joint must be a Joint, got 5'],
+  ['world-setjoint', () => new World().setJoint(joined().joint, {}), 'setJoint: that joint belongs to another world'],
+  ['world-setjoint', () => { const { world, joint } = joined(); world.remove(joint); world.setJoint(joint, {}); }, 'setJoint: this joint was removed'],
+  ['world-setjoint', () => { const { world, joint, body } = joined(); world.setJoint(joint, { a: body }); }, "setJoint: a and b can't change; remove the joint and add another"],
+  ['world-jointof', () => { const { world, joint } = joined(); world.destroy(); world.jointOf(joint); }, 'jointOf: this world was destroyed'],
+  ['world-jointof', () => fresh().world.jointOf({ id: 0 }), 'jointOf: joint must be a Joint, got an object'],
+  ['world-jointof', () => new World().jointOf(joined().joint), 'jointOf: that joint belongs to another world'],
+  ['world-jointof', () => { const { world, joint } = joined(); joint.destroy(); world.jointOf(joint); }, 'jointOf: this joint was removed'],
+  ...['id', 'world', 'alive'].map((p) => [`joint-${p}`, () => { joined().joint[p] = 1; }, `joint.${p} is read only`]),
+  ['joint-destroy', () => { const { world, joint } = joined(); world.destroy(); joint.destroy(); }, 'destroy: this world was destroyed'],
 
   ['world-contacts', () => gone().world.contacts(), 'contacts: this world was destroyed'],
   ['world-contacts', () => fresh().world.contacts({ id: 1 }), 'contacts: body must be a Body, got an object'],
@@ -306,4 +368,12 @@ test('a call that throws changes nothing', () => {
   assert.equal(world.bodyCount, 1);
   assert.throws(() => world.addBody({ position: [0, 0, 0], radius: 1 }));
   assert.equal(world.bodyCount, 1);
+  // A joint the same: valid changes first, the bad one last.
+  const joint = world.addJoint({ type: 'hinge', a: body, min: -1 });
+  const was = JSON.stringify(world.jointOf(joint));
+  assert.throws(() => world.setJoint(joint, { anchor: [5, 5, 5], motorForce: 3, min: -0.5, max: 5 }));
+  assert.throws(() => world.setJoint(joint, { type: 'slider', collide: true, cone: 1 }));
+  assert.equal(JSON.stringify(world.jointOf(joint)), was);
+  assert.throws(() => world.addJoint({ a: body, anchor: [0, 1, 0], cone: -1 }));
+  assert.equal(world.jointCount, 1);
 });

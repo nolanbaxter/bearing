@@ -376,12 +376,36 @@ reached (600 N·s into 1,000 kg), so it is placed before the solve and stands st
 Undoing any of six pieces fails a test. Worlds without characters or locks: same results to the
 bit, and the same speed within noise (five alternating runs, −5% to +9%).
 
-**12. Joints ⬜**
+**12. Joints ✅** *(approved and done 2026-10-15)*
 *Concepts:* constraints and their Jacobians; degrees of freedom; limits and motors; mass ratios.
-`world.addJoint`, `setJoint`, `jointOf`, `remove`: fixed, ball, hinge, slider, and distance/spring,
-with limits and motors *(proposal)*. No joints means the joint solver doesn't run.
+`world.addJoint`, `setJoint`, `jointOf`, `jointCount`, `remove`, and `Joint` handles: fixed, ball,
+hinge, slider, and distance (rod, rope or spring), with limits, a ball joint's cone, and motors.
+Anchors and axes in world space; a joint's angle, position and motor are `a`'s against `b`, the
+world if none. Joined bodies don't collide unless `collide` says so; removing a body removes its
+joints. No joints means the joint solver doesn't run.
 *Done when:* a pendulum keeps its period; a 100-link chain hangs without stretching; limits hold;
 motors reach their speed; a ragdoll is added to the benchmark.
+*Result:* `src/joints.js` (rows, limits, motors, springs, the API) and `src/forest.js` (trees solved
+exactly), held by `test/joints.test.js`: a 1 m pendulum's period within 0.001% of the formula, with
+99.9% of its swing at 20 s; a 100-link chain hangs at its built length from the first step, within
+a micrometre, for 10 cm and 1 cm links, and sleeps 1.0 s later; a weight 100 times a link's mass on
+a chain of 10 doesn't stretch it (1e-5 m); a bridge of 20 hinged planks fixed at both ends sags and
+holds every joint to 0.017 mm; a door slammed at up to 50 m/s at its edge stops within 0.002 mm of
+its stop; a slider keeps to its line (1e-9) and its limit; a rope goes slack and is held to its
+length within 0.47 mm; a motor reaches 2 rad/s within 1% in three steps and stalls at its force; a
+1 Hz spring bounces at 1.0001 s; a ball joint's cone and twist hold; the tree solve agrees with a
+dense solve to its compliance. Found on the way, each measured: joints solved one at a time can't
+hold a long chain (2% long at once and bobbing at 30 s), harder correction blew it up, and soft
+joints, Box2D 3's answer, sag 1.8% for a 10 m chain and 18% for a 1 m one, so trees are solved
+exactly (Baraff, 1996), with every joint giving a millionth so a body held to the world at a leaf
+can't leave the elimination dividing by nothing; a stop solved as a free body's row pushed a door a
+quarter as hard as its hinge needs, so stops and motors are solved against their own joint's pin
+(0.9 mm past a stop at 5 m/s before, 0 after); a hinge's or slider's impulse kept as a world vector
+picked up a part along its free axis as the joint turned, which spun a ragdoll's shin to blowing
+apart, so that part is dropped; and tumbling, right for free bodies, added 10% to a jointed leg's
+energy in 50 s, so a jointed body turns plainly and its energy only falls. Ragdolls in
+`bench/compare.html` (see `bench/RESULTS.md`). Worlds without joints: the same results to the bit,
+and the same speed within noise (−2.0%, +2.5%, +0.3% on the 1,000-box pile).
 
 **13. Continuous collision ⬜**
 *Concepts:* tunnelling; time of impact; conservative advancement; swept volumes.
@@ -584,3 +608,15 @@ Winding's way, copied before the first one:
   Nolan: "controller" is the industry's word (Unity, PhysX, Rapier, Jolt), but it reads as input
   handling, and nothing here touches input. A character is a body type the game gives a velocity
   to, as it does a kinematic one.
+- **2026-10-15.** Milestone 12 done, with three changes to its proposal. The proposal said solving a
+  ball joint's rows as one 3x3 block would keep long chains tight; measured, it didn't, and the
+  joints that form trees are now solved exactly together (`src/forest.js`), which a long chain
+  needs. A distance joint's anchors default to the two centres, as the proposal's rope example
+  ("as long as they are apart now") needed, where its table said midway. And a joint's free
+  coordinate is `a`'s against `b`, so a motor on a body hung from the world turns it the way its
+  speed says. Found and not fixed, for Nolan to decide: a thin box spinning faster than about
+  200 rad/s gains energy from its contacts (a 0.1 m rod at 400 rad/s ends at 9,600), because a
+  step's contact points and normal are found where the step starts; a chain of thin boxes let go
+  sideways reaches that whipping, and blows up. Box2D 3 and Jolt cap spin at a quarter turn a step
+  (47 rad/s at 60 Hz) for this; a cap of a half turn stopped every case measured. It is milestone
+  13's (fast motion), or sooner.

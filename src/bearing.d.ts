@@ -266,6 +266,99 @@ export interface GlbOptions {
  */
 export function readGlb(bytes: ArrayBuffer | ArrayBufferView, options?: GlbOptions): { vertices: Float64Array; indices: Uint32Array };
 
+export type JointType = 'fixed' | 'ball' | 'hinge' | 'slider' | 'distance';
+
+/** What every joint takes. */
+interface JointCommon {
+  /** The body. Its angle, position and motor are measured against b. */
+  a: Body;
+  /** What a is held to; null, or left out, for a point in the world that never moves. */
+  b?: Body | null;
+  /** World space, m: where the joint is, where the bodies are now. Default midway between their centres (a distance joint's, a's centre). */
+  anchor?: Vec3;
+  /** Where it is on b, or in the world with no b, if not the same point: a distance joint's other end. */
+  anchorB?: Vec3;
+  /** Whether a and b still collide with each other. Default false. */
+  collide?: boolean;
+}
+
+interface Turning {
+  /** The joint's axis, world space; needn't be unit length. Default [0, 1, 0]. */
+  axis?: Vec3;
+  /** The least a's angle or position may be; null goes back to none. */
+  min?: number | null;
+  /** The most; null goes back to none. */
+  max?: number | null;
+}
+
+interface Driven extends Turning {
+  /** rad/s about axis, or m/s along it, that the motor drives a at against b. */
+  motorSpeed?: number;
+  /** The most the motor may push: N·m, or N. 0, the default, is no motor. */
+  motorForce?: number;
+}
+
+/** Welded: nothing free. */
+export interface FixedJointOptions extends JointCommon { type: 'fixed' }
+/** Any turn about its anchor; min and max limit its twist about axis, cone its swing. */
+export interface BallJointOptions extends JointCommon, Turning {
+  type?: 'ball';
+  /** How far axis may swing, radians, 0 to π. Default π, none. */
+  cone?: number;
+}
+/** Turns about axis; min and max limit its angle, radians, -π to π. */
+export interface HingeJointOptions extends JointCommon, Driven { type: 'hinge' }
+/** Slides along axis; min and max limit its position, m. */
+export interface SliderJointOptions extends JointCommon, Driven { type: 'slider' }
+/** Keeps its anchors length apart, or between min and max; a spring with a frequency. */
+export interface DistanceJointOptions extends JointCommon {
+  type: 'distance';
+  /** m. Default: how far apart the anchors are. */
+  length?: number;
+  /** m; default length, or 0 with a spring. null goes back to that. */
+  min?: number | null;
+  /** m; default length, or none with a spring. */
+  max?: number | null;
+  /** Hz: makes it a spring pulling to length. Default 0, none. */
+  frequency?: number;
+  /** 1, the default, settles without overshooting; 0 bounces for ever. */
+  dampingRatio?: number;
+}
+
+export type JointOptions = FixedJointOptions | BallJointOptions | HingeJointOptions | SliderJointOptions | DistanceJointOptions;
+
+/** What world.setJoint takes: any of addJoint's options but a and b. Which fit is checked against the joint's type when called. */
+export interface JointChanges {
+  type?: JointType;
+  anchor?: Vec3;
+  anchorB?: Vec3;
+  axis?: Vec3;
+  min?: number | null;
+  max?: number | null;
+  length?: number;
+  cone?: number;
+  motorSpeed?: number;
+  motorForce?: number;
+  frequency?: number;
+  dampingRatio?: number;
+  collide?: boolean;
+}
+
+interface JointInfoCommon {
+  a: Body;
+  b: Body | null;
+  /** Where a's end is now, world space. */
+  anchor: [number, number, number];
+  collide: boolean;
+}
+
+/** What world.jointOf returns: a copy, in the form addJoint takes. min and max only if given. */
+export type JointInfo =
+  | (JointInfoCommon & { type: 'fixed'; anchorB?: [number, number, number] })
+  | (JointInfoCommon & { type: 'ball'; anchorB?: [number, number, number]; axis: [number, number, number]; min?: number; max?: number; cone: number })
+  | (JointInfoCommon & { type: 'hinge' | 'slider'; anchorB?: [number, number, number]; axis: [number, number, number]; min?: number; max?: number; motorSpeed: number; motorForce: number })
+  | (JointInfoCommon & { type: 'distance'; anchorB: [number, number, number]; length: number; min?: number; max?: number; frequency: number; dampingRatio: number });
+
 export interface WorldOptions {
   /** m/s², default [0, -9.81, 0]. */
   gravity?: Vec3;
@@ -287,6 +380,8 @@ export class World {
   sleeping: boolean;
   /** How many bodies the world holds. */
   readonly bodyCount: number;
+  /** How many joints the world holds. */
+  readonly jointCount: number;
   /** How many times the world has been stepped: what moved() takes. */
   readonly stepCount: number;
   /** 7 numbers per slot: position x, y, z, then quaternion x, y, z, w. Replaced when storage resizes: don't keep it. */
@@ -303,8 +398,12 @@ export class World {
   addBody(options?: BodyOptions): Body;
   setBody(body: Body, changes: BodyChanges): void;
   bodyOf(body: Body): BodyInfo;
-  /** Does nothing if the body is already gone. */
-  remove(body: Body): void;
+  /** A body, with its joints, or a joint. Does nothing if it is already gone. */
+  remove(handle: Body | Joint): void;
+  /** Holds a to b, or to a point in the world, as its type allows. */
+  addJoint(options: JointOptions): Joint;
+  setJoint(joint: Joint, changes: JointChanges): void;
+  jointOf(joint: Joint): JointInfo;
   /** The nearest body a ray meets. direction is normalized, so distance is in metres. */
   raycast(origin: Vec3, direction: Vec3, options?: RayOptions): Hit | null;
   /** Every body a ray meets, nearest first. */
@@ -368,5 +467,18 @@ export class Body {
   /** N·m·s, world space, at once. */
   applyAngularImpulse(impulse: Vec3): this;
   /** Same as world.remove(body). */
+  destroy(): void;
+}
+
+/** A handle to a joint: a world and an id. Compare a.id === b.id, not a === b. */
+export class Joint {
+  private constructor();
+
+  readonly world: World;
+  /** Unique to this joint for the life of its world. */
+  readonly id: number;
+  /** false once removed, with either of its bodies, or once its world is destroyed. */
+  readonly alive: boolean;
+  /** Same as world.remove(joint). */
   destroy(): void;
 }

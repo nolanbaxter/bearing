@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sin, cos } from '../src/core/math.js';
+import { sin, cos, atan, atan2 } from '../src/core/math.js';
 import { suite, test } from './test.js';
 
 suite('math');
@@ -35,6 +35,29 @@ test('sin and cos agree with Math.sin and Math.cos to 1 ulp', () => {
   }
   assert.equal(sin(0), 0);
   assert.equal(cos(0), 1);
+});
+
+test('atan and atan2 agree with Math.atan and Math.atan2 to 1 ulp, special cases exactly', () => {
+  // V8's are fdlibm's as well. A joint's angle comes from atan2, so it has to
+  // be both right and the same bits everywhere.
+  let seed = 54321;
+  const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const scales = [1e-300, 1e-20, 1e-9, 1e-3, 0.5, 1, 2, 1e3, 1e9, 1e20, 1e300];
+  const xs = [0.4375, 0.6875, 1.1875, 2.4375, 2 ** 66, 2 ** -27, 1, 1.5, 0.5];
+  for (let i = 0; i < 100000; i++) xs.push((random() * 2 - 1) * scales[i % scales.length]);
+  for (const x of xs) {
+    assert.ok(Math.abs(atan(x) - Math.atan(x)) <= ulp(Math.atan(x)), `atan(${x})`);
+    assert.ok(Math.abs(atan(-x) - Math.atan(-x)) <= ulp(Math.atan(x)), `atan(${-x})`);
+  }
+  for (let i = 0; i < 100000; i++) {
+    const y = (random() * 2 - 1) * scales[i % scales.length], x = (random() * 2 - 1) * scales[(i * 7) % scales.length];
+    assert.ok(Math.abs(atan2(y, x) - Math.atan2(y, x)) <= ulp(Math.atan2(y, x)), `atan2(${y}, ${x})`);
+  }
+  for (const y of [0, -0, 1, -1, Infinity, -Infinity, NaN, 2 ** 70, 2 ** -70]) {
+    for (const x of [0, -0, 1, -1, Infinity, -Infinity, NaN, 2 ** 70, 2 ** -70]) {
+      assert.ok(Object.is(atan2(y, x), Math.atan2(y, x)), `atan2(${y}, ${x})`);
+    }
+  }
 });
 
 test('nothing in src/ calls an implementation-approximated function', () => {

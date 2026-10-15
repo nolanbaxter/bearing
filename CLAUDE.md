@@ -119,6 +119,20 @@ These were made with Nolan and override the rules below where they differ.
   its own (`_walk`). Characters never sleep, block on everything they'd collide with, push nothing,
   are pushed by nothing. Locks: exact inverse of the inertia on the free axes; no tumble; spin on
   locked axes kept 0.
+- **Joints** (2026-10-15, milestone 12, approved): `world.addJoint`, `setJoint`, `jointOf`,
+  `jointCount`, `remove(handle)`, `Joint` handles; types fixed, ball (twist `min`/`max`, `cone`),
+  hinge and slider (`min`/`max`, `motorSpeed`/`motorForce`), distance (`length`, `min`/`max`,
+  `frequency`/`dampingRatio`: rod, rope or spring). Anchors and axis in world space; the free
+  coordinate is `a`'s against `b` (b null: the world); `collide: false` by default, also for
+  character sweeps; removing a body removes its joints; `null` resets `min`/`max`. Rows that must
+  hold, in joints forming trees among dynamic bodies, are solved exactly every pass
+  (`src/forest.js`, Baraff's LDLᵀ, leaves first; joints to non-dynamic bodies are leaves; every
+  joint gives COMPLIANCE = 2^-20 of its own effective inverse mass so leaf pivots never vanish);
+  loops and rows that may give are solved one at a time, soft (JOINT_STIFFNESS 1/4,
+  JOINT_DAMPING_RATIO 2). The solve pass builds and factors (JOINT_BIAS 1), the relax pass reuses
+  that factor. Stops and motors are pinned to their joint's own hold rows. Jointed bodies don't
+  tumble. Joints solved before contacts in each pass; joined dynamic bodies share islands.
+  Bearing's own `atan`/`atan2` in `core/math.js`.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

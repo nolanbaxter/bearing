@@ -28,6 +28,7 @@ import { closest, Closest, radius } from './gjk.js';
 import { touch } from './triangle.js';
 import { triangleNormal } from './mesh.js';
 import { rotate } from './core/math.js';
+import { apart } from './joints.js';
 
 const STATIC = 1, MOVING_TREE = 1;   // World's static type code; Broadphase's moving tree
 const MESH = 3;                      // World's shape code; shapes from it on are triangles
@@ -493,10 +494,15 @@ const sweepNormal = new Float64Array(3), sweepPoint = new Float64Array(3);
 let levelSlot = -1, levelBest = -1, levelMax = 0;
 const levelNormal = new Float64Array(3), levelPoint = new Float64Array(3), levelHalf = new Float64Array(3);
 
-/** Whether character slot s is blocked by slot o: as the two would collide, both ways, and o isn't `other`. */
+/**
+ * Whether character slot s is blocked by slot o: as the two would collide,
+ * both ways, and o isn't `other`. A body a joint holds to it, as a lantern on
+ * a pole, doesn't block it unless the joint lets them collide (joints.js).
+ */
 function blocks(world, s, o, other) {
   return o !== s && o !== other && world._sensor[o] === 0
-    && (world._layers[s] & world._mask[o]) !== 0 && (world._layers[o] & world._mask[s]) !== 0;
+    && (world._layers[s] & world._mask[o]) !== 0 && (world._layers[o] & world._mask[s]) !== 0
+    && !(world._jointHead[s] !== 0 && world._jointHead[o] !== 0 && apart(world, s, o));
 }
 
 /**

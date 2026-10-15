@@ -31,6 +31,7 @@
 // and write nothing.
 
 import { resized } from './core/slots.js';
+import { apart } from './joints.js';
 
 const SLOT_SPAN = 16777216;   // 2^24: a pair's key is a * 2^24 + b, exact below 2^53
 const STATIC = 1, DYNAMIC = 0;
@@ -338,6 +339,9 @@ function pairable(w, a, b) {
   } else if ((sa === 1 && sb === 1) || (type[a] === STATIC && type[b] === STATIC)) {
     return false;
   }
+  // Two bodies a joint holds don't collide unless it says they do (joints.js);
+  // a body with no joints costs one read here.
+  if (w._jointHead[a] !== 0 && w._jointHead[b] !== 0 && apart(w, a, b)) return false;
   return filtered(w, a, b);
 }
 

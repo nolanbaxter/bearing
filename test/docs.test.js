@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { World, Body, readGlb } from '../src/bearing.js';
+import { World, Body, Joint, readGlb } from '../src/bearing.js';
 import * as bearing from '../src/bearing.js';
 import { suite, test } from './test.js';
 
@@ -27,10 +27,10 @@ function surface(prefix, cls) {
     .map((name) => `${prefix}-${name.toLowerCase()}`);
 }
 
-const expected = ['world', 'readglb', ...surface('world', World), ...surface('body', Body)];
+const expected = ['world', 'readglb', ...surface('world', World), ...surface('body', Body), ...surface('joint', Joint)];
 
-test('the package exports World, Body and readGlb, and nothing else', () => {
-  assert.deepEqual(Object.keys(bearing).sort(), ['Body', 'World', 'readGlb']);
+test('the package exports World, Body, Joint and readGlb, and nothing else', () => {
+  assert.deepEqual(Object.keys(bearing).sort(), ['Body', 'Joint', 'World', 'readGlb']);
 });
 
 test('every public method and getter has an entry', () => {
@@ -39,7 +39,7 @@ test('every public method and getter has an entry', () => {
 });
 
 test('every entry is for something that exists', () => {
-  const entries = [...API.matchAll(/<a id="((?:world|body)-[^"]+|world|readglb)"><\/a>\s*\n###/g)].map((m) => m[1]);
+  const entries = [...API.matchAll(/<a id="((?:world|body|joint)-[^"]+|world|readglb)"><\/a>\s*\n###/g)].map((m) => m[1]);
   const stale = entries.filter((id) => !expected.includes(id));
   assert.deepEqual(stale, [], `entries for nothing: ${stale.join(', ')}`);
 });

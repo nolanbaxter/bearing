@@ -28,8 +28,12 @@ import { rotate } from './core/math.js';
 import { Slots, resized, MAX_ID, MAX_SLOTS } from './core/slots.js';
 import { volume, inertia as shapeInertia } from './shapes.js';
 import {
-  Contacts, PIXEL, narrow, store, prepare, makeSoft, warmStart, solve, restitution, touched,
+  Contacts, PIXEL, narrow, store, inertias, prepare, makeSoft, warmStart, solve, restitution, touched,
 } from './contact.js';
+import {
+  Joints, Joint, addJoint, setJoint, jointOf, jointSlot, dropJoint, dropJointsOf, gather, warmStartJoints, solveJoints,
+  jointSoft, JOINT_STIFFNESS, JOINT_DAMPING_RATIO, plantJoints,
+} from './joints.js';
 import { Broadphase } from './broadphase.js';
 import { Pairs } from './pairs.js';
 import { Body } from './body.js';
@@ -205,6 +209,10 @@ const COLUMNS = [
   ['_ground', Float64Array, 1],      // the id of what it stands on, or -1
   ['_groundAt', Float64Array, 6],    // where it stands on it, and the ground's normal there
   ['_walk', Float64Array, 3],        // its own velocity, through a step that moves it by more
+  // Joints (joints.js): each body's list of them, and how long it is.
+  ['_jointHead', Int32Array, 1],     // its first joint, as an edge (2j + side) plus 1; 0 for none
+  ['_jointTally', Int32Array, 1],
+  ['_node', Int32Array, 1],          // while a step finds its trees of joints: the body's node plus 1 (forest.js)
   // The moved list (see moved()):
   ['_movedAt', Float64Array, 1],     // the step it last moved in; stepCount + 1 if set by hand since
   ['_seen', Uint32Array, 1],         // for moved(), so a body is listed once
@@ -233,6 +241,10 @@ export class World {
     this._pairs = new Pairs(this);
     /** This step's manifolds, the solver's working set (contact.js). */
     this._contacts = new Contacts();
+    /** Every joint, in columns of its own (joints.js). */
+    this._joints = new Joints();
+    /** Steps that ran the joint solver: for the off-means-off test, which reads it. */
+    this._jointSteps = 0;
     this._substeps = o.substeps === undefined ? SUBSTEPS : wholeFromOne('World', 'substeps', o.substeps);
     /** Steps that ran the contact solver: for the off-means-off test, which reads it. */
     this._solverSteps = 0;
@@ -349,6 +361,13 @@ export class World {
 
   set bodyCount(_) { readOnly('world.bodyCount'); }
 
+  get jointCount() {
+    this._live('jointCount');
+    return this._joints.count;
+  }
+
+  set jointCount(_) { readOnly('world.jointCount'); }
+
   get transforms() {
     this._live('transforms');
     return this._transforms;
@@ -442,8 +461,23 @@ export class World {
     return out;
   }
 
-  remove(body) {
-    this._remove('remove', body);
+  /** Removes a body, with its joints, or a joint. */
+  remove(handle) {
+    this._remove('remove', handle);
+  }
+
+  // ---- joints (joints.js) ----
+
+  addJoint(options_) {
+    return addJoint(this, options_);
+  }
+
+  setJoint(joint, changes) {
+    setJoint(this, joint, changes);
+  }
+
+  jointOf(joint) {
+    return jointOf(this, jointSlot(this, 'jointOf', joint));
   }
 
   /**
@@ -483,11 +517,6 @@ export class World {
   }
 
   /**
-   * Every body touching this one, as of the last step, or overlapping it
-   * where either is a sensor. Found through the broadphase tree, from the
-   * body's own box: the bodies near it, not every pair in the world.
-   */
-  /**
    * What a character stands on, as of the last step: { body, point, normal },
    * fresh copies, or null in the air. null for any other body, which no step
    * looks for ground under.
@@ -503,6 +532,11 @@ export class World {
     };
   }
 
+  /**
+   * Every body touching this one, as of the last step, or overlapping it
+   * where either is a sensor. Found through the broadphase tree, from the
+   * body's own box: the bodies near it, not every pair in the world.
+   */
   touching(body) {
     const s = this._slotOfBody('touching', body);
     const bp = this._broadphase, pairs = this._pairs, slots = this._slots, t = bp.which[s], out = [];
@@ -691,18 +725,24 @@ export class World {
     // where the pass stopped, and they are narrowed in turn until nothing
     // more wakes: a woken stack is held in the step it wakes, rather than
     // dropping a step's worth of gravity before its contacts come back.
+    // Joints the same way: one holding a sleeping body to an awake one wakes
+    // it, and the joints to solve are those with an awake body (joints.js).
     next.count = 0;
     let from = 0;
+    const joints = this._joints, jointed = joints.count > 0;
     do {
       if (this._wakePending) this._syncPairs();
       narrow(this, pairs, broadphase, next, from);
       from = pairs.active;
+      if (jointed) gather(this);
     } while (this._wakePending);
     next.trim();
     pairs.trim();
-    const touching = next.count;
+    const touching = next.count, held = jointed ? joints.active : 0;
+    if (held > 0) plantJoints(this);
 
     const substeps = this._substeps, h = dt / substeps;
+    if (touching > 0 || held > 0) inertias(this);
     if (touching > 0) {
       this._solverSteps++;
       // Static and sleeping bodies don't move, so theirs stays where it was set.
@@ -714,16 +754,21 @@ export class World {
       prepare(this, next);
       makeSoft(STIFFNESS / h, DAMPING_RATIO, h);
     }
+    if (held > 0) {
+      this._jointSteps++;
+      makeSoft(JOINT_STIFFNESS / h, JOINT_DAMPING_RATIO, h, jointSoft);
+    }
+    // Joints before contacts, in each pass, as Box2D 3 orders them: a joint
+    // can't give, and a contact solved after it sees where it holds.
     for (let sub = 0; sub < substeps; sub++) {
       this._accelerate(h);
-      if (touching > 0) {
-        warmStart(this, next);
-        solve(this, next, h, true);
-      }
+      if (held > 0) warmStartJoints(this);
+      if (touching > 0) warmStart(this, next);
+      if (held > 0) solveJoints(this, h, true);
+      if (touching > 0) solve(this, next, h, true);
       this._move(h);
-      if (touching > 0) {
-        solve(this, next, h, false);
-      }
+      if (held > 0) solveJoints(this, h, false);
+      if (touching > 0) solve(this, next, h, false);
     }
     if (touching > 0) {
       const g = this._gravity;
@@ -804,13 +849,13 @@ export class World {
 
     const parent = this._parent, c = this._contacts, n = this._awakeCount;
     for (let i = 0; i < n; i++) parent[list[i]] = list[i];
-    for (let m = 0; m < c.count; m++) {
-      const a = c.a[m], b = c.b[m];
-      if (type[a] !== DYNAMIC || type[b] !== DYNAMIC) continue;
-      // The lower slot becomes the root, so islands depend only on the inputs.
-      const ra = root(parent, a), rb = root(parent, b);
-      if (ra < rb) parent[rb] = ra;
-      else if (rb < ra) parent[ra] = rb;
+    for (let m = 0; m < c.count; m++) join(parent, type, c.a[m], c.b[m]);
+    // Joined bodies sleep and wake together too: the joints solved this step
+    // are every one with an awake body.
+    const J = this._joints;
+    for (let i = 0; i < J.active; i++) {
+      const j = J.list[i];
+      if (J.b[j] >= 0) join(parent, type, J.a[j], J.b[j]);
     }
     const least = this._least;
     for (let i = 0; i < n; i++) least[list[i]] = Infinity;
@@ -1091,8 +1136,13 @@ export class World {
       // its angular momentum over one number, constant, so the plain update
       // below is already exact. A kinematic body turns as it is told.
       // A body locked about any axis turns only as its locks allow, held there
-      // as by a constraint, so it doesn't tumble as a free one does.
-      if (turning && type[s] === DYNAMIC && this._lock[s] === 0 && (I[s3] !== I[s3 + 1] || I[s3 + 1] !== I[s3 + 2])) {
+      // as by a constraint, so it doesn't tumble as a free one does. Nor does
+      // a body a joint holds: tumbling carries its angular momentum across the
+      // substep unchanged, as if nothing held it, and measured on a floating
+      // leg (a box, a hinged thigh and shin), that added 10% to its energy in
+      // 50 s; turned plainly, it only ever lost energy, 6.6% in 60 s.
+      if (turning && type[s] === DYNAMIC && this._lock[s] === 0 && this._jointHead[s] === 0
+        && (I[s3] !== I[s3 + 1] || I[s3 + 1] !== I[s3 + 2])) {
         tumble(q, s4, I, this._invInertia, s3, w, h);
       } else if (turning) {
         // q += h/2 (ω, 0) q, with ω in world space, then back to unit length.
@@ -1227,6 +1277,7 @@ export class World {
     this._broadphase = new Broadphase();
     this._pairs = new Pairs(this);
     this._contacts = new Contacts();
+    this._joints = new Joints();
     this._reset();
   }
 
@@ -1287,6 +1338,10 @@ export class World {
 
   _alive(id) {
     return !this._destroyed && this._slots.slotOf(id) >= 0;
+  }
+
+  _jointAlive(id) {
+    return !this._destroyed && this._joints.slots.slotOf(id) >= 0;
   }
 
   _vector(caller, id, column, size) {
@@ -1402,10 +1457,18 @@ export class World {
 
   _remove(caller, body) {
     this._live(caller);
-    if (!(body instanceof Body)) fail(caller, `body must be a Body, got ${show(body)}`);
+    if (body instanceof Joint) {
+      if (body.world !== this) fail(caller, 'that joint belongs to another world');
+      const j = this._joints.slots.slotOf(body.id);
+      if (j >= 0) dropJoint(this, j);
+      return;
+    }
+    if (!(body instanceof Body)) fail(caller, `handle must be a Body or a Joint, got ${show(body)}`);
     if (body.world !== this) fail(caller, 'that body belongs to another world');
     const s = this._slots.slotOf(body.id);
     if (s < 0) return;   // already gone: removing twice is harmless, as in Winding
+    // Its joints go with it: a joint to nothing has no meaning.
+    if (this._jointHead[s] !== 0) dropJointsOf(this, s);
     // A force waiting on this slot must not land on whichever body gets it next.
     this._forced[s] = 0;
     this._force.fill(0, s * 3, s * 3 + 3);
@@ -1599,6 +1662,18 @@ export class World {
     // won't be moving in it (static, or asleep) until something wakes it.
     this._start.set(this._position.subarray(s3, s3 + 3), s3);
   }
+}
+
+/**
+ * Joins a's island and b's, if both are dynamic. Static and kinematic bodies
+ * join nothing, or everything on one floor would be one island. The lower
+ * slot becomes the root, so islands depend only on the inputs.
+ */
+function join(parent, type, a, b) {
+  if (type[a] !== DYNAMIC || type[b] !== DYNAMIC) return;
+  const ra = root(parent, a), rb = root(parent, b);
+  if (ra < rb) parent[rb] = ra;
+  else if (rb < ra) parent[ra] = rb;
 }
 
 /** The root of s's island, halving the path on the way so the next look is quicker. */

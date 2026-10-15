@@ -42,6 +42,6 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node test/world.test.js && node test/motion.test.js && node test/collide.test.js && node test/contact.test.js && node test/broadphase.test.js && node test/sleep.test.js && node test/query.test.js && node test/mesh.test.js && node test/events.test.js && node test/character.test.js && node test/ids.test.js && node test/math.test.js && node test/errors.test.js && node test/docs.test.js && node --expose-gc test/soak.test.js"
+    "test": "node test/world.test.js && node test/motion.test.js && node test/collide.test.js && node test/contact.test.js && node test/broadphase.test.js && node test/sleep.test.js && node test/query.test.js && node test/mesh.test.js && node test/events.test.js && node test/character.test.js && node test/joints.test.js && node test/ids.test.js && node test/math.test.js && node test/errors.test.js && node test/docs.test.js && node --expose-gc test/soak.test.js"
   }
 }

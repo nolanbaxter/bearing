@@ -54,6 +54,24 @@ own nearest-hit query. 2026-10-14, with milestone 8's queries.
 | Jolt | 342 | 10,000 |
 | cannon-es | 650 | 10,000 |
 
+### 32 ragdolls, 8 s
+
+Added with milestone 12 and run at its commit, 2026-10-15, one run. 11 boxes each, ball
+joints and hinges without limits (cannon-es's hinge has none), joined parts not colliding in any
+engine; two layers of 16, the upper dropped onto the lower.
+
+| Engine | ms per step, 0–4 s | ms per step, 4–8 s | widest joint gap at the end | asleep at the end | fell through |
+|---|---|---|---|---|---|
+| Bearing | 20.9 | 21.8 | 0.44 mm | 0 of 352 | 0 |
+| Rapier | 1.74 | 1.48 | 7.08 mm | 11 of 352 | 0 |
+| Jolt | 3.99 | 0.00208 | 0.10 mm | 352 of 352 | 0 |
+| cannon-es | 9.84 | 8.76 | 5.25 mm | 149 of 352 | 0 |
+
+Bearing holds its joints tighter than Rapier and cannon-es, and is the slowest: 12 to 15 times
+Rapier, 2.1 to 2.5 times cannon-es. Its ragdolls don't sleep in 8 s: with no limits and nothing to
+rub on, a dangling limb swings as a pendulum does; Jolt's sleeping is the quickest to call a slow
+swing still.
+
 ### 10,000-box pile
 
 Not run. Once it lands, Bearing and cannon-es each take a second or more a step, and three runs

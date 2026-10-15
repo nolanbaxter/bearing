@@ -20,7 +20,8 @@ These hold everywhere, so one learned is one learned for good.
 - **Every kind of thing works the same way.** `world.addX(options)` makes one and returns a handle.
   `world.setX(handle, changes)` changes any of the options `addX` took, leaving the rest.
   `world.xOf(handle)` returns a copy of its options. It goes with
-  [`world.remove(handle)`](#world-remove) or `handle.destroy()`. The kinds so far: bodies.
+  [`world.remove(handle)`](#world-remove) or `handle.destroy()`. The kinds so far: bodies and
+  joints.
 - **Options are one plain object, and every field has a default.** Leaving one out means the
   default, so `addBody({})` makes a valid body: a 1 m box of water. A field set to `undefined`
   counts as left out.
@@ -49,24 +50,26 @@ These hold everywhere, so one learned is one learned for good.
 <a id="contents"></a>
 ## Contents
 
-[World](#world-class) · [Body](#body) · [Meshes and heightfields](#meshes) · [Character bodies](#characters) · [Contacts](#contacts) · [Contact events and sensors](#events) · [Layers and masks](#layers) · [Sleeping](#sleeping) · [Queries](#queries) · [Determinism](#determinism) · [Limits](#limits)
+[World](#world-class) · [Body](#body) · [Joint](#joint) · [Meshes and heightfields](#meshes) · [Character bodies](#characters) · [Joints](#joints) · [Contacts](#contacts) · [Contact events and sensors](#events) · [Layers and masks](#layers) · [Sleeping](#sleeping) · [Queries](#queries) · [Determinism](#determinism) · [Limits](#limits)
 
 <a id="index"></a>
 ## Index
 
 Every call, setting and entry, A to Z by its name.
 
-**A** &nbsp; [`world.addBody()`](#world-addbody) · [`body.alive`](#body-alive) · [`body.angularVelocity`](#body-angularvelocity) · [`body.applyAngularImpulse()`](#body-applyangularimpulse) · [`body.applyForce()`](#body-applyforce) · [`body.applyImpulse()`](#body-applyimpulse) · [`body.applyTorque()`](#body-applytorque) · [`body.asleep`](#body-asleep)
+**A** &nbsp; [`world.addBody()`](#world-addbody) · [`world.addJoint()`](#world-addjoint) · [`body.alive`](#body-alive) · [`joint.alive`](#joint-alive) · [`body.angularVelocity`](#body-angularvelocity) · [`body.applyAngularImpulse()`](#body-applyangularimpulse) · [`body.applyForce()`](#body-applyforce) · [`body.applyImpulse()`](#body-applyimpulse) · [`body.applyTorque()`](#body-applytorque) · [`body.asleep`](#body-asleep)
 
 **B** &nbsp; [`world.body()`](#world-body) · [`world.bodyCount`](#world-bodycount) · [`world.bodyOf()`](#world-bodyof)
 
 **C** &nbsp; [Character bodies](#characters) · [Contact events and sensors](#events) · [Contacts](#contacts) · [`world.contacts()`](#world-contacts)
 
-**D** &nbsp; [`body.destroy()`](#body-destroy) · [`world.destroy()`](#world-destroy) · [Determinism](#determinism)
+**D** &nbsp; [`body.destroy()`](#body-destroy) · [`joint.destroy()`](#joint-destroy) · [`world.destroy()`](#world-destroy) · [Determinism](#determinism)
 
 **G** &nbsp; [`world.gravity`](#world-gravity) · [`world.groundOf()`](#world-groundof)
 
-**I** &nbsp; [`body.id`](#body-id) · [`body.inertia`](#body-inertia)
+**I** &nbsp; [`body.id`](#body-id) · [`joint.id`](#joint-id) · [`body.inertia`](#body-inertia)
+
+**J** &nbsp; [Joint](#joint) · [`world.jointCount`](#world-jointcount) · [`world.jointOf()`](#world-jointof) · [Joints](#joints)
 
 **L** &nbsp; [Layers and masks](#layers) · [Limits](#limits)
 
@@ -80,13 +83,13 @@ Every call, setting and entry, A to Z by its name.
 
 **R** &nbsp; [`world.raycast()`](#world-raycast) · [`world.raycastAll()`](#world-raycastall) · [`readGlb()`](#readglb) · [`world.remove()`](#world-remove) · [`body.rotation`](#body-rotation)
 
-**S** &nbsp; [`body.setAngularVelocity()`](#body-setangularvelocity) · [`body.setAxisAngle()`](#body-setaxisangle) · [`world.setBody()`](#world-setbody) · [`body.setEuler()`](#body-seteuler) · [`body.setPosition()`](#body-setposition) · [`body.setRotation()`](#body-setrotation) · [`body.setVelocity()`](#body-setvelocity) · [`world.shapeCast()`](#world-shapecast) · [`world.sleeping`](#world-sleeping) · [Sleeping](#sleeping) · [`body.slot`](#body-slot) · [`world.step()`](#world-step) · [`world.stepCount`](#world-stepcount) · [`world.substeps`](#world-substeps)
+**S** &nbsp; [`body.setAngularVelocity()`](#body-setangularvelocity) · [`body.setAxisAngle()`](#body-setaxisangle) · [`world.setBody()`](#world-setbody) · [`body.setEuler()`](#body-seteuler) · [`world.setJoint()`](#world-setjoint) · [`body.setPosition()`](#body-setposition) · [`body.setRotation()`](#body-setrotation) · [`body.setVelocity()`](#body-setvelocity) · [`world.shapeCast()`](#world-shapecast) · [`world.sleeping`](#world-sleeping) · [Sleeping](#sleeping) · [`body.slot`](#body-slot) · [`world.step()`](#world-step) · [`world.stepCount`](#world-stepcount) · [`world.substeps`](#world-substeps)
 
 **T** &nbsp; [`world.touching()`](#world-touching) · [`world.transforms`](#world-transforms)
 
 **V** &nbsp; [`body.velocity`](#body-velocity)
 
-**W** &nbsp; [`new World()`](#world) · [`body.world`](#body-world)
+**W** &nbsp; [`new World()`](#world) · [`body.world`](#body-world) · [`joint.world`](#joint-world)
 
 <a id="world-class"></a>
 ## World
@@ -177,6 +180,17 @@ Throws: `bodyCount: this world was destroyed`; `world.bodyCount is read only`.
 
 ```js
 console.log(world.bodyCount);
+```
+
+<a id="world-jointcount"></a>
+### `world.jointCount` → `number`
+
+How many joints the world holds. Read only.
+
+Throws: `jointCount: this world was destroyed`; `world.jointCount is read only`.
+
+```js
+console.log(world.jointCount);
 ```
 
 <a id="world-stepcount"></a>
@@ -375,12 +389,13 @@ console.log(world.bodyOf(crate).position);
 ```
 
 <a id="world-remove"></a>
-### `world.remove(body)`
+### `world.remove(handle)`
 
-Removes a body. Its handle stops working: [`body.alive`](#body-alive) becomes `false`, and its
-methods throw. Removing a body that is already gone does nothing.
+Removes a body, with every joint holding it, or a joint. Its handle stops working:
+[`body.alive`](#body-alive) or [`joint.alive`](#joint-alive) becomes `false`, and its methods throw.
+Removing what is already gone does nothing.
 
-Throws: `remove: this world was destroyed`; `remove: body must be a Body, got …`; `remove: that body belongs to another world`.
+Throws: `remove: this world was destroyed`; `remove: handle must be a Body or a Joint, got …`; `remove: that body belongs to another world`; `remove: that joint belongs to another world`.
 
 ```js
 world.remove(crate);
@@ -389,7 +404,8 @@ world.remove(crate);
 Notes: the body's slot is given to a later body, under a new id, so an old handle can never reach
 the new body. When the bodies left use a quarter of the world's storage or less, the storage
 shrinks to half, which replaces [`world.transforms`](#world-transforms). Same as
-[`body.destroy()`](#body-destroy).
+[`body.destroy()`](#body-destroy) and [`joint.destroy()`](#joint-destroy). What a removed joint
+held wakes.
 
 <a id="world-body"></a>
 ### `world.body(id)` → `Body`
@@ -404,6 +420,90 @@ const id = crate.id;
 const again = world.body(id);
 console.log(again.id === crate.id);   // true
 ```
+
+<a id="world-addjoint"></a>
+### `world.addJoint(options)` → `Joint`
+
+Holds body `a` to body `b`, or to a point in the world, so they move against each other only as
+the joint's type allows, and returns its [handle](#joint). See [Joints](#joints).
+
+| Option | Default | Meaning |
+|---|---|---|
+| `type` | `'ball'` | `'fixed'`: welded, nothing free. `'ball'`: turns any way about its anchor. `'hinge'`: turns about `axis`. `'slider'`: slides along `axis`, turning not at all. `'distance'`: keeps two points `length` apart, or between `min` and `max`. |
+| `a` | none; it must be given | The body. Its angle, position and motor are measured against `b`. |
+| `b` | `null` | What `a` is held to: another body, or `null` for a point in the world that never moves. |
+| `anchor` | midway between their centres; with no `b`, `a`'s centre; a distance joint's, `a`'s centre | Where the joint is, in world space, in metres, where the bodies are now. Bearing works out where that is on each. |
+| `anchorB` | `anchor`; a distance joint's, `b`'s centre | Where it is on `b`, or in the world with no `b`, if not the same point: a distance joint's other end. For any other joint, a point it pulls to `anchor`. |
+| `axis` | `[0, 1, 0]` | A hinge's axis, a slider's direction, a ball joint's axis for `cone` and its twist. Needn't be unit length. Not for a fixed or distance joint. |
+| `min` | none | The least a's free coordinate may be: a hinge's angle or a ball joint's twist about `axis`, in radians, from -π to π, or -Infinity for none; a slider's position along `axis`, in metres; a distance joint's length, in metres, 0 or more, its `length` without a spring and 0 with one. Measured from where the joint is made. `null` goes back to the default. Not for a fixed joint. |
+| `max` | none | The most, the same way: up to π, or Infinity for none; a distance joint's, its `length` without a spring. |
+| `length` | how far apart the anchors are | A distance joint's length, in metres, 0 or more: what it holds, or springs back to. |
+| `cone` | `π` (none) | How far a ball joint's `axis` on `a` may swing from its `axis` on `b`, in radians, from 0 to π. |
+| `motorSpeed` | `0` | The speed a hinge's or slider's motor drives `a` at against `b`: rad/s about `axis`, or m/s along it. |
+| `motorForce` | `0` (no motor) | The most the motor may push, 0 or more: N·m for a hinge, N for a slider. |
+| `frequency` | `0` (no spring) | Makes a distance joint a spring, pulling it to `length`: how many times a second it would bounce, in Hz. |
+| `dampingRatio` | `1` | How quickly the spring stops bouncing: 1 settles without overshooting, as Bearing's contacts do; 0 bounces for ever. |
+| `collide` | `false` | Whether `a` and `b` still collide with each other. |
+
+Returns: a [`Joint`](#joint).
+
+Throws: `addJoint: this world was destroyed`; `addJoint: options must be an object, got …`; `addJoint: unknown option '…' (did you mean '…'?)`; `addJoint: unknown option '…' (the options are type, a, b, anchor, anchorB, axis, min, max, length, cone, motorSpeed, motorForce, frequency, dampingRatio, collide)`; `addJoint: type must be 'fixed', 'ball', 'hinge', 'slider' or 'distance', got …`; `addJoint: a <type> joint has no <option>`; `addJoint: a must be a Body of this world, got …`; `addJoint: a was removed`; `addJoint: b must be a Body of this world, or null, got …`; `addJoint: b was removed`; `addJoint: a and b must be different bodies`; `addJoint: anchor must be 3 finite numbers, got …`; `addJoint: anchorB must be 3 finite numbers, got …`; `addJoint: axis must be 3 finite numbers, not all zero, got …`; `addJoint: length must be 0 or more, got …`; `addJoint: cone must be an angle from 0 to π, in radians, got …`; `addJoint: motorSpeed must be a finite number, got …`; `addJoint: motorForce must be 0 or more, got …`; `addJoint: frequency must be 0 or more, got …`; `addJoint: dampingRatio must be 0 or more, got …`; `addJoint: min must be from -π to π, in radians, or -Infinity, got …`; `addJoint: max must be from -π to π, in radians, or Infinity, got …`; `addJoint: min must be a number or -Infinity, got …`; `addJoint: max must be a number or Infinity, got …`; `addJoint: min must be 0 or more, got …`; `addJoint: max must be 0 or more, or Infinity, got …`; `addJoint: min must be at most max (…), got …`; `addJoint: collide must be true or false, got …`; `addJoint: a world holds at most 16777216 joints (the slot field of an id is 24 bits)`.
+
+```js
+const frame = world.addBody({ type: 'static', size: [0.1, 2, 0.1], position: [-0.05, 1, 0] });
+const door = world.addBody({ size: [1, 2, 0.05], position: [0.5, 1, 0], mass: 20 });
+world.addJoint({ type: 'hinge', a: door, b: frame, anchor: [0, 1, 0], axis: [0, 1, 0], min: 0, max: Math.PI / 2 });
+const lamp = world.addBody({ shape: 'sphere', radius: 0.2, position: [0, 4, 0] });
+world.addJoint({ a: lamp, anchor: [0, 5, 0] });                          // hung from a point, a ball joint
+const rope = world.addJoint({ type: 'distance', a: ball, b: crate, min: 0 });   // a rope, as long as they are apart
+```
+
+Notes: a joint wakes the bodies it holds. An option for another type throws, as `radius` does on a
+box: `a hinge joint has no cone`. A joint between two bodies neither of which is dynamic does
+nothing until one is made dynamic.
+
+<a id="world-setjoint"></a>
+### `world.setJoint(joint, changes)`
+
+Changes any of the options [`addJoint`](#world-addjoint) took but `a` and `b`, with the same names,
+defaults and checks, and leaves the rest as they are.
+
+Throws: `setJoint: this world was destroyed`; `setJoint: joint must be a Joint, got …`; `setJoint: that joint belongs to another world`; `setJoint: this joint was removed`; `setJoint: changes must be an object, got …`; `setJoint: unknown option '…' (did you mean '…'?)`; `setJoint: unknown option '…' (the options are type, a, b, anchor, anchorB, axis, min, max, length, cone, motorSpeed, motorForce, frequency, dampingRatio, collide)`; `setJoint: a and b can't change; remove the joint and add another`; `setJoint: type must be 'fixed', 'ball', 'hinge', 'slider' or 'distance', got …`; `setJoint: a <type> joint has no <option>`; `setJoint: anchor must be 3 finite numbers, got …`; `setJoint: anchorB must be 3 finite numbers, got …`; `setJoint: axis must be 3 finite numbers, not all zero, got …`; `setJoint: length must be 0 or more, got …`; `setJoint: cone must be an angle from 0 to π, in radians, got …`; `setJoint: motorSpeed must be a finite number, got …`; `setJoint: motorForce must be 0 or more, got …`; `setJoint: frequency must be 0 or more, got …`; `setJoint: dampingRatio must be 0 or more, got …`; `setJoint: min must be from -π to π, in radians, or -Infinity, got …`; `setJoint: max must be from -π to π, in radians, or Infinity, got …`; `setJoint: min must be a number or -Infinity, got …`; `setJoint: max must be a number or Infinity, got …`; `setJoint: min must be 0 or more, got …`; `setJoint: max must be 0 or more, or Infinity, got …`; `setJoint: min must be at most max (…), got …`; `setJoint: collide must be true or false, got …`.
+
+```js
+const hinge = world.addJoint({ type: 'hinge', a: crate, anchor: [2, 1, 0], axis: [0, 0, 1] });
+world.setJoint(hinge, { motorSpeed: 2, motorForce: 500 });   // turn it at 2 rad/s, up to 500 N·m
+world.setJoint(hinge, { min: -0.5, max: 0.5 });
+world.setJoint(hinge, { min: null });                        // no lower limit again
+```
+
+Notes: everything follows at once, and the joint's bodies wake. A new `anchor` or `anchorB` is a
+world point where the bodies are now; a new `axis` also counts the joint's angle and position
+from 0 again from here. A new type starts from its own defaults, as a new shape does: the anchors,
+axis and `collide` carry over, and a new distance joint is as long as its ends are apart. A
+joint made to let its bodies collide does so from the next step.
+
+<a id="world-jointof"></a>
+### `world.jointOf(joint)` → `object`
+
+A copy of the joint's options as they are now, in the form [`addJoint`](#world-addjoint) takes,
+so `world.addJoint(world.jointOf(joint))` makes another like it. Changing the result changes
+nothing.
+
+Returns: `{ type, a, b, anchor, anchorB, axis, min, max, length, cone, motorSpeed, motorForce, frequency, dampingRatio, collide }`,
+each only for the types that have it: `anchor` where `a`'s end is now, in world space, and
+`anchorB` for a distance joint, or one given it, where `b`'s is. `min` and `max` only if they were
+given. `a` and `b` are [`Body`](#body) handles, `b` `null` for a point in the world.
+
+Throws: `jointOf: this world was destroyed`; `jointOf: joint must be a Joint, got …`; `jointOf: that joint belongs to another world`; `jointOf: this joint was removed`.
+
+```js
+const swing = world.addJoint({ type: 'hinge', a: crate, anchor: [2, 1, 0], max: 1 });
+console.log(world.jointOf(swing).max);   // 1
+```
+
+Notes: a joint's angle and position count from where it was made, so a copy made where its bodies
+are now counts from there.
 
 <a id="world-raycast"></a>
 ### `world.raycast(origin, direction, options)` → `{ body, point, normal, distance } | null`
@@ -608,7 +708,8 @@ does, at the same cost. Before moving anything, a step copies [`transforms`](#wo
 into [`previous`](#world-previous). A world with no bodies costs almost nothing to step; a step
 with no forces applied doesn't look for any, one where nothing touches runs no contact solver,
 bodies that stay within their boxes from the step before aren't looked up again (see
-[Contacts](#contacts)), and sleeping bodies cost nothing at all (see [Sleeping](#sleeping)).
+[Contacts](#contacts)), a world with no joints runs no joint solver, and sleeping bodies cost
+nothing at all (see [Sleeping](#sleeping)).
 
 A lopsided body turning freely tumbles as a real one does: a book spun about its middle axis
 flips over, and spun about its longest or shortest it doesn't. What a step carries across exactly
@@ -959,6 +1060,66 @@ Throws: `destroy: this world was destroyed`.
 crate.destroy();
 ```
 
+<a id="joint"></a>
+## Joint
+
+A Joint is a handle to one joint in a world, as a [`Body`](#body) is to a body: `joint.world` is
+its world and `joint.id` its id, and nothing else. Compare `a.id === b.id`, not `a === b`.
+[`world.addJoint`](#world-addjoint) makes one. Change it with [`world.setJoint`](#world-setjoint),
+read it with [`world.jointOf`](#world-jointof).
+
+<a id="joint-id"></a>
+### `joint.id` → `number`
+
+The joint's id: a whole number, unique to this joint for the life of its world. Joints count their
+own ids, apart from bodies'. Read only.
+
+Throws: `joint.id is read only`.
+
+```js
+const hinge = world.addJoint({ type: 'hinge', a: crate });
+const names = new Map([[hinge.id, 'lid']]);
+```
+
+<a id="joint-world"></a>
+### `joint.world` → `World`
+
+The world the joint is in. Read only.
+
+Throws: `joint.world is read only`.
+
+```js
+const tie = world.addJoint({ a: ball, b: crate });
+tie.world.remove(tie);
+```
+
+<a id="joint-alive"></a>
+### `joint.alive` → `boolean`
+
+`false` once the joint has been removed, by itself or with either of its bodies, or its world
+destroyed. Never throws. Read only.
+
+Throws: `joint.alive is read only`.
+
+```js
+const tie = world.addJoint({ a: ball, b: crate });
+world.remove(crate);
+console.log(tie.alive);   // false: a joint goes with its bodies
+```
+
+<a id="joint-destroy"></a>
+### `joint.destroy()`
+
+Removes the joint from its world, and wakes what it held. Same as
+[`world.remove(joint)`](#world-remove); does nothing if the joint is already gone.
+
+Throws: `destroy: this world was destroyed`.
+
+```js
+const tie = world.addJoint({ a: ball, b: crate });
+tie.destroy();
+```
+
 <a id="meshes"></a>
 ## Meshes and heightfields
 
@@ -1135,7 +1296,7 @@ part into the wall, landing drops the fall, and on the ground its vertical speed
 sets the speed it walks at, keeps `velocity[1]`, and sets it to jump.
 
 - **What blocks it:** everything it would collide with, by its own layers and mask, dynamic bodies
-  and other characters included. It doesn't push a crate it walks up to, and is never pushed: what
+  and other characters included, but not a body a joint holds to it (see [Joints](#joints)). It doesn't push a crate it walks up to, and is never pushed: what
   lands on it or runs into it is held, as by a wall. Pushing things is the game's to decide, with
   [`applyImpulse`](#body-applyimpulse). It carries nothing on its head as it walks. Sensors see it.
 - **How it moves:** before each step, by casting its shape through the world, as
@@ -1155,6 +1316,76 @@ only in the screen's plane. A locked axis is one nothing turns it about, as if i
 were endless: contacts, torques and impulses can't, and its spin about it stays 0. Bodies built in
 one plane, locked to turn only in it, push each other only within it, so they stay in it, to the
 bit, and there is no position lock to need.
+
+<a id="joints"></a>
+## Joints
+
+A joint holds two bodies together, or one body to a point in the world, so that they can move
+against each other only in some ways: a door turns on its hinges, a drawer slides in and out, a
+chain's links swing on each other.
+
+```js
+const post = world.addBody({ type: 'static', size: [0.2, 3, 0.2], position: [0, 1.5, 0] });
+const sign = world.addBody({ size: [1, 0.5, 0.05], position: [0.6, 2.5, 0] });
+world.addJoint({ type: 'hinge', a: sign, b: post, anchor: [0.1, 2.75, 0], axis: [1, 0, 0] });
+```
+
+A free body can move in six ways, three along and three about the axes: its degrees of freedom.
+A joint takes some away, and leaves the rest:
+
+| `type` | What it leaves free | Its free coordinate, what `min` and `max` limit |
+|---|---|---|
+| `'fixed'` | Nothing: the two are welded. | None |
+| `'ball'` | Any turn about the anchor. | Its twist about `axis`; and `cone`, how far `axis` may swing |
+| `'hinge'` | Turning about `axis`. | Its angle about `axis` |
+| `'slider'` | Moving along `axis`. | Its position along `axis` |
+| `'distance'` | Everything but the gap between its two anchors. | The gap's length |
+
+- **`a` moves against `b`.** `a` is the body, and `b` what it is held to, a point in the world if
+  left out. A joint's angle, position, limits and motor are `a`'s against `b`: a hinge's angle is
+  how far `a` has turned about the axis, positive the way your right hand's fingers curl with the
+  thumb along it, and a slider's position how far `a`'s anchor has moved along it from `b`'s. Both
+  count from 0 where the joint is made.
+- **Where, as in the scene.** `anchor` and `axis` are world space, where the bodies are when the
+  joint is made or changed; Bearing works out where that is on each body.
+- **Chains, ragdolls and bridges are held exactly.** Joints that join bodies into trees (a chain,
+  a ragdoll, a bridge of planks, fixed at one end or both) are solved all together, exactly, every
+  pass (Baraff's method), rather than one at a time, so a weight on a long chain doesn't stretch
+  it: a chain of 100 links hangs as long as it was built from its first step, at any size, and a
+  weight 100 times a link's mass on a chain of 10 stretches it by less than a hundredth of a
+  millimetre. A joint that closes a loop among moving bodies, as a ladder's second rail does, is
+  solved one at a time, as contacts are, and can give a little under load.
+- **Limits are stops.** `min` and `max` are hard stops, as a door frame is: met at speed, a joint
+  stops at its stop, rather than passing it and being pulled back. A 1 m door swung shut at 50 m/s
+  at its edge stopped within 0.002 mm of its stop. A ball joint's `cone` stops its axis swinging
+  further from `b`'s than that angle.
+- **Motors drive a speed.** A hinge's or slider's motor pushes `a` toward `motorSpeed` against `b`,
+  as hard as `motorForce` allows and no harder, so a motor too weak for its load stalls, or is
+  driven backwards, pushing as hard as it can.
+- **A distance joint is a rod, a rope or a spring.** With no limits and no spring it is a rod, its
+  `length` both ways. `min: 0` makes a rope, as long as `length` and no longer, slack shorter.
+  `frequency` makes a spring that pulls it to `length`, free to stretch either way unless limited,
+  bouncing at that frequency and settling as `dampingRatio` says.
+- **Joined bodies don't collide with each other,** unless the joint's `collide` says they do: a
+  ragdoll's limbs overlap at their joints, and would fight them. A character doesn't walk into
+  what is joined to it.
+- **A joint goes with its bodies.** Removing either body removes the joint, and its handle reads
+  `alive: false`.
+- **Joined bodies sleep and wake together.** A chain sleeps as one, and wakes as one when anything
+  touches it. A body hanging from a kinematic body or a character is woken, and carried, when that
+  moves.
+- **What can't move is held fixed.** A joint holds a static, kinematic or character body as a
+  point in the world is held: nothing it does moves them. A joint between two bodies neither of
+  which is dynamic does nothing. A body's [`lockRotation`](#world-addbody) holds in a joint too.
+- **No joints, no cost.** A world without joints runs no joint solver, and a sleeping chain's
+  joints cost nothing.
+
+Notes: a joint gives by a millionth of what it pushes, so that solving a tree leaves first never
+divides by nothing where a body can't move along some row: far too little to see. A
+joint turning very fast opens a little within a step and closes again: a chain's end whipped to
+hundreds of radians a second opened 7.5 mm for a moment. A body hanging from a dangling joint with
+nothing to rub on swings for as long as a pendulum would: to settle, give it some
+[`angularDamping`](#world-addbody).
 
 <a id="events"></a>
 ## Contact events and sensors
@@ -1247,7 +1478,7 @@ disturbs it. A pile at rest then costs nothing, which is most of what makes a la
 in a game, most things are at rest most of the time. There is nothing to call, and nothing to
 tune; [`world.sleeping`](#world-sleeping) switches it off.
 
-- **Islands sleep together.** Bodies touching each other form an island, and an island sleeps
+- **Islands sleep together.** Bodies touching each other, or joined, form an island, and an island sleeps
   only when every body in it has stopped, and wakes all at once. If the bottom box of a stack
   slept while the top one still moved, the top one would push on a body that couldn't answer.
   Static, kinematic and character bodies join no island, or everything on one floor would be
@@ -1309,8 +1540,9 @@ lockstep multiplayer need.
 It holds because JavaScript defines `+`, `-`, `*`, `/` and `Math.sqrt` exactly: it forbids fused
 multiply-add and extended precision, so every engine rounds them the same way. The functions the
 language leaves to each engine, such as `Math.sin`, `Math.cos` and `Math.atan2`, are never used
-inside Bearing; where it needs an angle, as in [`setAxisAngle`](#body-setaxisangle), it uses its own
-sine and cosine, built from the exact operations. A test fails if any of the others appears.
+inside Bearing; where it needs an angle, as in [`setAxisAngle`](#body-setaxisangle) or a hinge's
+angle, it uses its own sine, cosine and arctangent, built from the exact operations. A test fails
+if any of the others appears.
 
 What it does not cover:
 
@@ -1328,7 +1560,9 @@ One limit is hard, and it is derived rather than chosen:
 - **16,777,216 bodies in one world (2^24).** A body's id is its slot plus 2^24 times its
   generation, and the whole id has to stay below 2^53 to be an exact JavaScript number. Of those
   53 bits, 24 hold the slot and 29 hold the generation. Adding a body past the limit throws
-  `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
+  `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`. Joints
+  have ids made the same way, so as many joints, apart from the bodies:
+  `addJoint: a world holds at most 16777216 joints (the slot field of an id is 24 bits)`.
 
 A slot can be reused 536,870,911 times (2^29 − 1) before it is retired and never handed out
 again, so no old id can ever match a new body. Reused once a step at 60 Hz, that is 280 years, so

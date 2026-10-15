@@ -437,17 +437,23 @@ function basis(c, m) {
 // ---- prepare ----
 
 /**
- * What the solver needs that holds for the whole step. Each body's world
- * inverse inertia, R diag(1/I) Rᵀ, goes into world._invI as its six distinct
- * entries; then per point the anchors (from each body's centre, in world
- * space and in the body's own frame), the effective masses along the normal
- * and both tangents, and the speed the bodies were closing at.
+ * Each awake body's world inverse inertia, R diag(1/I) Rᵀ, into world._invI
+ * as its six distinct entries, for the step's contacts and joints. Every body
+ * in either is awake by now, or static, whose stays zero.
+ */
+export function inertias(world) {
+  const list = world._awakeList, n = world._awakeCount;
+  for (let i = 0; i < n; i++) inverseInertia(world, list[i]);
+}
+
+/**
+ * What the solver needs that holds for the whole step, per point: the anchors
+ * (from each body's centre, in world space and in the body's own frame), the
+ * effective masses along the normal and both tangents, and the speed the
+ * bodies were closing at. Reads the inverse inertias inertias() worked out.
  */
 export function prepare(world, c) {
   const invI = world._invI, invMass = world._invMass;
-  // Every body in a contact is awake by now, or static, whose stays zero.
-  const list = world._awakeList, n = world._awakeCount;
-  for (let i = 0; i < n; i++) inverseInertia(world, list[i]);
   const p = world._position, q = world._rotation, v = world._velocity, w = world._angular;
   for (let m = 0; m < c.count; m++) {
     const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3;
@@ -577,12 +583,12 @@ function quadratic(m, o, x, y, z) {
  * target, massScale and impulseScale blend the spring into the impulse.
  */
 export const soft = { biasRate: 0, massScale: 1, impulseScale: 0 };
-export function makeSoft(hertz, zeta, h) {
+export function makeSoft(hertz, zeta, h, out = soft) {
   const omega = 2 * Math.PI * hertz;
   const a1 = 2 * zeta + h * omega, a2 = h * omega * a1, a3 = 1 / (1 + a2);
-  soft.biasRate = omega / a1;
-  soft.massScale = a2 * a3;
-  soft.impulseScale = a3;
+  out.biasRate = omega / a1;
+  out.massScale = a2 * a3;
+  out.impulseScale = a3;
 }
 
 /**

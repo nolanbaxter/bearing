@@ -8,7 +8,7 @@
 // collected rather than held by something inside.
 
 import assert from 'node:assert/strict';
-import { World } from '../src/bearing.js';
+import { World, Joint } from '../src/bearing.js';
 import { suite, testAsync as test } from './test.js';
 
 if (typeof globalThis.gc !== 'function') {
@@ -243,6 +243,58 @@ await test('a pile landing past sensors and cleared 30 times: event storage, sen
     assert.equal(world._sensorCount, 0);
   }
   await collect();
+  const grown = heap() - before;
+  assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
+});
+
+await test('chains and ragdoll-like trees made, swung and removed 30 times: joint storage, trees and memory come back', async () => {
+  const world = new World();
+  world.addBody({ type: 'static', size: [40, 1, 40], position: [0, -0.5, 0] });
+  world.step(1 / 60);
+  const start = world.bodyCount;
+  let before = 0, joint = null;
+  for (let round = 0; round < 30; round++) {
+    if (round === WARM) {
+      await collect();
+      before = heap();
+    }
+    // 20 chains of 10 links, hung from points and swung, half with limits
+    // and motors, and a loop in each, so every part of the solver runs.
+    const bodies = [];
+    for (let c = 0; c < 20; c++) {
+      const x = (c % 5) * 2 - 4, z = Math.floor(c / 5) * 2 - 3;
+      let last = null;
+      for (let i = 0; i < 10; i++) {
+        const link = world.addBody({ size: [0.04, 0.2, 0.04], position: [x, 5 - 0.2 * (i + 0.5), z], velocity: [i * 0.1, 0, 0] });
+        const type = c % 2 ? 'hinge' : 'ball';
+        const j = world.addJoint(last
+          ? { type, a: link, b: last, anchor: [x, 5 - 0.2 * i, z], ...(c % 2 ? { min: -1, max: 1, motorForce: 1 } : { cone: 1 }) }
+          : { type, a: link, anchor: [x, 5, z] });
+        if (round === WARM && !joint) joint = new WeakRef(j);
+        bodies.push(link);
+        last = link;
+      }
+      world.addJoint({ type: 'distance', a: bodies[bodies.length - 1], b: bodies[bodies.length - 4], min: 0 });
+    }
+    for (let s = 0; s < 30; s++) world.step(1 / 60);
+    assert.equal(world.jointCount, 220, `round ${round}: joints`);
+    assert.ok(world._joints.forest.count > 0, `round ${round}: no trees solved`);
+    // Every other round the joints go first, by hand; else with their bodies.
+    if (round % 2) {
+      for (let j = world._joints.slots.top - 1; j >= 0; j--) {
+        if (world._joints.slots.state[j] === 1) world.remove(new Joint(world, world._joints.slots.id(j)));
+      }
+    }
+    for (const b of bodies) world.remove(b);
+    world.step(1 / 60);
+    assert.equal(world.jointCount, 0, `round ${round}: joints left`);
+    assert.equal(world.bodyCount, start, `round ${round}: bodies left`);
+    assert.equal(world._joints.slots.capacity, 0, `round ${round}: joint storage kept`);
+    assert.equal(world._joints.forest.capacity, 0, `round ${round}: tree storage kept`);
+    assert.ok(world._jointHead.every((x) => x === 0) && world._jointTally.every((x) => x === 0), `round ${round}: a body's list of joints kept`);
+  }
+  await collect();
+  assert.equal(joint.deref(), undefined, "a removed joint's handle is still held");
   const grown = heap() - before;
   assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
 });

@@ -17,7 +17,8 @@
 // |x| < 2^19 * pi/2 (823,550 radians), where the multiple times the first part
 // is still exact. Past that they lose accuracy, but never determinism.
 //
-// The polynomial coefficients and the split of pi/2 are fdlibm's:
+// The polynomial coefficients and the split of pi/2 are fdlibm's, as are
+// atan and atan2 below:
 //   Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
 //   Developed at SunSoft, a Sun Microsystems, Inc. business.
 //   Permission to use, copy, modify, and distribute this software is freely
@@ -115,6 +116,86 @@ export function cos(x) {
     case 1: return -kernelSin(head, tail);
     case 2: return -kernelCos(head, tail);
     default: return kernelSin(head, tail);
+  }
+}
+
+// Arctangent, fdlibm's s_atan.c and e_atan2.c, for a joint's angles. The
+// argument is brought to |t| < 7/16 about one of 0, 0.5, 1, 1.5 and infinity,
+// whose arctangents are kept in two parts, then an odd minimax polynomial.
+// fdlibm picks the interval by the high word of x; these thresholds' low
+// words are zero, so comparing the values themselves picks the same one.
+const ATAN_HI = [4.63647609000806093515e-01, 7.85398163397448278999e-01, 9.82793723247329054082e-01, 1.57079632679489655800e+00];
+const ATAN_LO = [2.26987774529616870924e-17, 3.06161699786838301793e-17, 1.39033110312309984516e-17, 6.12323399573676603587e-17];
+const AT0 = 3.33333333333329318027e-01, AT1 = -1.99999999998764832476e-01, AT2 = 1.42857142725034663711e-01;
+const AT3 = -1.11111104054623557880e-01, AT4 = 9.09088713343650656196e-02, AT5 = -7.69187620504482999495e-02;
+const AT6 = 6.66107313738753120669e-02, AT7 = -5.83357013379057348645e-02, AT8 = 4.97687799461593236017e-02;
+const AT9 = -3.65315727442169155270e-02, AT10 = 1.62858201153657823623e-02;
+const PI = 3.1415926535897931160e+00, PI_LO = 1.2246467991473531772e-16;
+const PI_O_2 = 1.5707963267948965580e+00, PI_O_4 = 7.8539816339744827900e-01;
+const TWO_66 = 7.378697629483821e+19, TWO_M27 = 7.450580596923828e-09;
+const TWO_60 = 1.152921504606847e+18, TWO_M60 = 8.673617379884035e-19;
+
+export function atan(x) {
+  if (x !== x) return x;
+  const ax = Math.abs(x);
+  if (ax >= TWO_66) return x > 0 ? ATAN_HI[3] + ATAN_LO[3] : -ATAN_HI[3] - ATAN_LO[3];
+  let id, t;
+  if (ax < 0.4375) {
+    if (ax < TWO_M27) return x;
+    id = -1; t = x;
+  } else if (ax < 0.6875) {
+    id = 0; t = (2 * ax - 1) / (2 + ax);
+  } else if (ax < 1.1875) {
+    id = 1; t = (ax - 1) / (ax + 1);
+  } else if (ax < 2.4375) {
+    id = 2; t = (ax - 1.5) / (1 + 1.5 * ax);
+  } else {
+    id = 3; t = -1 / ax;
+  }
+  const z = t * t, w = z * z;
+  const s1 = z * (AT0 + w * (AT2 + w * (AT4 + w * (AT6 + w * (AT8 + w * AT10)))));
+  const s2 = w * (AT1 + w * (AT3 + w * (AT5 + w * (AT7 + w * AT9))));
+  if (id < 0) return t - t * (s1 + s2);
+  const r = ATAN_HI[id] - ((t * (s1 + s2) - ATAN_LO[id]) - t);
+  return x < 0 ? -r : r;
+}
+
+/** Whether v's sign bit is set, -0 included. */
+const negative = (v) => v < 0 || (v === 0 && 1 / v < 0);
+
+/**
+ * The angle of (x, y) from the x axis, from -π to π. fdlibm reads the
+ * exponents' difference to see |y/x| past 2^60 or under 2^-60; comparing
+ * the magnitudes, scaled by those powers of two exactly, is the same test
+ * to within a factor of 2 in where it cuts over, and the answer either way
+ * is right to the last bit there.
+ */
+export function atan2(y, x) {
+  if (x !== x || y !== y) return x + y;
+  if (x === 1) return atan(y);
+  let m = (negative(y) ? 1 : 0) | (negative(x) ? 2 : 0);
+  if (y === 0) return m < 2 ? y : m === 2 ? PI : -PI;
+  if (x === 0) return y < 0 ? -PI_O_2 : PI_O_2;
+  const ax = Math.abs(x), ay = Math.abs(y);
+  if (ax === Infinity) {
+    if (ay === Infinity) return [PI_O_4, -PI_O_4, 3 * PI_O_4, -3 * PI_O_4][m];
+    return [0, -0, PI, -PI][m];
+  }
+  if (ay === Infinity) return y < 0 ? -PI_O_2 : PI_O_2;
+  let z;
+  if (ay > ax * TWO_60) {
+    z = PI_O_2 + 0.5 * PI_LO;
+    m &= 1;
+  } else if (x < 0 && ay < ax * TWO_M60) {
+    z = 0;
+  } else {
+    z = atan(ay / ax);
+  }
+  switch (m) {
+    case 0: return z;
+    case 1: return -z;
+    case 2: return PI - (z - PI_LO);
+    default: return (z - PI_LO) - PI;
   }
 }
 

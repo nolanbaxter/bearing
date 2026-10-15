@@ -108,3 +108,18 @@ All notable changes to Bearing are recorded here. The format follows
 - `lockRotation: [x, y, z]` on any body: the world axes it never turns about. `[true, false, true]`
   keeps a dynamic capsule upright; `[true, true, false]` keeps a 2.5D game's bodies turning only in
   their plane, where they also stay, to the bit.
+- Joints: `world.addJoint`, `world.setJoint`, `world.jointOf`, `world.jointCount`, and `Joint`
+  handles (`id`, `world`, `alive`, `destroy()`), removed by `world.remove(joint)` or with either of
+  their bodies. Fixed, ball, hinge, slider and distance joints, between two bodies or a body and a
+  point in the world, placed in world space. Hinges and sliders have limits and motors, ball joints
+  a twist limit and a cone, and a distance joint is a rod, a rope or a spring. A joint's angle,
+  position and motor are its `a`'s against its `b`. Joined bodies don't collide unless `collide`
+  says they do, sleep and wake together, and a character doesn't walk into what is joined to it.
+- Chains, ragdolls and bridges are solved exactly: joints that join bodies into trees are solved
+  all together every pass (Baraff's linear-time method), so a 100-link chain hangs at its built
+  length from the first step and a weight 100 times a link's mass doesn't stretch it. Limits are
+  solved against their own joint's pin, so a slammed door stops on its stop.
+- `world.remove(handle)` takes a body or a joint; its error is now `remove: handle must be a Body or
+  a Joint, got …`.
+- Bearing's own `atan` and `atan2` in `core/math.js`, exact operations only, within 1 ulp of
+  `Math.atan2`, for joint angles that are the same on every machine.

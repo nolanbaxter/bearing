@@ -4,7 +4,7 @@ A physics engine in plain JavaScript, for any renderer. No dependencies, no buil
 used as they are.
 
 **In development, and not released.** Nothing is on npm yet. Bodies fall, tumble, collide, rest,
-stack, slide and bounce; see the [roadmap](ROADMAP.md) for what comes next.
+stack, slide, bounce and hang from joints; see the [roadmap](ROADMAP.md) for what comes next.
 
 ```js
 import { World } from 'bearing-physics';
@@ -38,6 +38,9 @@ density unless you give one), no tolerances to tune, and nothing to size in adva
   along walls, walks up slopes and steps up stairs to a limit, stays on the ground going down them,
   falls and lands, and rides moving platforms. Rotation locks keep a body upright, or a 2.5D game in
   its plane. See [Character bodies](docs/API.md#characters).
+- **Joints**: fixed, ball, hinge, slider and distance joints, with limits, motors and springs. Chains,
+  ragdolls and bridges are solved exactly, all at once, so a 100-link chain hangs at its built
+  length and a slammed door stops on its stop. See [Joints](docs/API.md#joints).
 - **Contact events and sensors**: which bodies began and stopped touching in each step, with where
   and how hard they met, read after the step; what touches a body now; and sensors, zones that
   report what enters them and push nothing. See [Contact events and sensors](docs/API.md#events).
