@@ -344,7 +344,11 @@ await test('chains and ragdoll-like trees made, swung and removed 30 times: join
   await collect();
   assert.equal(joint.deref(), undefined, "a removed joint's handle is still held");
   const grown = heap() - before;
-  assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
+  // V8's compiling, not a leak: measured with --jitless it held at 326 KB
+  // from round 30 to round 50, and Node 20 in CI reached 265 KB here. One
+  // round's chains hold 889 KB, so even a quarter of one kept each round
+  // would show as 4.4 MB over the 20 measured rounds: 1 MB tells them apart.
+  assert.ok(grown < 1024 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
 });
 
 await test('characters made, walked about a level and removed 30 times: nothing of them stays', async () => {
