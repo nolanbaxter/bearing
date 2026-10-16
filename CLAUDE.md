@@ -51,7 +51,11 @@ These were made with Nolan and override the rules below where they differ.
   energy after 20 s; an implicit-midpoint version kept energy but let momentum wander 8% at
   20 rad/s and blew up at 50. `tumble()` in `src/world.js` works out L, turns the body by the ω L
   gives at the half step, and reads ω back from L: momentum exact to rounding, energy only ever
-  falls (bounded by |L|²/2I_min). `test/motion.test.js` holds the measured energy figures.
+  falls (bounded by |L|²/2I_min). `test/motion.test.js` holds the measured energy figures. Spun
+  mostly about the longest or shortest axis, the half-step turn let energy drift up (2e-4 to 4e-4
+  in 120 s), so (2026-10-16, Nolan: "just fix that") a body tumbling freely that would exceed
+  the energy it had when last spun by anything else (`_tumbled` holds ω as tumble left it,
+  `_ceiling` that energy) is turned back onto it by `untwist()`, keeping L exact.
 - **The solver is the soft step, 8 substeps** (2026-10-13, milestone 4, measured in
   `bench/solver.js`). Sequential impulses (one substep, many passes) couldn't hold a 10-box stack.
   Each substep: one solving pass, one relaxing pass; contact stiffness 1/8 of the substep rate,

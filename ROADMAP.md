@@ -696,3 +696,8 @@ Winding's way, copied before the first one:
   - Tumbling's energy can rise: a body spun mostly about its longest or shortest axis gains 2e-4
     to 4e-4 of its energy in 120 s. Momentum stays exact, which bounds it; "energy only falls" is
     true only near the middle axis, where `test/motion.test.js` spins its bodies.
+- **2026-10-16.** Tumbling's energy rise fixed, at Nolan's word ("just fix that"): a body tumbling
+  freely that would end a substep with more energy than it had when last spun by anything else is
+  turned back onto it, keeping its momentum exact. The off-axis cases now hold their energy to
+  1e-15 over 120 s; the middle-axis cases come out exactly as before. Checked against each
+  substep's own start instead, it ratcheted energy away (14% in 120 s at 50 rad/s).

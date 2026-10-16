@@ -197,6 +197,23 @@ test('a lopsided body tumbling freely keeps its angular momentum, and never gain
   }
 });
 
+test('spun mostly about its longest or shortest axis, a lopsided body keeps its momentum and never gains energy either', () => {
+  // Away from the middle axis the turn's error doesn't flip from step to step
+  // but drifts: before it was checked, these gained 2e-4 to 4e-4 in 120 s.
+  for (const [inertia, w] of [[[0.00768, 0.00205, 0.00928], [3, 1, 20]], [[5, 8.33, 13.33], [3, 1, 20]], [[5, 8.33, 13.33], [20, 1, 3]]]) {
+    const world = new World({ gravity: [0, 0, 0] });
+    const body = world.addBody({ mass: 1, inertia, angularVelocity: w });
+    const start = momentum(body);
+    for (let i = 0; i < 60 * 120; i++) {
+      world.step(1 / 60);
+      const now = momentum(body);
+      const drift = Math.hypot(now.L[0] - start.L[0], now.L[1] - start.L[1], now.L[2] - start.L[2]);
+      assert.ok(drift <= 1e-11 * Math.hypot(...start.L), `${inertia}, step ${i}: momentum drifted ${drift}`);
+      assert.ok(now.E <= start.E * (1 + 1e-12), `${inertia}, step ${i}: energy grew ${now.E / start.E - 1}`);
+    }
+  }
+});
+
 test('spun about its middle axis a box flips; about its longest or shortest it stays', () => {
   // The intermediate axis theorem. Moments of a 1 x 2 x 3 box: largest about
   // x, middle about y, smallest about z.

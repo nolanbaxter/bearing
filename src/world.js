@@ -194,6 +194,8 @@ const COLUMNS = [
   ['_com', Float64Array, 3],         // the centre of mass in the body's own frame, as given or worked out
   ['_comGiven', Uint8Array, 1],
   ['_invInertia', Float64Array, 3],
+  ['_tumbled', Float64Array, 3],     // ω as tumble() left it: unchanged since, it is still tumbling freely
+  ['_ceiling', Float64Array, 1],     // twice the most energy it may tumble with, since it was last spun
   ['_force', Float64Array, 3],       // applied since the last step, cleared by it
   ['_torque', Float64Array, 3],
   ['_friction', Float64Array, 1],
@@ -1210,7 +1212,7 @@ export class World {
       // 50 s; turned plainly, it only ever lost energy, 6.6% in 60 s.
       if (turning && type[s] === DYNAMIC && this._lock[s] === 0 && this._jointHead[s] === 0
         && (I[s3] !== I[s3 + 1] || I[s3 + 1] !== I[s3 + 2])) {
-        tumble(q, s4, I, this._invInertia, s3, w, h);
+        tumble(q, s4, I, this._invInertia, s3, w, h, this._tumbled, this._ceiling, s);
       } else if (turning) {
         // q += h/2 (ω, 0) q, with ω in world space, then back to unit length.
         // Not turning skips this and leaves the rotation exactly as it was,
@@ -1797,6 +1799,8 @@ export class World {
     this._place7(s, spec.position, spec.rotation);
     this._velocity.set(spec.velocity, s3);
     this._angular.set(spec.angularVelocity, s3);
+    // Never equal to any spin, so its first tumble takes its energy as it is.
+    this._tumbled.fill(NaN, s3, s3 + 3);
     this._lock[s] = (spec.lockRotation[0] ? 1 : 0) | (spec.lockRotation[1] ? 2 : 0) | (spec.lockRotation[2] ? 4 : 0);
     this._unlocked(s);
     this._maxSlope[s] = spec.maxSlope;
@@ -2232,8 +2236,16 @@ function atLeastZero(caller, name, value) {
  * So instead L is the thing carried across the step, exactly: work out L from
  * ω, turn the body by the angular velocity L gives at the half step, and
  * read the new ω back from L at the end. Angular momentum is then conserved
- * to rounding by construction. Energy can only drift down, and can never run
- * away, since with |L| fixed it is at most |L|² / 2 I_min. Measured over
+ * to rounding by construction, and the energy can never run away, since
+ * with |L| fixed it is at most |L|² / 2 I_min. With L fixed the energy
+ * depends only on how the body is turned, and the half-step turn is a hair
+ * off: near the middle axis that only ever loses energy, but spun mostly
+ * about the longest or shortest axis it drifted up, 2e-4 to 4e-4 in 120 s.
+ * So a body tumbling freely that ends a substep with more energy than it had
+ * when it was last spun (by anything but tumbling) is turned back onto that
+ * energy (untwist()), and energy can only fall. Against each substep's own
+ * start instead, it caught every rise of the turn's error that a fall had
+ * just made room for, and ratcheted down: 14% lost in 120 s at 50 rad/s. Measured over
  * 120 s of 60 Hz steps, each of the 8 substeps: under 0.001% lost flipping at
  * 5 rad/s, 0.02% at 20 rad/s, 0.6% at 50 rad/s. (Taken whole, with no
  * substeps, the same cost 0.04%, 6% and 11%: what a step's size costs.) It is
@@ -2242,11 +2254,17 @@ function atLeastZero(caller, name, value) {
  *
  * Reads the rotation at q[s4..] and ω at w[s3..]; writes both.
  */
-function tumble(q, s4, I, inv, s3, w, dt) {
+function tumble(q, s4, I, inv, s3, w, dt, left, ceiling, s) {
   // L = R I Rᵀ ω.
   rotate(q, s4, w[s3], w[s3 + 1], w[s3 + 2], true, v3);
   rotate(q, s4, v3[0] * I[s3], v3[1] * I[s3 + 1], v3[2] * I[s3 + 2], false, v3);
   const lx = v3[0], ly = v3[1], lz = v3[2];
+  // Spun since its last tumble, by a contact, a force, damping or a setter:
+  // twice the energy it has now, ω·L, is the most it may have from here.
+  if (w[s3] !== left[s3] || w[s3 + 1] !== left[s3 + 1] || w[s3 + 2] !== left[s3 + 2]) {
+    ceiling[s] = w[s3] * lx + w[s3 + 1] * ly + w[s3 + 2] * lz;
+  }
+  const most = ceiling[s];
   // Half a step on with the starting ω: q + dt/4 (ω, 0) q.
   advance(q, s4, w[s3], w[s3 + 1], w[s3 + 2], dt * 0.25, q4, 0);
   // The angular velocity L gives there, R I⁻¹ Rᵀ L, turns the whole step.
@@ -2254,10 +2272,64 @@ function tumble(q, s4, I, inv, s3, w, dt) {
   advance(q, s4, v3[0], v3[1], v3[2], dt * 0.5, q, s4);
   // And the angular velocity L gives at the end is the body's new ω.
   angular(q, s4, inv, s3, lx, ly, lz);
+  if (v3[0] * lx + v3[1] * ly + v3[2] * lz > most * (1 + ROUNDED)) {
+    untwist(q, s4, inv, s3, lx, ly, lz, most);
+    angular(q, s4, inv, s3, lx, ly, lz);
+  }
   w[s3] = v3[0]; w[s3 + 1] = v3[1]; w[s3 + 2] = v3[2];
+  left[s3] = v3[0]; left[s3 + 1] = v3[1]; left[s3 + 2] = v3[2];
 }
 
-const q4 = new Float64Array(4);
+/**
+ * Turns the body at q[s4..] a little, so that L, unchanged, gives it twice
+ * the energy `most` again: tumble()'s turn left it slightly off the curve
+ * its momentum traces in the body (on the sphere of L's length, where the
+ * energy is constant), and on the side where the energy is higher. In the
+ * body's frame, L is moved along that sphere against the energy's gradient
+ * (Newton's method, to where the energy is `most`), and the body is turned
+ * by the small rotation that carries L's old place in it to the new one, so
+ * L in the world is exactly what it was. The turn's error is about a part in
+ * a million of the energy a substep, so one Newton step leaves it to about a
+ * part in 10^12 and a second to rounding: two, always.
+ */
+function untwist(q, s4, inv, s3, lx, ly, lz, most) {
+  rotate(q, s4, lx, ly, lz, true, B);
+  const bx = B[0], by = B[1], bz = B[2], ll = bx * bx + by * by + bz * bz;
+  let x = bx, y = by, z = bz;
+  for (let round = 0; round < 2; round++) {
+    // The energy's gradient, I⁻¹ b, less its part along b: the way along the sphere.
+    const gx = x * inv[s3], gy = y * inv[s3 + 1], gz = z * inv[s3 + 2];
+    const over = x * gx + y * gy + z * gz - most;
+    if (!(over > 0)) break;
+    const k = (gx * x + gy * y + gz * z) / ll, tx = gx - k * x, ty = gy - k * y, tz = gz - k * z;
+    const tt = tx * tx + ty * ty + tz * tz;
+    // Along a principal axis the energy doesn't change to first order: nothing to move.
+    if (!(tt > 0)) break;
+    // Twice the energy falls by 2 g_t·d per d moved: half `over` along t, over |t|².
+    const a = 0.5 * over / tt;
+    x -= a * tx; y -= a * ty; z -= a * tz;
+    const back = Math.sqrt(ll / (x * x + y * y + z * z));
+    x *= back; y *= back; z *= back;
+  }
+  // The rotation carrying the new place to the old, (n × o, |n||o| + n·o), on the body's side of q.
+  const cx = y * bz - z * by, cy = z * bx - x * bz, cz = x * by - y * bx;
+  const cw = ll + x * bx + y * by + z * bz;
+  const l = Math.sqrt(cx * cx + cy * cy + cz * cz + cw * cw);
+  if (!(l > 0)) return;
+  T4[0] = cx / l; T4[1] = cy / l; T4[2] = cz / l; T4[3] = cw / l;
+  quatMultiply(q, s4, T4, 0, Q4, 0);
+  const n = 1 / Math.sqrt(Q4[0] * Q4[0] + Q4[1] * Q4[1] + Q4[2] * Q4[2] + Q4[3] * Q4[3]);
+  q[s4] = Q4[0] * n; q[s4 + 1] = Q4[1] * n; q[s4 + 2] = Q4[2] * n; q[s4 + 3] = Q4[3] * n;
+}
+
+/**
+ * A rise in energy smaller than this part of it is rounding, not the turn:
+ * 2^-44, 256 times a double's rounding (2^-52), where ω·L's own is a few.
+ * The turn's real drift is about 1e-9 of the energy a substep.
+ */
+const ROUNDED = 1 / 17592186044416;   // 2^-44
+
+const q4 = new Float64Array(4), B = new Float64Array(3), T4 = new Float64Array(4), Q4 = new Float64Array(4);
 
 /** The shape a query is asked about, filled by _queryShape; queries aren't re-entered. */
 const QUERY = new Shape();
