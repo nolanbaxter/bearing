@@ -50,12 +50,21 @@ pre { white-space: pre-wrap; font: 13px/1.5 ui-monospace, monospace; background:
 // default: Rapier per joint, Jolt by a group filter, cannon-es per constraint.
 // Their quality is the widest any joint has opened at the end.
 //
-//   ?scene=pyramid   only these scenes, comma-separated (stack, pyramid, pile, rays, bigpile, ragdolls)
+// HULLS are one rock, a convex hull of 12 fixed points about 1 m across,
+// 1,000 of it in the pile's places: each engine's own hull from the same
+// points (Rapier's convexHull, Jolt's ConvexHullShape with no rounding,
+// cannon-es's ConvexPolyhedron given Bearing's faces, as it can't find its
+// own), water's density, so each works out the same mass to its float's
+// rounding.
+//
+//   ?scene=pyramid   only these scenes, comma-separated (stack, pyramid, pile, rays, bigpile, ragdolls, hulls)
 //   &runs=1          runs per scene
 //   &only=Bearing,Rapier
 //   &auto=1          start at once (for a headless run; results also on window.bench)
 
 const DT = 1 / 60, G = 9.81, BLOCK = 10;
+import { build } from '../src/hull.js';
+import { hullMass } from '../src/shapes.js';
 const q = new URLSearchParams(location.search);
 const RUNS = Number(q.get('runs') ?? 3);
 
@@ -71,7 +80,8 @@ const ENGINES = {
       const world = new B.World();
       world.addBody({ type: 'static', size: [200, 1, 200], position: [0, -0.5, 0] });
       // The defaults are the scene: a 1 m box, water's density (1,000 kg), friction 0.5.
-      const bodies = scene.ragdolls ? [] : scene.boxes.map((b) => world.addBody({ position: b.p, rotation: b.q }));
+      const shape = scene.hull ? { shape: 'hull', vertices: scene.hull } : {};
+      const bodies = scene.ragdolls ? [] : scene.boxes.map((b) => world.addBody({ ...shape, position: b.p, rotation: b.q }));
       for (const o of scene.ragdolls ?? []) {
         const first = bodies.length;
         for (const part of PARTS) bodies.push(world.addBody({ size: part.size, position: plus(o, part.at) }));
@@ -81,7 +91,7 @@ const ENGINES = {
       }
       return {
         step: () => world.step(DT),
-        position: (i) => bodies[i].position,
+        position: (i) => bodies[i].centerOfMass,
         rotation: (i) => bodies[i].rotation,
         asleep: () => bodies.reduce((n, b) => n + (b.asleep ? 1 : 0), 0),
         mass: () => bodies[0].mass,
@@ -105,7 +115,8 @@ const ENGINES = {
       const bodies = scene.ragdolls ? [] : scene.boxes.map((b) => {
         const body = world.createRigidBody(R.RigidBodyDesc.dynamic()
           .setTranslation(b.p[0], b.p[1], b.p[2]).setRotation({ x: b.q[0], y: b.q[1], z: b.q[2], w: b.q[3] }));
-        world.createCollider(R.ColliderDesc.cuboid(0.5, 0.5, 0.5).setDensity(1000).setFriction(0.5).setRestitution(0), body);
+        const collider = scene.hull ? R.ColliderDesc.convexHull(new Float32Array(scene.hull)) : R.ColliderDesc.cuboid(0.5, 0.5, 0.5);
+        world.createCollider(collider.setDensity(1000).setFriction(0.5).setRestitution(0), body);
         return body;
       });
       const v = (a) => ({ x: a[0], y: a[1], z: a[2] });
@@ -132,7 +143,7 @@ const ENGINES = {
           const hit = world.castRay(ray, max, true);
           return hit ? hit.timeOfImpact ?? hit.toi : -1;
         },
-        position: (i) => { const t = bodies[i].translation(); return [t.x, t.y, t.z]; },
+        position: (i) => { const t = bodies[i].worldCom(); return [t.x, t.y, t.z]; },
         rotation: (i) => { const r = bodies[i].rotation(); return [r.x, r.y, r.z, r.w]; },
         asleep: () => bodies.reduce((n, b) => n + (b.isSleeping() ? 1 : 0), 0),
         mass: () => bodies[0].mass(),
@@ -187,7 +198,13 @@ const ENGINES = {
       };
       add(new J.BoxShape(new J.Vec3(100, 0.5, 100), 0.05, null), [0, -0.5, 0], [0, 0, 0, 1], J.EMotionType_Static, STILL);
       // Jolt's shapes are water's density by default too: 1,000 kg for a 1 m box.
-      const box = new J.BoxShape(new J.Vec3(0.5, 0.5, 0.5), 0.05, null);
+      let box = new J.BoxShape(new J.Vec3(0.5, 0.5, 0.5), 0.05, null);
+      if (scene.hull) {
+        const make = new J.ConvexHullShapeSettings();
+        for (let i = 0; i < scene.hull.length; i += 3) make.mPoints.push_back(new J.Vec3(scene.hull[i], scene.hull[i + 1], scene.hull[i + 2]));
+        make.mMaxConvexRadius = 0;
+        box = make.Create().Get();
+      }
       const list = scene.ragdolls ? [] : scene.boxes.map((b) => add(box, b.p, b.q, J.EMotionType_Dynamic, MOVING));
       // A ragdoll's parts that a joint joins don't collide: Jolt's group filter.
       const joined = new J.GroupFilterTable(PARTS.length);
@@ -237,7 +254,7 @@ const ENGINES = {
           query.CastRay(cast, castSettings, nearest, ...filters);
           return nearest.HadHit() ? nearest.mHit.mFraction * max : -1;
         },
-        position: (i) => { const p = list[i].GetPosition(); return [p.GetX(), p.GetY(), p.GetZ()]; },
+        position: (i) => { const p = list[i].GetCenterOfMassPosition(); return [p.GetX(), p.GetY(), p.GetZ()]; },
         rotation: (i) => { const r = list[i].GetRotation(); return [r.GetX(), r.GetY(), r.GetZ(), r.GetW()]; },
         asleep: () => list.reduce((n, b) => n + (b.IsActive() ? 0 : 1), 0),
         mass: () => 1 / list[0].GetMotionProperties().GetInverseMass(),
@@ -254,9 +271,20 @@ const ENGINES = {
       world.defaultContactMaterial.friction = 0.5;
       world.defaultContactMaterial.restitution = 0;
       world.addBody(new C.Body({ mass: 0, shape: new C.Box(new C.Vec3(100, 0.5, 100)), position: new C.Vec3(0, -0.5, 0) }));
-      const box = new C.Box(new C.Vec3(0.5, 0.5, 0.5));
+      let box = new C.Box(new C.Vec3(0.5, 0.5, 0.5));
+      if (scene.hull) {
+        // cannon-es's body origin is its shape's: the points are moved to put it at the centre of mass.
+        const h = ROCK.hull, c = ROCK.center, v = h.vertices, faces = [];
+        for (let f = 0; f + 1 < h.start.length; f++) faces.push(Array.from(h.loops.subarray(h.start[f], h.start[f + 1])));
+        const vertices = [];
+        for (let i = 0; i < v.length; i += 3) vertices.push(new C.Vec3(v[i] - c[0], v[i + 1] - c[1], v[i + 2] - c[2]));
+        box = new C.ConvexPolyhedron({ vertices, faces });
+      }
+      const mass = scene.mass ?? 1000;
       const bodies = scene.ragdolls ? [] : scene.boxes.map((b) => {
-        const body = new C.Body({ mass: 1000, shape: box, position: new C.Vec3(...b.p), quaternion: new C.Quaternion(...b.q) });
+        // A rock's origin is where the others put it; cannon-es's body sits at its centre of mass, turned out from there.
+        const at = scene.hull ? plus(b.p, turned(b.q, ROCK.center)) : b.p;
+        const body = new C.Body({ mass, shape: box, position: new C.Vec3(...at), quaternion: new C.Quaternion(...b.q) });
         world.addBody(body);
         return body;
       });
@@ -352,7 +380,26 @@ const JOINTS = [
   { type: 'ball', a: 9, b: 0, at: [0.09, 0.9, 0] },
   { type: 'hinge', a: 10, b: 9, at: [0.09, 0.46, 0], axis: [1, 0, 0] },
 ];
+/**
+ * The rock: 12 points, the same every run (a fixed sequence), about 1 m
+ * across, so it fits the pile's 1.8 m spacing as a box does. Its hull and
+ * mass, worked out once, are what cannon-es is given.
+ */
+const ROCK = (() => {
+  let seed = 3;
+  const next = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const points = [];
+  for (let k = 0; k < 12; k++) points.push(next() - 0.5, (next() - 0.5) * 0.8, next() - 0.5);
+  const hull = build(points), m = hullMass(hull);
+  return { points, hull, center: m.center, mass: 1000 * m.volume };
+})();
+
 const plus = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+/** v turned by the unit quaternion q. */
+const turned = (q, v) => {
+  const [x, y, z, w] = q, tx = 2 * (y * v[2] - z * v[1]), ty = 2 * (z * v[0] - x * v[2]), tz = 2 * (x * v[1] - y * v[0]);
+  return [v[0] + w * tx + (y * tz - z * ty), v[1] + w * ty + (z * tx - x * tz), v[2] + w * tz + (x * ty - y * tx)];
+};
 const minus = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 
 const SCENES = {
@@ -373,6 +420,7 @@ const SCENES = {
   // pile, as it starts, each asking for the nearest hit within 100 m.
   rays: { name: '10,000 rays into 1,000 boxes', rays: 10000, boxes: pile(1000) },
   bigpile: { name: '10,000-box pile', seconds: 1, phases: [[0, 1]], runs: 1, boxes: pile(10000) },
+  hulls: { name: '1,000-hull pile', seconds: 10, phases: [[0, 5], [5, 10]], boxes: pile(1000), hull: ROCK.points, mass: ROCK.mass },
   // Two layers of 16, the upper dropped 2.4 m onto the lower, shifted so they land on each other.
   ragdolls: {
     name: '32 ragdolls', seconds: 8, phases: [[0, 4], [4, 8]], runs: 1, mass: 12.8,
@@ -554,7 +602,8 @@ async function main() {
     results.push(result);
     // Masses must agree, or the scenes differ.
     const want = result.scene.mass ?? 1000, masses = result.quality ? names.map((n) => result.quality[n].mass) : [want];
-    if (masses.some((m) => Math.abs(m - want) > 1e-6 * want)) out.textContent += `\n\nMASSES DIFFER: ${names.map((n, i) => `${n} ${masses[i]}`).join(', ')}`;
+    // A hull's mass is worked out in each engine's own float: Rapier's and Jolt's are 32-bit.
+    if (masses.some((m) => Math.abs(m - want) > (result.scene.hull ? 1e-4 : 1e-6) * want)) out.textContent += `\n\nMASSES DIFFER: ${names.map((n, i) => `${n} ${masses[i]}`).join(', ')}`;
     out.textContent = `${header}\n\n${results.map(table).join('\n\n')}`;
   }
   say('done');

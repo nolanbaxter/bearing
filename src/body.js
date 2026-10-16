@@ -54,13 +54,17 @@ export class Body {
   get inertia() { return this.#world._vector('inertia', this.#id, this.#world._inertia, 3); }
   set inertia(_) { readOnly('body.inertia', 'setBody(body, { inertia })'); }
 
-  /** m, a frozen copy. */
-  get position() { return this.#world._vector('position', this.#id, this.#world._position, 3); }
+  /** m, a frozen copy: the body's origin, where it was placed, whatever its centre of mass. */
+  get position() { return this.#world._poseOf('position', this.#id, false); }
   set position(_) { readOnly('body.position', 'setPosition(x, y, z)'); }
 
   /** A quaternion [x, y, z, w], a frozen copy. */
-  get rotation() { return this.#world._vector('rotation', this.#id, this.#world._rotation, 4); }
+  get rotation() { return this.#world._poseOf('rotation', this.#id, true); }
   set rotation(_) { readOnly('body.rotation', 'setRotation(q)'); }
+
+  /** m, in the world, a frozen copy: where its mass is centred, which it turns about. */
+  get centerOfMass() { return this.#world._centerOf('centerOfMass', this.#id); }
+  set centerOfMass(_) { readOnly('body.centerOfMass', 'setBody(body, { centerOfMass })'); }
 
   /** m/s, a frozen copy. */
   get velocity() { return this.#world._vector('velocity', this.#id, this.#world._velocity, 3); }

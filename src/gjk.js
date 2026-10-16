@@ -8,10 +8,10 @@
 // triangle or a tetrahedron) of points of the difference, moved each round
 // towards the origin, until no support point gets any closer. A shape needs
 // nothing but a support function to take part, which is why the same code
-// will serve convex hulls (milestone 14) and continuous collision (13).
+// serves shape casts, convex hulls and continuous collision (impact.js).
 //
 // CORES. A sphere is a point and a capsule a segment, each with a radius
-// around it; a box is its own core, radius 0. GJK runs on the cores, and the
+// around it; a box or a hull is its own core, radius 0. GJK runs on the cores, and the
 // radii are taken off the distance after, which is exact for these shapes
 // and quicker than giving GJK the round surfaces. Box2D does the same.
 //
@@ -21,7 +21,7 @@
 // known. Exact operations and square roots only, so the result is the same
 // to the bit on every machine.
 
-import { SPHERE, CAPSULE, TRIANGLE } from './collide.js';
+import { SPHERE, CAPSULE, HULL, TRIANGLE } from './collide.js';
 
 /**
  * A round's progress counts while it brings the squared distance in by more
@@ -80,6 +80,19 @@ function support(s, x, y, z, out) {
       if (d > most) { most = d; best = i; }
     }
     out[0] = p[3 * best]; out[1] = p[3 * best + 1]; out[2] = p[3 * best + 2];
+  } else if (s.kind === HULL) {
+    // The corner farthest along, in the hull's own frame; the first of equals.
+    const v = s.hull.vertices, V = v.length / 3;
+    const lx = x * a[0] + y * a[1] + z * a[2], ly = x * a[3] + y * a[4] + z * a[5], lz = x * a[6] + y * a[7] + z * a[8];
+    let best = 0, most = -Infinity;
+    for (let i = 0; i < V; i++) {
+      const d = v[3 * i] * lx + v[3 * i + 1] * ly + v[3 * i + 2] * lz;
+      if (d > most) { most = d; best = i; }
+    }
+    const px = v[3 * best], py = v[3 * best + 1], pz = v[3 * best + 2];
+    out[0] = c[0] + px * a[0] + py * a[3] + pz * a[6];
+    out[1] = c[1] + px * a[1] + py * a[4] + pz * a[7];
+    out[2] = c[2] + px * a[2] + py * a[5] + pz * a[8];
   } else if (s.kind === CAPSULE) {
     const e = x * a[3] + y * a[4] + z * a[5] >= 0 ? h[1] : -h[1];
     out[0] = c[0] + e * a[3]; out[1] = c[1] + e * a[4]; out[2] = c[2] + e * a[5];

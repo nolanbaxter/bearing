@@ -55,19 +55,24 @@
 // normal is nearest its own, so a box sliding from triangle to triangle of a
 // flat floor keeps its impulses all the way across.
 //
+// PARTS. A compound's parts (and the one part of a box, ball or capsule whose
+// centre of mass was moved) each touch as a shape of their own: one manifold
+// for each pair of parts that touches, kept in the pair's Memory under the
+// two parts' numbers, so the same two parts find their impulses again.
+//
 // TOUCHING. After the solve, each pair is touching or not, and a change is
 // an event (events.js): see touched(). A sensor's pairs get no manifold here,
 // since a sensor pushes nothing; World asks about them after the step, where
 // the bodies end up.
 
-import { collide, Shape, Manifold, SPHERE, CAPSULE, BOX as BOX_KIND } from './collide.js';
+import { collide, Shape, Manifold, Parts, placePart, SPHERE, CAPSULE, BOX as BOX_KIND, HULL } from './collide.js';
 import { touchLevel, Touches } from './triangle.js';
 import { rotate } from './core/math.js';
 import { resized } from './core/slots.js';
 import { impact, posed, UNSURE } from './impact.js';
 
 const DYNAMIC = 0, STATIC = 1;
-const BOX = 0, SPHERE_SHAPE = 1, CAPSULE_SHAPE = 2, MESH = 3;   // World's shape codes; a heightfield is 4
+const BOX = 0, SPHERE_SHAPE = 1, CAPSULE_SHAPE = 2, HULL_SHAPE = 3, MESH = 5;   // World's shape codes; a heightfield is 6
 
 /**
  * A contact may sink this much of the smaller body's thinnest size, and the
@@ -103,7 +108,9 @@ export class Contacts {
     const grow = (name, Type, n) => { this[name] = this[name] ? resized(this[name], n) : new Type(n); };
     grow('a', Int32Array, m); grow('b', Int32Array, m);
     grow('pair', Int32Array, m);   // which pair in the pair list this manifold is
-    grow('sub', Int32Array, m);    // a mesh pair's: which of its Memory's manifolds this one is kept as; else -1
+    grow('sub', Int32Array, m);    // a mesh or parts pair's: which of its Memory's manifolds this one is kept as; else -1
+    grow('key', Int32Array, m);    // which parts made it, as its Memory knows it again
+    grow('partA', Int32Array, m); grow('partB', Int32Array, m);   // the part of a and of b it is on, or -1
     grow('points', Uint8Array, m);
     grow('normal', Float64Array, 3 * m); grow('t1', Float64Array, 3 * m); grow('t2', Float64Array, 3 * m);
     grow('friction', Float64Array, m); grow('restitution', Float64Array, m); grow('tolerance', Float64Array, m);
@@ -177,6 +184,7 @@ const v3 = new Float64Array(3);
  */
 export function narrow(world, pairs, broadphase, next, from) {
   const box = world._box, reach = world._motion, awake = world._awake, shape = world._shape, sensor = world._sensor;
+  const inner = world._inner;
   const sensing = world._sensorCount > 0;
   for (let p = from; p < pairs.active;) {
     if (!pairs.holds(p, broadphase)) {
@@ -202,44 +210,94 @@ export function narrow(world, pairs, broadphase, next, from) {
       p++;
       continue;
     }
-    load(world, a, shapeA);
-    load(world, b, shapeB);
     const tolerance = Math.min(world._size[a], world._size[b]) * PIXEL;
     const margin = reach[a] + reach[b] + tolerance;
-    if (collide(shapeA, shapeB, margin, tolerance, manifold) === 0) {
+    if (inner[a] instanceof Parts || inner[b] instanceof Parts) {
+      parted(world, pairs, p, a, b, next, tolerance, margin);
+      p++;
+      continue;
+    }
+    load(world, a, shapeA);
+    load(world, b, shapeB);
+    if (!meet(world, a, b, null, null, tolerance, margin)) {
       pairs.forget(p);
       p++;
       continue;
     }
-    // Not touching yet, and moving against each other by more than a pixel:
-    // do they meet this step, and where? (impact.js.) A contact found where
-    // the step starts is wrong by no more than how far the pair moves against
-    // itself in the step, so within a pixel there is nothing to ask.
-    shifted = false;
-    const moves = least(manifold) > tolerance ? moving(world, a, b) : 0;
-    if (moves > tolerance) {
-      // At the moment they meet, every point within reach of the rest of the
-      // step, so a rod striking a wall with one end has its other end's
-      // contact too, before it swings in: points of the faces that meet, so
-      // no plane off a corner (see impact.js).
-      const dt = world._stepDt, t = impact(world, a, b, shapeA, shapeB, dt, tolerance);
-      world._impacts++;
-      const ahead = t >= 0 ? moves * (1 - t / dt) + 2 * tolerance : 0;
-      if (t === -1 || (t !== UNSURE && collide(shapeA, shapeB, ahead, tolerance, manifold) === 0)) {
-        pairs.forget(p);
-        p++;
-        continue;
-      }
-      if (t !== UNSURE) back(world, a, b, t, manifold);
-    }
-
     // Static bodies are never awake, and _wake leaves them be.
     if (awake[a] !== awake[b]) world._wake(awake[a] ? b : a);
-    const m = emit(world, next, p, a, b, manifold, 1, tolerance, -1);
+    const m = emit(world, next, p, a, b, manifold, 1, tolerance, -1, -1, -1, 0);
     carry(pairs, p, next, m);
     p++;
   }
   return next.count;
+}
+
+/**
+ * Whether shapeA and shapeB (slots a and b, or parts partA and partB of
+ * them; null for a whole body) touch within the step, into `manifold`.
+ *
+ * Not touching yet, and moving against each other by more than a pixel: do
+ * they meet this step, and where? (impact.js.) A contact found where the step
+ * starts is wrong by no more than how far the pair moves against itself in
+ * the step, so within a pixel there is nothing to ask. If they meet, the
+ * manifold is found where they meet, with every point within reach of the
+ * rest of the step, so a rod striking a wall with one end has its other
+ * end's contact too, before it swings in: points of the faces that meet, so
+ * no plane off a corner (see impact.js). Leaves the shapes wherever impact()
+ * left them.
+ */
+function meet(world, a, b, partA, partB, tolerance, margin) {
+  shifted = false;
+  if (collide(shapeA, shapeB, margin, tolerance, manifold) === 0) return false;
+  const moves = least(manifold) > tolerance ? moving(world, a, b) : 0;
+  if (moves > tolerance) {
+    const dt = world._stepDt, t = impact(world, a, b, shapeA, shapeB, dt, tolerance, partA, partB);
+    world._impacts++;
+    const ahead = t >= 0 ? moves * (1 - t / dt) + 2 * tolerance : 0;
+    if (t === -1 || (t !== UNSURE && collide(shapeA, shapeB, ahead, tolerance, manifold) === 0)) return false;
+    if (t !== UNSURE) back(world, a, b, t, manifold, partA, partB);
+  }
+  return true;
+}
+
+/**
+ * Pair p, one or both of whose bodies have parts: each part of one against
+ * each part of the other whose balls (its reach round its centre) come
+ * within the margin, as a pair of its own with its own time of impact; a
+ * manifold for each that touches, started from what the same two parts
+ * remembered. ponytail: every part against every part, n × m, culled by
+ * those balls; a tree of each body's parts when compounds have dozens.
+ */
+function parted(world, pairs, p, a, b, next, tolerance, margin) {
+  const inner = world._inner, pos = world._position, rot = world._rotation, reach = world._reach, awake = world._awake;
+  const la = inner[a] instanceof Parts ? inner[a].list : null, lb = inner[b] instanceof Parts ? inner[b].list : null;
+  const na = la === null ? 1 : la.length, nb = lb === null ? 1 : lb.length;
+  const kept = pairs.memoryOf(p);
+  kept.taken.fill(0, 0, kept.count);
+  let sub = 0;
+  for (let i = 0; i < na; i++) {
+    const partA = la === null ? null : la[i], ra = la === null ? reach[a] : partA.reach;
+    for (let j = 0; j < nb; j++) {
+      const partB = lb === null ? null : lb[j], rb = lb === null ? reach[b] : partB.reach;
+      // Placed afresh for each pair: a time of impact leaves them moved.
+      if (partA === null) load(world, a, shapeA); else placePart(partA, pos, 3 * a, rot, 4 * a, shapeA);
+      if (partB === null) load(world, b, shapeB); else placePart(partB, pos, 3 * b, rot, 4 * b, shapeB);
+      const dx = shapeB.center[0] - shapeA.center[0], dy = shapeB.center[1] - shapeA.center[1], dz = shapeB.center[2] - shapeA.center[2];
+      const r = ra + rb + margin;
+      if (dx * dx + dy * dy + dz * dz > r * r) continue;
+      if (!meet(world, a, b, partA, partB, tolerance, margin)) continue;
+      if (awake[a] !== awake[b]) world._wake(awake[a] ? b : a);
+      const key = i * nb + j, m = emit(world, next, p, a, b, manifold, 1, tolerance, sub++, la === null ? -1 : i, lb === null ? -1 : j, key);
+      for (let k = 0; k < kept.count; k++) {
+        if (kept.taken[k] || kept.key[k] !== key) continue;
+        kept.taken[k] = 1;
+        carry(kept, k, next, m);
+        break;
+      }
+    }
+  }
+  if (sub === 0) pairs.forget(p);
 }
 
 /** The least separation of a manifold's points. */
@@ -271,7 +329,7 @@ function moving(world, a, b) {
  * separation how far apart they are along the normal. So the solver, closing
  * the pair as it moves, lets it close to exactly the impact.
  */
-function back(world, a, b, t, mf) {
+function back(world, a, b, t, mf, partA, partB) {
   posed(0, t, CA, QA);
   posed(3, t, CB, QB);
   const p = world._position, q = world._rotation, a3 = 3 * a, b3 = 3 * b;
@@ -279,9 +337,9 @@ function back(world, a, b, t, mf) {
   for (let k = 0; k < mf.count; k++) {
     const k3 = 3 * k, half = 0.5 * mf.separations[k];
     const px = mf.points[k3], py = mf.points[k3 + 1], pz = mf.points[k3 + 2];
-    carried(world, a, QA, px - nx * half - CA[0], py - ny * half - CA[1], pz - nz * half - CA[2]);
+    carried(world, a, partA, QA, px - nx * half - CA[0], py - ny * half - CA[1], pz - nz * half - CA[2]);
     const ax = p[a3] + v3[0], ay = p[a3 + 1] + v3[1], az = p[a3 + 2] + v3[2];
-    carried(world, b, QB, px + nx * half - CB[0], py + ny * half - CB[1], pz + nz * half - CB[2]);
+    carried(world, b, partB, QB, px + nx * half - CB[0], py + ny * half - CB[1], pz + nz * half - CB[2]);
     const bx = p[b3] + v3[0] - ax, by = p[b3 + 1] + v3[1] - ay, bz = p[b3 + 2] + v3[2] - az;
     mf.separations[k] = bx * nx + by * ny + bz * nz;
     mf.points[k3] = ax; mf.points[k3 + 1] = ay; mf.points[k3 + 2] = az;
@@ -299,7 +357,11 @@ function back(world, a, b, t, mf) {
  * the point of a ball spinning fast was carried round its side, its gap read
  * 4 cm wider than the solver held, and two balls met with nothing between.
  */
-function carried(world, s, qt, x, y, z) {
+function carried(world, s, part, qt, x, y, z) {
+  if (part !== null) {
+    carriedPart(world, s, part, qt, x, y, z);
+    return;
+  }
   const shape = world._shape[s];
   if (shape === SPHERE_SHAPE) { v3[0] = x; v3[1] = y; v3[2] = z; return; }
   rotate(qt, 0, x, y, z, true, v3);
@@ -312,6 +374,42 @@ function carried(world, s, qt, x, y, z) {
   rotate(world._rotation, 4 * s, 0, c, 0, false, v3);
   v3[0] += rx; v3[1] += ry; v3[2] += rz;
 }
+
+/**
+ * carried() for a part: the same rule about the part's own core. A ball
+ * part's point is carried with its centre, which orbits the body's, and
+ * doesn't turn about it; a capsule part's turns only along its axis.
+ */
+function carriedPart(world, s, part, qt, x, y, z) {
+  if (part.kind === SPHERE) {
+    rotate(qt, 0, part.position[0], part.position[1], part.position[2], false, C3);
+    const rx = x - C3[0], ry = y - C3[1], rz = z - C3[2];
+    rotate(world._rotation, 4 * s, part.position[0], part.position[1], part.position[2], false, v3);
+    v3[0] += rx; v3[1] += ry; v3[2] += rz;
+    return;
+  }
+  rotate(qt, 0, x, y, z, true, C3);
+  if (part.kind !== CAPSULE) {
+    rotate(world._rotation, 4 * s, C3[0], C3[1], C3[2], false, v3);
+    return;
+  }
+  axisPoint(part, C3[0], C3[1], C3[2], C3);
+  rotate(qt, 0, C3[0], C3[1], C3[2], false, v3);
+  const rx = x - v3[0], ry = y - v3[1], rz = z - v3[2];
+  rotate(world._rotation, 4 * s, C3[0], C3[1], C3[2], false, v3);
+  v3[0] += rx; v3[1] += ry; v3[2] += rz;
+}
+
+/** The point of capsule part's axis nearest (x, y, z), all in its body's frame, into out. */
+function axisPoint(part, x, y, z, out) {
+  const o = part.position, h = part.half[1];
+  rotate(part.rotation, 0, 0, 1, 0, false, AXIS);
+  let t = (x - o[0]) * AXIS[0] + (y - o[1]) * AXIS[1] + (z - o[2]) * AXIS[2];
+  t = t < -h ? -h : t > h ? h : t;
+  out[0] = o[0] + AXIS[0] * t; out[1] = o[1] + AXIS[1] * t; out[2] = o[2] + AXIS[2] * t;
+}
+const C3 = new Float64Array(3), AXIS = new Float64Array(3);
+
 const CA = new Float64Array(3), CB = new Float64Array(3), QA = new Float64Array(4), QB = new Float64Array(4);
 /** back()'s shifts, for emit() to keep; `shifted` says the manifold has them. */
 const SHIFT = new Float64Array(12);
@@ -324,7 +422,7 @@ let shifted = false;
  */
 function level(world, pairs, p, a, b, next) {
   const turned = world._shape[a] >= MESH, g = turned ? a : b, o = turned ? b : a;
-  load(world, o, shapeA);
+  const parts = world._inner[o] instanceof Parts ? world._inner[o].list : null;
   // A mesh is a surface, with no thickness of its own: the tolerance is the other body's.
   const tolerance = world._size[o] * PIXEL, reach = world._motion;
   const margin = reach[a] + reach[b] + tolerance;
@@ -340,41 +438,46 @@ function level(world, pairs, p, a, b, next) {
   const ex = Math.abs(A[g9]) * hx + Math.abs(A[g9 + 1]) * hy + Math.abs(A[g9 + 2]) * hz + reach[g];
   const ey = Math.abs(A[g9 + 3]) * hx + Math.abs(A[g9 + 4]) * hy + Math.abs(A[g9 + 5]) * hz + reach[g];
   const ez = Math.abs(A[g9 + 6]) * hx + Math.abs(A[g9 + 7]) * hy + Math.abs(A[g9 + 8]) * hz + reach[g];
-  const n = touchLevel(world._geometry[g], pos, A, g, shapeA, lx - ex, ly - ey, lz - ez, lx + ex, ly + ey, lz + ez,
-    margin, tolerance, touches);
-  if (n === 0) {
-    pairs.forget(p);
-    return;
-  }
-  const awake = world._awake;
-  if (awake[a] !== awake[b]) world._wake(awake[a] ? b : a);
-  const kept = pairs.memoryOf(p);
+  const awake = world._awake, kept = pairs.memoryOf(p), rot = world._rotation;
   kept.taken.fill(0, 0, kept.count);
-  for (let k = 0; k < n; k++) {
-    // Normals come out from the other body; a pair's point from a to b.
-    const m = emit(world, next, p, a, b, touches.list[k], turned ? -1 : 1, tolerance, k);
-    let best = -1, most = 0;
-    for (let j = 0; j < kept.count; j++) {
-      if (kept.taken[j]) continue;
-      const d = kept.normal[3 * j] * next.normal[3 * m] + kept.normal[3 * j + 1] * next.normal[3 * m + 1]
-        + kept.normal[3 * j + 2] * next.normal[3 * m + 2];
-      if (d > most) { most = d; best = j; }
+  let sub = 0;
+  for (let i = 0; i < (parts === null ? 1 : parts.length); i++) {
+    if (parts === null) load(world, o, shapeA);
+    else placePart(parts[i], pos, 3 * o, rot, 4 * o, shapeA);
+    const n = touchLevel(world._geometry[g], pos, A, g, shapeA, lx - ex, ly - ey, lz - ez, lx + ex, ly + ey, lz + ez,
+      margin, tolerance, touches);
+    if (n > 0 && awake[a] !== awake[b]) world._wake(awake[a] ? b : a);
+    const part = parts === null ? -1 : i;
+    for (let k = 0; k < n; k++) {
+      // Normals come out from the other body; a pair's point from a to b.
+      const m = emit(world, next, p, a, b, touches.list[k], turned ? -1 : 1, tolerance, sub++,
+        turned ? -1 : part, turned ? part : -1, i);
+      let best = -1, most = 0;
+      for (let j = 0; j < kept.count; j++) {
+        if (kept.taken[j] || kept.key[j] !== i) continue;
+        const d = kept.normal[3 * j] * next.normal[3 * m] + kept.normal[3 * j + 1] * next.normal[3 * m + 1]
+          + kept.normal[3 * j + 2] * next.normal[3 * m + 2];
+        if (d > most) { most = d; best = j; }
+      }
+      if (best < 0) continue;
+      kept.taken[best] = 1;
+      carry(kept, best, next, m);
     }
-    if (best < 0) continue;
-    kept.taken[best] = 1;
-    carry(kept, best, next, m);
   }
+  if (sub === 0) pairs.forget(p);
 }
 
 /**
  * Manifold mf of pair p, between slots a and b, as the next manifold in
- * next, its normal times sign; returns its index. sub is which of a mesh
- * pair's manifolds it is, or -1.
+ * next, its normal times sign; returns its index. sub is which of a mesh or
+ * parts pair's manifolds it is, or -1; partA and partB the parts it is on,
+ * or -1; key what its Memory knows it by.
  */
-function emit(world, next, p, a, b, mf, sign, tolerance, sub) {
+function emit(world, next, p, a, b, mf, sign, tolerance, sub, partA, partB, key) {
   const m = next.count++;
   next.ensure(next.count);
   next.a[m] = a; next.b[m] = b; next.pair[m] = p; next.sub[m] = sub;
+  next.partA[m] = partA; next.partB[m] = partB; next.key[m] = key;
   next.points[m] = mf.count;
   for (let k = 0; k < 3; k++) next.normal[3 * m + k] = sign * mf.normal[k];
   // Friction mixes as a geometric mean, so ice is slippery against
@@ -442,11 +545,12 @@ export function store(pairs, c) {
       keep(pairs, p, c, m);
       continue;
     }
-    // A mesh pair's manifolds come in order, so the last one sets the count.
+    // A mesh or parts pair's manifolds come in order, so the last one sets the count.
     const kept = pairs.memoryOf(p);
     kept.ensure(sub + 1);
     kept.count = sub + 1;
     for (let k = 0; k < 3; k++) kept.normal[3 * sub + k] = c.normal[3 * m + k];
+    kept.key[sub] = c.key[m];
     keep(kept, sub, c, m);
   }
 }
@@ -485,7 +589,11 @@ function keep(to, p, c, m) {
  * Leaves the anchor's world offset at the start in v3: for a box, the
  * offset it was given, unchanged; a ball's, zero.
  */
-function core(world, s, x, y, z, out, o) {
+function core(world, s, part, x, y, z, out, o) {
+  if (part !== null) {
+    corePart(world, s, part, x, y, z, out, o);
+    return;
+  }
   const shape = world._shape[s];
   if (shape === SPHERE_SHAPE) {
     out[o] = 0; out[o + 1] = 0; out[o + 2] = 0;
@@ -503,7 +611,29 @@ function core(world, s, x, y, z, out, o) {
   rotate(world._rotation, s * 4, 0, out[o + 1], 0, false, v3);
 }
 
-/** A body's shape, placed, into s. Not for a mesh or a heightfield, which are triangles (triangle.js). */
+/** core() for a part of slot s: its anchor on the part's own core, in the body's frame. */
+function corePart(world, s, part, x, y, z, out, o) {
+  const q = world._rotation, s4 = 4 * s;
+  if (part.kind === SPHERE) {
+    out[o] = part.position[0]; out[o + 1] = part.position[1]; out[o + 2] = part.position[2];
+    rotate(q, s4, out[o], out[o + 1], out[o + 2], false, v3);
+    return;
+  }
+  rotate(q, s4, x, y, z, true, v3);
+  if (part.kind !== CAPSULE) {
+    out[o] = v3[0]; out[o + 1] = v3[1]; out[o + 2] = v3[2];
+    v3[0] = x; v3[1] = y; v3[2] = z;
+    return;
+  }
+  axisPoint(part, v3[0], v3[1], v3[2], C3);
+  out[o] = C3[0]; out[o + 1] = C3[1]; out[o + 2] = C3[2];
+  rotate(q, s4, C3[0], C3[1], C3[2], false, v3);
+}
+
+/**
+ * A body's shape, placed, into s. Not for a mesh or a heightfield, which are
+ * triangles (triangle.js), nor a body with parts, which placePart() places.
+ */
 export function load(world, slot, s) {
   const shape = world._shape[slot], d = world._dims, s3 = slot * 3;
   if (shape === BOX) {
@@ -512,6 +642,9 @@ export function load(world, slot, s) {
   } else if (shape === SPHERE_SHAPE) {
     s.kind = SPHERE;
     s.half[0] = d[s3];
+  } else if (shape === HULL_SHAPE) {
+    s.kind = HULL;
+    s.hull = world._inner[slot];
   } else {
     s.kind = CAPSULE;
     s.half[0] = d[s3];
@@ -564,6 +697,8 @@ export function prepare(world, c) {
     const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3;
     const ima = invMass[a], imb = invMass[b];
     const nx = c.normal[3 * m], ny = c.normal[3 * m + 1], nz = c.normal[3 * m + 2];
+    const partA = c.partA[m] < 0 ? null : world._inner[a].list[c.partA[m]];
+    const partB = c.partB[m] < 0 ? null : world._inner[b].list[c.partB[m]];
     if (c.points[m] <= 2) {
       const m3 = 3 * m;
       c.rollMass1[m] = turning(invI, a, b, c.t1[m3], c.t1[m3 + 1], c.t1[m3 + 2]);
@@ -580,9 +715,9 @@ export function prepare(world, c) {
       // Separation as the bodies move during the step is the starting
       // separation plus how far the two anchors have moved apart along the
       // normal; this is the part of that sum fixed at the start.
-      core(world, a, rax, ray, raz, c.la, i3);
+      core(world, a, partA, rax, ray, raz, c.la, i3);
       const cax = v3[0], cay = v3[1], caz = v3[2];
-      core(world, b, rbx, rby, rbz, c.lb, i3);
+      core(world, b, partB, rbx, rby, rbz, c.lb, i3);
       c.adjusted[i] = c.separation[i] - ((v3[0] - cax) * nx + (v3[1] - cay) * ny + (v3[2] - caz) * nz);
       c.normalMass[i] = mass(invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, nx, ny, nz);
       c.tangentMass1[i] = mass(invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, c.t1[3 * m], c.t1[3 * m + 1], c.t1[3 * m + 2]);

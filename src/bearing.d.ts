@@ -12,7 +12,7 @@ export type Quat = readonly [number, number, number, number] | Float32Array | Fl
  * velocity; 'character' moves at its velocity as far as the world lets it, walking.
  */
 export type BodyType = 'dynamic' | 'static' | 'kinematic' | 'character';
-export type Shape = 'box' | 'sphere' | 'capsule' | 'mesh' | 'heightfield';
+export type Shape = 'box' | 'sphere' | 'capsule' | 'hull' | 'compound' | 'mesh' | 'heightfield';
 /** A list of numbers: a plain array or any typed array. */
 export type Numbers = ArrayLike<number>;
 
@@ -23,6 +23,7 @@ interface NoLevelSizes {
   heights?: never;
   columns?: never;
   spacing?: never;
+  parts?: never;
 }
 
 interface BodyCommon {
@@ -32,8 +33,10 @@ interface BodyCommon {
   density?: number;
   /** kg. Give this or `density`, not both. */
   mass?: number;
-  /** Moments of inertia about the body's own axes, kg·m². Worked out from the shape and mass unless given; null goes back to that. */
+  /** Moments of inertia about the body's own axes, kg·m². Worked out from the shape and mass, about its principal axes, unless given; null goes back to that. */
   inertia?: Vec3 | null;
+  /** Where its mass is centred, m, in its own frame. Worked out from the shape unless given; null goes back to that. Not for a character. */
+  centerOfMass?: Vec3 | null;
   /** How much sideways push a contact resists per newton pressing it, default 0.5. 0 is ice. */
   friction?: number;
   /** Fraction of the speed it hits at that comes back as a bounce, 0 to 1, default 0. */
@@ -92,8 +95,58 @@ export interface CapsuleOptions extends BodyCommon, NoLevelSizes {
   size?: never;
 }
 
+/** A convex hull of points: the smallest convex solid round them. Never a character. */
+export interface HullOptions extends Omit<BodyCommon, 'type'> {
+  shape: 'hull';
+  /** Default 'dynamic'. */
+  type?: 'dynamic' | 'static' | 'kinematic';
+  /** Points, three numbers each, in m, in the body's own frame: at least 4, not all in one plane. Default a 1 m cube's corners. */
+  vertices?: Numbers;
+  size?: never;
+  radius?: never;
+  height?: never;
+  indices?: never;
+  heights?: never;
+  columns?: never;
+  spacing?: never;
+  parts?: never;
+}
+
+interface PartCommon {
+  /** m, from the body's origin, in its own frame. Default [0, 0, 0]. */
+  position?: Vec3;
+  /** Quaternion [x, y, z, w] against the body, default [0, 0, 0, 1]. */
+  rotation?: Quat;
+  /** kg/m³, default the body's. */
+  density?: number;
+}
+
+/** One shape of a compound: a box, ball, capsule or hull, sized as a body of that shape is. */
+export type PartOptions =
+  | (PartCommon & { shape?: 'box'; size?: Vec3; radius?: never; height?: never; vertices?: never })
+  | (PartCommon & { shape: 'sphere'; radius?: number; size?: never; height?: never; vertices?: never })
+  | (PartCommon & { shape: 'capsule'; radius?: number; height?: number; size?: never; vertices?: never })
+  | (PartCommon & { shape: 'hull'; vertices?: Numbers; size?: never; radius?: never; height?: never });
+
+/** Several shapes as one rigid body. Never a character. */
+export interface CompoundOptions extends Omit<BodyCommon, 'type'> {
+  shape: 'compound';
+  /** Default 'dynamic'. */
+  type?: 'dynamic' | 'static' | 'kinematic';
+  /** One or more. Default one 1 m box. */
+  parts?: readonly PartOptions[];
+  size?: never;
+  radius?: never;
+  height?: never;
+  vertices?: never;
+  indices?: never;
+  heights?: never;
+  columns?: never;
+  spacing?: never;
+}
+
 /** Level geometry: static unless made kinematic, never dynamic, with no mass, density or inertia. */
-interface LevelCommon extends Omit<BodyCommon, 'type' | 'density' | 'mass' | 'inertia' | 'maxSlope' | 'stepHeight'> {
+interface LevelCommon extends Omit<BodyCommon, 'type' | 'density' | 'mass' | 'inertia' | 'centerOfMass' | 'maxSlope' | 'stepHeight'> {
   maxSlope?: never;
   stepHeight?: never;
   /** Default 'static'. */
@@ -101,9 +154,11 @@ interface LevelCommon extends Omit<BodyCommon, 'type' | 'density' | 'mass' | 'in
   density?: never;
   mass?: never;
   inertia?: never;
+  centerOfMass?: never;
   size?: never;
   radius?: never;
   height?: never;
+  parts?: never;
 }
 
 /** Triangles, for level geometry. See docs/API.md, "Meshes and heightfields". */
@@ -132,7 +187,7 @@ export interface HeightfieldOptions extends LevelCommon {
 }
 
 /** What world.addBody takes. A size option the shape doesn't have is refused, here and at run time. */
-export type BodyOptions = BoxOptions | SphereOptions | CapsuleOptions | MeshOptions | HeightfieldOptions;
+export type BodyOptions = BoxOptions | SphereOptions | CapsuleOptions | HullOptions | CompoundOptions | MeshOptions | HeightfieldOptions;
 
 /** What world.setBody takes: any of addBody's options. Which sizes fit is checked against the body's shape when called. */
 export interface BodyChanges extends BodyCommon {
@@ -145,6 +200,7 @@ export interface BodyChanges extends BodyCommon {
   heights?: Numbers;
   columns?: number;
   spacing?: number;
+  parts?: readonly PartOptions[];
 }
 
 interface BodyInfoCommon {
@@ -155,6 +211,8 @@ interface BodyInfoCommon {
   density?: number;
   /** Present if the body was given an inertia. */
   inertia?: [number, number, number];
+  /** Present if the body was given a centre of mass. */
+  centerOfMass?: [number, number, number];
   friction: number;
   restitution: number;
   damping: number;
@@ -183,11 +241,29 @@ export type BodyInfo =
   | (BodyInfoCommon & { shape: 'box'; size: [number, number, number] })
   | (BodyInfoCommon & { shape: 'sphere'; radius: number })
   | (BodyInfoCommon & { shape: 'capsule'; radius: number; height: number })
+  | (SolidInfoCommon & { shape: 'hull'; vertices: number[] })
+  | (SolidInfoCommon & { shape: 'compound'; parts: PartInfo[] })
   | (LevelInfoCommon & { shape: 'mesh'; vertices: number[]; indices: number[] })
   | (LevelInfoCommon & { shape: 'heightfield'; heights: number[]; columns: number; spacing: number });
 
 /** A mesh's or heightfield's: never dynamic, and no mass, density or inertia. */
-type LevelInfoCommon = Omit<BodyInfoCommon, 'type' | 'mass' | 'density' | 'inertia' | 'maxSlope' | 'stepHeight'> & { type: 'static' | 'kinematic' };
+type LevelInfoCommon = Omit<BodyInfoCommon, 'type' | 'mass' | 'density' | 'inertia' | 'centerOfMass' | 'maxSlope' | 'stepHeight'> & { type: 'static' | 'kinematic' };
+
+/** A hull's or compound's: never a character. */
+type SolidInfoCommon = Omit<BodyInfoCommon, 'type' | 'maxSlope' | 'stepHeight'> & { type: 'dynamic' | 'static' | 'kinematic' };
+
+/** A compound's part as bodyOf gives it: the options it was made from. A hull's vertices are its corners. */
+export type PartInfo = {
+  position: [number, number, number];
+  rotation: [number, number, number, number];
+  /** Present if the part was given a density. */
+  density?: number;
+} & (
+  | { shape: 'box'; size: [number, number, number] }
+  | { shape: 'sphere'; radius: number }
+  | { shape: 'capsule'; radius: number; height: number }
+  | { shape: 'hull'; vertices: number[] }
+);
 
 /** What world.groundOf finds under a character. */
 export interface Ground {
@@ -440,10 +516,12 @@ export class Body {
   readonly asleep: boolean;
   /** kg. */
   readonly mass: number;
-  /** kg·m² about the body's own x, y and z axes, a frozen copy. */
+  /** kg·m², the principal moments: about its own x, y and z axes for a box, ball or capsule. A frozen copy. */
   readonly inertia: readonly [number, number, number];
-  /** m, a frozen copy. */
+  /** m, a frozen copy: its origin, where it was placed, whatever its centre of mass. */
   readonly position: readonly [number, number, number];
+  /** m, in the world, a frozen copy: where its mass is centred, which it turns about. */
+  readonly centerOfMass: readonly [number, number, number];
   /** Quaternion [x, y, z, w], a frozen copy. */
   readonly rotation: readonly [number, number, number, number];
   /** m/s, a frozen copy. */

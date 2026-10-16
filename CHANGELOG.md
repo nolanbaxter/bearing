@@ -137,3 +137,19 @@ All notable changes to Bearing are recorded here. The format follows
   corner its contact didn't hold, and comes a step late like the others.
 - Fixed: GJK called two shapes 0.22 mm apart touching when its last four points lay flat, which made
   a rod's time of impact stop short.
+- Convex hulls: `shape: 'hull'` with `vertices`, any points, three numbers each. The hull is the
+  smallest convex solid round them (quickhull), with points inside it or on its edges and faces
+  dropped and faces lying in one plane merged, so a cube's 8 corners make 6 square faces and a cube
+  made as a hull stacks exactly as a box does. Its mass, centre of mass and inertia are exact.
+  Hulls collide with every shape, meshes and heightfields included, by separating axes and
+  clipping.
+- Compound bodies: `shape: 'compound'` with `parts`, boxes, spheres, capsules and hulls placed from
+  the body's origin as one rigid body, each with its own `density` if given. Their masses,
+  centres and inertias are summed exactly.
+- A body's centre of mass can be off its origin: a hull's and a compound's are worked out, and the
+  body turns about it. `body.centerOfMass` says where it is in the world. `position` and
+  `world.transforms` stay at the origin, so a renderer draws a model where its file puts it.
+  `velocity` is the centre of mass's. A lopsided body's inertia is about its principal axes,
+  found exactly when it is made, and `body.inertia` gives the moments about them.
+- The `centerOfMass` option, `[x, y, z]` in the body's own frame or `null` for the shape's, moves
+  any body's centre of mass, as a car's is lowered so it doesn't roll over.

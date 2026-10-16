@@ -143,6 +143,24 @@ These were made with Nolan and override the rules below where they differ.
   b's. Mesh and heightfield pairs aren't asked. Spin cap `SPIN` = π a step, not for spheres,
   applied as each substep starts (`_accelerate`); after the solve it undid a corner strike's spin.
   `world._impacts` counts for the off-means-off test.
+- **Hulls and compounds** (2026-10-16, milestone 14, approved with the `centerOfMass` option):
+  `shape: 'hull'` (`vertices`; `src/hull.js` quickhull, triangles merged into polygons within FLAT
+  of the hull's size, points on edges dropped, d of each face through the farthest corner) and
+  `shape: 'compound'` (`parts`: box, sphere, capsule or hull, `position`/`rotation` from the
+  origin, own `density`); neither can be a character or a query shape. Mass properties in
+  `src/shapes.js` (tetrahedra from the corners' mean; parallel axis; Jacobi with sqrt only,
+  off-diagonals under 2^-52 of the moments cleared). The step works in the frame of the centre of
+  mass and principal axes: columns `_offset` (centre along the principal axes), `_frame` (q =
+  rotation ⊗ frame), `_framed`, `_com`, `_comGiven`; `_pose`/`_place7` convert at the API and
+  for `transforms`; `_framedCount` 0 keeps the old loop. A hull is stored moved into that frame
+  (`_inner`, a Hull); a compound, or a box/ball/capsule given `centerOfMass`, as `Parts` (each a
+  `Part` in that frame); `_geometry` keeps the shape as given, for `bodyOf`. `centerOfMass` keeps
+  the shape's inertia about its own centre. Hull pairs: separating axes with Gregorius's Gauss-map
+  pruning, clipping, GJK when apart (`collide.js`); against triangles every edge pair by support
+  (`triangle.js`); a parallel edge counts only if it reaches farthest along the axis. Parts pairs:
+  `parted()` in `contact.js`, n × m culled by reach, each pair with its own `meet()` (collide +
+  time of impact), Memory matched by `key`; `core()`/`carried()` anchor on a part's own core.
+  Queries loop over parts (`shapes()`/`shapeOf()` in `query.js`).
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

@@ -4,8 +4,8 @@ A physics engine in plain JavaScript, for any renderer. No dependencies, no buil
 used as they are.
 
 **In development, and not released.** Nothing is on npm yet. Bodies fall, tumble, collide, rest,
-stack, slide, bounce and hang from joints, and fast ones stop on thin walls; see the
-[roadmap](ROADMAP.md) for what comes next.
+stack, slide, bounce and hang from joints, as boxes, balls, capsules, convex hulls or compounds of
+them, and fast ones stop on thin walls; see the [roadmap](ROADMAP.md) for what comes next.
 
 ```js
 import { World } from 'bearing-physics';

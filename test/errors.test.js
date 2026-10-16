@@ -51,7 +51,7 @@ const joined = () => {
 };
 
 const JOINT_OPTIONS = 'type, a, b, anchor, anchorB, axis, min, max, length, cone, motorSpeed, motorForce, frequency, dampingRatio, collide';
-const OPTIONS = 'type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, lockRotation, maxSlope, stepHeight, position, rotation, velocity, angularVelocity';
+const OPTIONS = 'type, shape, size, radius, height, vertices, indices, heights, columns, spacing, parts, density, mass, inertia, centerOfMass, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, lockRotation, maxSlope, stepHeight, position, rotation, velocity, angularVelocity';
 
 /** The smallest .glb: one node, 'floor', showing one triangle; `json` adds to its JSON. */
 function glb(json = {}) {
@@ -117,7 +117,29 @@ const cases = [
       [e, run({ type: 'character', stepHeight: -0.1 }), `${call}: stepHeight must be 0 or more, or null to follow the size, got -0.1`],
       [e, run({ lockRotation: true }), `${call}: lockRotation must be 3 true or false values, got true`],
       [e, run({ shape: 'heightfield', type: 'character' }), `${call}: type must be 'static' or 'kinematic' for a heightfield, got 'character'`],
-      [e, run({ shape: 'cube' }), `${call}: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got 'cube'`],
+      [e, run({ shape: 'cube' }), `${call}: shape must be 'box', 'sphere', 'capsule', 'hull', 'compound', 'mesh' or 'heightfield', got 'cube'`],
+      [e, run({ shape: 'hull', vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0] }), `${call}: vertices must span a solid (4 points not in one plane), got 4 points in one plane`],
+      [e, run({ shape: 'hull', type: 'character' }), `${call}: type must be 'dynamic', 'static' or 'kinematic' for a hull, got 'character'`],
+      [e, run({ shape: 'compound', parts: [] }), `${call}: parts must be a list of one or more parts, got an empty array`],
+      [e, run({ shape: 'compound', parts: [5] }), `${call}: parts[0] must be an object, got 5`],
+      [e, run({ shape: 'compound', parts: [{}, { radus: 1 }] }), `${call}: parts[1]: unknown option 'radus' (did you mean 'radius'?)`],
+      [e, run({ shape: 'compound', parts: [{ banana: 1 }] }),
+        `${call}: parts[0]: unknown option 'banana' (the options are shape, size, radius, height, vertices, position, rotation, density)`],
+      [e, run({ shape: 'compound', parts: [{ shape: 'mesh' }] }), `${call}: parts[0].shape must be 'box', 'sphere', 'capsule' or 'hull', got 'mesh'`],
+      [e, run({ shape: 'compound', parts: [{ radius: 1 }] }), `${call}: parts[0]: a box has no radius`],
+      [e, run({ shape: 'compound', parts: [{ size: [1, 0, 1] }] }), `${call}: parts[0].size must be 3 positive numbers, got 1,0,1`],
+      [e, run({ shape: 'compound', parts: [{ shape: 'sphere', radius: 0 }] }), `${call}: parts[0].radius must be a positive number, got 0`],
+      [e, run({ shape: 'compound', parts: [{ shape: 'capsule', height: -1 }] }), `${call}: parts[0].height must be a positive number, got -1`],
+      [e, run({ shape: 'compound', parts: [{ shape: 'capsule', height: 0.8 }] }), `${call}: parts[0].height must be at least twice radius (1), got 0.8`],
+      [e, run({ shape: 'compound', parts: [{ shape: 'hull', vertices: [0, 0, NaN] }] }),
+        `${call}: parts[0].vertices must be finite numbers, three to a vertex, got NaN at index 2`],
+      [e, run({ shape: 'compound', parts: [{ shape: 'hull', vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0] }] }),
+        `${call}: parts[0].vertices must span a solid (4 points not in one plane), got 3 points`],
+      [e, run({ shape: 'compound', parts: [{ position: [1, 2] }] }), `${call}: parts[0].position must be 3 finite numbers, got 1,2`],
+      [e, run({ shape: 'compound', parts: [{ rotation: [0, 0, 0, 0] }] }), `${call}: parts[0].rotation must be 4 finite numbers, not all zero, got 0,0,0,0`],
+      [e, run({ shape: 'compound', parts: [{ density: -1 }] }), `${call}: parts[0].density must be a positive number, got -1`],
+      [e, run({ centerOfMass: 1 }), `${call}: centerOfMass must be 3 finite numbers, got 1`],
+      [e, run({ type: 'character', shape: 'capsule', centerOfMass: [0, 0, 0] }), `${call}: a character body has no centerOfMass`],
       [e, run({ shape: 'mesh', type: 'dynamic' }), `${call}: type must be 'static' or 'kinematic' for a mesh, got 'dynamic'`],
       [e, run({ shape: 'heightfield', type: 'static', mass: 5 }), `${call}: a heightfield has no mass`],
       [e, run({ shape: 'mesh', type: 'static', vertices: [0, 0, NaN] }), `${call}: vertices must be finite numbers, three to a vertex, got NaN at index 2`],
@@ -310,6 +332,9 @@ const cases = [
   ['body-seteuler', () => fresh().body.setEuler(0, undefined), 'setEuler: yaw, pitch and roll must be finite numbers, got 0,undefined,0'],
   ['body-setvelocity', () => fresh().body.setVelocity(1, 2), 'setVelocity: x, y and z must be finite numbers, got 1,2,undefined'],
   ['body-setvelocity', () => new World().addBody({ type: 'static' }).setVelocity(1, 0, 0), 'setVelocity: a static body has no velocity'],
+  ['body-centerofmass', () => gone().body.centerOfMass, 'centerOfMass: this world was destroyed'],
+  ['body-centerofmass', () => dead().body.centerOfMass, 'centerOfMass: this body was removed'],
+  ['body-centerofmass', () => { fresh().body.centerOfMass = [0, 0, 0]; }, 'body.centerOfMass is read only; use setBody(body, { centerOfMass })'],
   ['body-setangularvelocity', () => fresh().body.setAngularVelocity(0, Infinity, 0), 'setAngularVelocity: x, y and z must be finite numbers, got 0,Infinity,0'],
   ['body-setangularvelocity', () => new World().addBody({ type: 'static' }).setAngularVelocity(0, 1, 0), 'setAngularVelocity: a static body has no angularVelocity'],
   ['body-applyforce', () => fresh().body.applyForce(10), 'applyForce: force must be 3 finite numbers, got 10'],

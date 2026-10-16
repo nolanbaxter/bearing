@@ -218,6 +218,17 @@ export function rotate(q, o, x, y, z, inverse, out) {
   return out;
 }
 
+/** out[oo..] = a[ao..] ⊗ b[bo..], quaternions [x, y, z, w]: b's turn, then a's. out may not be a or b. */
+export function quatMultiply(a, ao, b, bo, out, oo) {
+  const ax = a[ao], ay = a[ao + 1], az = a[ao + 2], aw = a[ao + 3];
+  const bx = b[bo], by = b[bo + 1], bz = b[bo + 2], bw = b[bo + 3];
+  out[oo] = aw * bx + ax * bw + ay * bz - az * by;
+  out[oo + 1] = aw * by + ay * bw + az * bx - ax * bz;
+  out[oo + 2] = aw * bz + az * bw + ax * by - ay * bx;
+  out[oo + 3] = aw * bw - ax * bx - ay * by - az * bz;
+  return out;
+}
+
 /** The rotation of `radians` about a unit `axis`, as [x, y, z, w]. */
 export function quatAxisAngle(axis, radians) {
   const half = radians * 0.5, s = sin(half);

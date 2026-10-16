@@ -28,6 +28,7 @@
 // nothing in the way: its velocity, gravity, and its spin, turned exactly.
 
 import { closest, Closest, radius } from './gjk.js';
+import { placePart } from './collide.js';
 import { sin, cos } from './core/math.js';
 
 const DYNAMIC = 0, SPHERE_SHAPE = 1;   // World's codes
@@ -54,11 +55,12 @@ const R = new Float64Array(4);
 
 /**
  * When slots a and b, as shapes sa and sb (placed where the step starts, as
- * contact.js loads them), first come within `tolerance` of touching within
- * `dt`: the time, -1 if they don't, or UNSURE. Leaves sa and sb placed where
- * they are at the time it returns (or at the step's end).
+ * contact.js loads them; parts partA and partB of them, or null for the
+ * whole body), first come within `tolerance` of touching within `dt`: the
+ * time, -1 if they don't, or UNSURE. Leaves sa and sb placed where they are
+ * at the time it returns (or at the step's end).
  */
-export function impact(world, a, b, sa, sb, dt, tolerance) {
+export function impact(world, a, b, sa, sb, dt, tolerance, partA, partB) {
   start(world, a, 0, dt);
   start(world, b, 3, dt);
   const ra = radius(sa), rb = radius(sb);
@@ -68,8 +70,8 @@ export function impact(world, a, b, sa, sb, dt, tolerance) {
   const gx = G[3] - G[0], gy = G[4] - G[1], gz = G[5] - G[2], gl = Math.sqrt(gx * gx + gy * gy + gz * gz);
   let t = 0;
   for (let round = 0; round < ROUNDS; round++) {
-    pose(sa, 0, t);
-    pose(sb, 3, t);
+    pose(sa, 0, t, partA);
+    pose(sb, 3, t, partB);
     const d = closest(sa, sb, near), gap = d - ra - rb;
     if (gap <= tolerance) return t;
     // The gap closes no faster than the cores' closing speed along the line
@@ -96,7 +98,7 @@ function start(world, s, o, dt) {
     WV[o + k] = w[s3 + k];
   }
   // Its spin as the step will turn it: capped as World._accelerate caps it.
-  if (dynamic && world._shape[s] !== SPHERE_SHAPE) {
+  if (dynamic && (world._shape[s] !== SPHERE_SHAPE || world._framed[s] === 1)) {
     const most = SPIN / dt, w2 = WV[o] * WV[o] + WV[o + 1] * WV[o + 1] + WV[o + 2] * WV[o + 2];
     if (w2 > most * most) {
       const k = most / Math.sqrt(w2);
@@ -107,10 +109,11 @@ function start(world, s, o, dt) {
   for (let k = 0; k < 4; k++) Q[q4 + k] = q[4 * s + k];
 }
 
-/** Places shape s where its body (o: 0 for a, 3 for b) is at time t on its path. */
-function pose(s, o, t) {
+/** Places shape s (or its body's part) where its body (o: 0 for a, 3 for b) is at time t on its path. */
+function pose(s, o, t, part) {
   posed(o, t, C, R);
-  s.place(C[0], C[1], C[2], R, 0);
+  if (part === null) s.place(C[0], C[1], C[2], R, 0);
+  else placePart(part, C, 0, R, 0, s);
 }
 const C = new Float64Array(3);
 

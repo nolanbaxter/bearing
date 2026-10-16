@@ -168,6 +168,48 @@ await test('stacks put to sleep, woken and cleared 30 times: the awake list, the
   assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
 });
 
+await test('hulls and compounds made, piled on a mesh and removed 30 times: their shapes and frames go', async () => {
+  const world = new World();
+  world.step(1 / 60);
+  let seed = 7;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  let before = 0, hull = null;
+  for (let round = 0; round < 30; round++) {
+    if (round === WARM) {
+      await collect();
+      before = heap();
+    }
+    const floor = world.addBody({ shape: 'mesh', vertices: [-10, 0, -10, 10, 0, -10, 10, 0, 10, -10, 0, 10], indices: [0, 2, 1, 0, 3, 2] });
+    const bodies = [];
+    for (let k = 0; k < 40; k++) {
+      const pts = [];
+      for (let i = 0; i < 12; i++) pts.push(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5);
+      bodies.push(world.addBody(k % 2
+        ? { shape: 'hull', vertices: pts, position: [(k % 10) * 1.5 - 7, 1 + Math.floor(k / 10), 0] }
+        : { shape: 'compound', parts: [{ size: [0.6, 0.3, 0.3] }, { shape: 'hull', vertices: pts, position: [0.5, 0, 0] }], position: [(k % 10) * 1.5 - 7, 1 + Math.floor(k / 10), 3] }));
+    }
+    if (round === WARM) hull = new WeakRef(world._inner[bodies[1].slot]);
+    for (let s = 0; s < 60; s++) world.step(1 / 60);
+    // Landed and touching: some may already sleep, and sleeping pairs hold no contacts.
+    assert.ok(world._contacts.count >= 20, `round ${round}: only ${world._contacts.count} contacts`);
+    for (const b of [...bodies, floor]) world.remove(b);
+    world.step(1 / 60);
+    assert.equal(world._framedCount, 0, `round ${round}: frames kept`);
+    assert.ok(world._inner.every((g) => g === null) && world._geometry.every((g) => g === null), `round ${round}: shapes kept`);
+    assert.equal(world._contacts.capacity, 0, `round ${round}: contact storage kept`);
+    assert.ok(world._pairs.memory.length <= world._pairs.capacity && world._pairs.spare.length <= 80, `round ${round}: pair memories kept`);
+  }
+  await collect();
+  assert.equal(hull.deref(), undefined, 'a removed hull is still held');
+  const grown = heap() - before;
+  // Measured on Node 22: with --jitless it grew 329 KB by round 30 and held
+  // there to round 70 (scratch grown once to the largest hull), and with the
+  // JIT 452 KB by round 30. One round's bodies hold 374 KB, so even a third
+  // of a round kept each round would show as 2.5 MB over the 20 measured
+  // rounds: 1 MB tells the two apart.
+  assert.ok(grown < 1024 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
+});
+
 await test('meshes and heightfields made, landed on and removed 30 times: their triangles and pair memories go', async () => {
   const world = new World();
   world.step(1 / 60);

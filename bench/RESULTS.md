@@ -72,6 +72,24 @@ Rapier, 2.1 to 2.5 times cannon-es. Its ragdolls don't sleep in 8 s: with no lim
 rub on, a dangling limb swings as a pendulum does; Jolt's sleeping is the quickest to call a slow
 swing still.
 
+### 1,000-hull pile, 10 s
+
+Added with milestone 14 and run at its commit, 2026-10-16, one run. The box pile's places, each a
+convex hull of the same 12 fixed points about 1 m across, each engine's own hull from them (Jolt's
+with no rounding; cannon-es given Bearing's faces, as it can't build its own), water's density;
+the four masses agreed.
+
+| Engine | ms per step, 0–5 s | ms per step, 5–10 s | asleep at the end | fell through |
+|---|---|---|---|---|
+| Bearing | 44.9 | 52.4 | 31 of 1000 | 0 |
+| Rapier | 3.19 | 0.229 | 1000 of 1000 | 0 |
+| Jolt | 6.77 | 0.276 | 1000 of 1000 | 0 |
+| cannon-es | 232 | 338 | 107 of 1000 | 0 |
+
+Bearing is 5 to 6 times faster than cannon-es here, and 14 times Rapier's time as the pile lands.
+Afterwards Rapier and Jolt have put the whole pile to sleep and Bearing hardly any of it, as in the
+box pile: what Bearing pays for most of the second half is keeping a still pile awake.
+
 ### 10,000-box pile
 
 Not run. Once it lands, Bearing and cannon-es each take a second or more a step, and three runs

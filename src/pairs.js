@@ -292,6 +292,7 @@ class Memory {
     this.capacity = 0;
     this.normal = new Float64Array(0);
     this.taken = new Uint8Array(0);   // matched already this step
+    this.key = new Int32Array(0);     // a manifold's parts, matched first: a part's number, or two parts' as i * nb + j
     this.points = new Uint8Array(0);
     this.pid = new Uint32Array(0);
     this.normalImpulse = new Float64Array(0);
@@ -306,6 +307,7 @@ class Memory {
     while (c < n) c *= 2;
     this.normal = resized(this.normal, 3 * c);
     this.taken = resized(this.taken, c);
+    this.key = resized(this.key, c);
     this.points = resized(this.points, c);
     this.pid = resized(this.pid, c * P);
     this.normalImpulse = resized(this.normalImpulse, c * P);

@@ -19,9 +19,10 @@
 // the body's own frame, and the mesh's tree (or the heightfield's grid) says
 // which triangles to test. Every triangle has two sides, as it does for
 // contacts, and seams make no difference to a query: a ray hits where the
-// triangles are.
+// triangles are. A compound is asked about each of its parts, and the
+// nearest, or any, answers for the body.
 
-import { Shape, Manifold, collide, SPHERE, CAPSULE, TRIANGLE } from './collide.js';
+import { Shape, Manifold, collide, Parts, placePart, reachAlong, SPHERE, CAPSULE, BOX, HULL as HULL_KIND, TRIANGLE } from './collide.js';
 import { load, PIXEL } from './contact.js';
 import { raycast as walk } from './tree.js';
 import { closest, Closest, radius } from './gjk.js';
@@ -31,7 +32,7 @@ import { rotate } from './core/math.js';
 import { apart } from './joints.js';
 
 const STATIC = 1, MOVING_TREE = 1;   // World's static type code; Broadphase's moving tree
-const MESH = 3;                      // World's shape code; shapes from it on are triangles
+const MESH = 5;                      // World's shape code; shapes from it on are triangles
 /** Every edge and corner a corner from both sides (mesh.js): pure geometry, with no seams. */
 const BARE = 63;
 
@@ -86,22 +87,42 @@ function inward(world, s, x, y, z, isPoint, out) {
   return rotate(world._rotation, 4 * s, x, y, z, true, out);
 }
 
-/** Slot s's shape where it is now, into out. */
+/** Slot s's shape where it is now, into out. Not for a body with parts: see shapeOf(). */
 export function place(world, s, out) {
   load(world, s, out);   // its kind and size; the axes load copies are the step's, so replaced:
   const p = world._position, s3 = 3 * s;
   return out.place(p[s3], p[s3 + 1], p[s3 + 2], world._rotation, 4 * s);
 }
 
-/** Half a placed shape's extent along each world axis, into out. */
+/** How many shapes slot s is made of: its parts, or 1, itself. */
+function shapes(world, s) {
+  const g = world._inner[s];
+  return g instanceof Parts ? g.list.length : 1;
+}
+
+/** Slot s's shape k (a part, or the body itself) where it is now, into out. */
+function shapeOf(world, s, k, out) {
+  const g = world._inner[s];
+  return g instanceof Parts ? placePart(g.list[k], world._position, 3 * s, world._rotation, 4 * s, out) : place(world, s, out);
+}
+
+/**
+ * Half a placed shape's extent along each world axis, into out: a box
+ * centred on its centre that holds it. A hull isn't symmetric about its
+ * centre, so it gets its farther reach each way.
+ */
 function extents(s, out) {
   const a = s.axes, h = s.half;
   if (s.kind === SPHERE) {
     out[0] = out[1] = out[2] = h[0];
   } else if (s.kind === CAPSULE) {
     for (let k = 0; k < 3; k++) out[k] = Math.abs(a[3 + k]) * h[1] + h[0];
-  } else {
+  } else if (s.kind === BOX) {
     for (let k = 0; k < 3; k++) out[k] = Math.abs(a[k]) * h[0] + Math.abs(a[3 + k]) * h[1] + Math.abs(a[6 + k]) * h[2];
+  } else {
+    for (let k = 0; k < 3; k++) {
+      out[k] = Math.max(reachAlong(s, k === 0 ? 1 : 0, k === 1 ? 1 : 0, k === 2 ? 1 : 0), reachAlong(s, k === 0 ? -1 : 0, k === 1 ? -1 : 0, k === 2 ? -1 : 0));
+    }
   }
   return out;
 }
@@ -123,10 +144,16 @@ function strays(world) {
   for (let i = 0; i < world._awakeCount; i++) {
     const s = world._awakeList[i];
     if (type[s] !== 0) continue;
-    extents(place(world, s, body), ext);
-    const c = body.center, o = 6 * bp.leaf[s];
-    if (c[0] - ext[0] < fat[o] || c[1] - ext[1] < fat[o + 1] || c[2] - ext[2] < fat[o + 2]
-      || c[0] + ext[0] > fat[o + 3] || c[1] + ext[1] > fat[o + 4] || c[2] + ext[2] > fat[o + 5]) list.push(s);
+    const o = 6 * bp.leaf[s];
+    for (let k = 0; k < shapes(world, s); k++) {
+      extents(shapeOf(world, s, k, body), ext);
+      const c = body.center;
+      if (c[0] - ext[0] < fat[o] || c[1] - ext[1] < fat[o + 1] || c[2] - ext[2] < fat[o + 2]
+        || c[0] + ext[0] > fat[o + 3] || c[1] + ext[1] > fat[o + 4] || c[2] + ext[2] > fat[o + 5]) {
+        list.push(s);
+        break;
+      }
+    }
   }
   world._straysAt = world._stepCount;
   world._straysEpoch = world._epoch;
@@ -186,6 +213,28 @@ export function rayShape(s, ox, oy, oz, dx, dy, dz, maxT) {
     }
     if (best === Infinity) return -1;
     t = best;
+  } else if (s.kind === HULL_KIND) {
+    // Its faces' half spaces: the ray is inside the hull where it is inside
+    // every one, so it enters at the last face it crosses going in, if that
+    // comes before the first it crosses going out.
+    const P = s.hull.planes;
+    let enter = -Infinity, exit = maxT, face = -1, within = true;
+    for (let f = 0; f < P.length; f += 4) {
+      const above = P[f] * px + P[f + 1] * py + P[f + 2] * pz - P[f + 3], along = P[f] * ux + P[f + 1] * uy + P[f + 2] * uz;
+      if (above > 0) within = false;
+      if (along === 0) {
+        if (above > 0) return -1;
+        continue;
+      }
+      const at = -above / along;
+      if (along < 0) {
+        if (at > enter) { enter = at; face = f; }
+      } else if (at < exit) exit = at;
+    }
+    if (within) return inside(dx, dy, dz);
+    if (face < 0 || enter < 0 || enter > exit) return -1;
+    t = enter;
+    nx = P[face]; ny = P[face + 1]; nz = P[face + 2];
   } else {
     if (Math.abs(px) <= h[0] && Math.abs(py) <= h[1] && Math.abs(pz) <= h[2]) return inside(dx, dy, dz);
     // The slabs: the ray enters the box where it has entered all three.
@@ -276,8 +325,13 @@ export function ray(world, ox, oy, oz, dx, dy, dz, maxT, mask, ignore, hit, near
     // A stray can be reached through the tree as well; it counts once.
     if (seen.has(s) || !wanted(world, s, mask, ignore)) return maxT;
     seen.add(s);
-    const t = world._shape[s] >= MESH ? rayLevel(world, s, ox, oy, oz, dx, dy, dz, maxT)
-      : rayShape(place(world, s, body), ox, oy, oz, dx, dy, dz, maxT);
+    let t = -1;
+    if (world._shape[s] >= MESH) t = rayLevel(world, s, ox, oy, oz, dx, dy, dz, maxT);
+    // The nearest of its parts: each one tried only out to the nearest so far, so a hit is nearer.
+    else for (let k = 0; k < shapes(world, s); k++) {
+      const at = rayShape(shapeOf(world, s, k, body), ox, oy, oz, dx, dy, dz, t < 0 ? maxT : t);
+      if (at >= 0) t = at;
+    }
     if (t < 0) return maxT;
     hit(s, t, normal);
     if (nearest) maxT = t;
@@ -348,7 +402,27 @@ function advance(cast, b, scale, ox, oy, oz, dx, dy, dz, maxT, sliding = false) 
 /** A shape's thinnest size, as a body's _size: what its tolerance scales with. */
 function size(s) {
   if (s.kind === SPHERE || s.kind === CAPSULE) return 2 * s.half[0];
+  if (s.kind === HULL_KIND) return s.hull.size;
   return 2 * Math.min(s.half[0], s.half[1], s.half[2]);
+}
+
+/** advance() against each shape of slot s, the nearest touch: its distance, or -1, with `normal` and `point` its. */
+function advanceBody(world, cast, s, ox, oy, oz, dx, dy, dz, maxT, sliding) {
+  const scale = scaleOf(world, s, cast);
+  let t = -1;
+  for (let k = 0; k < shapes(world, s); k++) {
+    const at = advance(cast, shapeOf(world, s, k, body), scale, ox, oy, oz, dx, dy, dz, t < 0 ? maxT : t, sliding);
+    if (at >= 0) t = at;
+  }
+  return t;
+}
+
+/** Whether `shape` touches slot s, any of its shapes, within the tolerance; the last contact found into `manifold`. */
+function collideBody(world, shape, s, tolerance) {
+  for (let k = 0; k < shapes(world, s); k++) {
+    if (collide(shape, shapeOf(world, s, k, body), 0, tolerance, manifold) > 0) return true;
+  }
+  return false;
 }
 
 /** The size a query against slot s scales its tolerance by: the smaller, as for a contact; a mesh has none of its own. */
@@ -394,7 +468,7 @@ export function shapeCast(world, cast, dx, dy, dz, maxT, mask, ignore, hit) {
   const visit = (s) => {
     if (!wanted(world, s, mask, ignore)) return maxT;
     const t = world._shape[s] >= MESH ? castLevel(world, cast, s, ox, oy, oz, dx, dy, dz, maxT, gx, gy, gz)
-      : advance(cast, place(world, s, body), scaleOf(world, s, cast), ox, oy, oz, dx, dy, dz, maxT);
+      : advanceBody(world, cast, s, ox, oy, oz, dx, dy, dz, maxT, false);
     if (t < 0) return maxT;
     best = s;
     maxT = t;
@@ -417,7 +491,7 @@ export function overlap(world, shape, mask, ignore, hit) {
     if (!wanted(world, s, mask, ignore)) return;
     const tolerance = scaleOf(world, s, shape) * PIXEL;
     if (world._shape[s] < MESH) {
-      if (collide(shape, place(world, s, body), 0, tolerance, manifold) > 0) hit(s);
+      if (collideBody(world, shape, s, tolerance)) hit(s);
       return;
     }
     // The shape's box in the body's own frame; any triangle in it that it touches.
@@ -460,9 +534,22 @@ export function sense(world, a, b, tolerance, out) {
     n[0] = -n[0]; n[1] = -n[1]; n[2] = -n[2];
     return out.count;
   }
-  const s = place(world, a, sensed);
-  if (!levelB) return collide(s, place(world, b, body), tolerance, tolerance, out);
-  // b's triangles under a's box, in b's own frame, as overlap() finds them.
+  if (!levelB) {
+    // The first of a's shapes and b's that touch.
+    for (let i = 0; i < shapes(world, a); i++) {
+      for (let j = 0; j < shapes(world, b); j++) {
+        if (collide(shapeOf(world, a, i, sensed), shapeOf(world, b, j, body), tolerance, tolerance, out) > 0) return out.count;
+      }
+    }
+    return 0;
+  }
+  // b's triangles under each of a's shapes' boxes, in b's own frame, as overlap() finds them.
+  for (let i = 0; i < shapes(world, a) && out.count === 0; i++) senseLevel(world, shapeOf(world, a, i, sensed), b, tolerance, out);
+  return out.count;
+}
+
+/** sense() for shape s against the triangles of level slot b. */
+function senseLevel(world, s, b, tolerance, out) {
   extents(s, ext);
   inward(world, b, s.center[0], s.center[1], s.center[2], true, local);
   const lx = local[0], ly = local[1], lz = local[2];
@@ -470,7 +557,6 @@ export function sense(world, a, b, tolerance, out) {
   senseWorld = world; senseShape = s; senseSlot = b; senseTolerance = tolerance; senseOut = out;
   world._geometry[b].triangles(lx - half[0], ly - half[1], lz - half[2], lx + half[0], ly + half[1], lz + half[2], senseTriangle);
   senseWorld = null; senseShape = null; senseOut = null;
-  return out.count;
 }
 
 function senseTriangle(t) {
@@ -535,7 +621,7 @@ function sweepVisit(s) {
   const world = sweepWorld;
   if (!blocks(world, sweepSelf, s, sweepOther)) return sweepMax;
   const t = world._shape[s] >= MESH ? sweepLevel(s)
-    : advance(sweepShape, place(world, s, body), scaleOf(world, s, sweepShape), sweepOx, sweepOy, sweepOz, sweepDx, sweepDy, sweepDz, sweepMax, true);
+    : advanceBody(world, sweepShape, s, sweepOx, sweepOy, sweepOz, sweepDx, sweepDy, sweepDz, sweepMax, true);
   if (t < 0) return sweepMax;
   sweepBest = s;
   sweepMax = t;
@@ -600,7 +686,9 @@ function deepVisit(s) {
   if (!blocks(world, deepSelf, s, -1)) return;
   deepTolerance = scaleOf(world, s, deepShape) * PIXEL;
   if (world._shape[s] < MESH) {
-    if (collide(deepShape, place(world, s, body), 0, deepTolerance, manifold) > 0) deepKeep(s);
+    for (let k = 0; k < shapes(world, s); k++) {
+      if (collide(deepShape, shapeOf(world, s, k, body), 0, deepTolerance, manifold) > 0) deepKeep(s);
+    }
     return;
   }
   const c = deepShape.center;

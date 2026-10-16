@@ -50,7 +50,7 @@ These hold everywhere, so one learned is one learned for good.
 <a id="contents"></a>
 ## Contents
 
-[World](#world-class) · [Body](#body) · [Joint](#joint) · [Meshes and heightfields](#meshes) · [Character bodies](#characters) · [Joints](#joints) · [Contacts](#contacts) · [Contact events and sensors](#events) · [Layers and masks](#layers) · [Sleeping](#sleeping) · [Queries](#queries) · [Determinism](#determinism) · [Limits](#limits)
+[World](#world-class) · [Body](#body) · [Joint](#joint) · [Hulls and compounds](#hulls) · [Meshes and heightfields](#meshes) · [Character bodies](#characters) · [Joints](#joints) · [Contacts](#contacts) · [Contact events and sensors](#events) · [Layers and masks](#layers) · [Sleeping](#sleeping) · [Queries](#queries) · [Determinism](#determinism) · [Limits](#limits)
 
 <a id="index"></a>
 ## Index
@@ -61,11 +61,13 @@ Every call, setting and entry, A to Z by its name.
 
 **B** &nbsp; [`world.body()`](#world-body) · [`world.bodyCount`](#world-bodycount) · [`world.bodyOf()`](#world-bodyof)
 
-**C** &nbsp; [Character bodies](#characters) · [Contact events and sensors](#events) · [Contacts](#contacts) · [`world.contacts()`](#world-contacts)
+**C** &nbsp; [`body.centerOfMass`](#body-centerofmass) · [Character bodies](#characters) · [Contact events and sensors](#events) · [Contacts](#contacts) · [`world.contacts()`](#world-contacts)
 
 **D** &nbsp; [`body.destroy()`](#body-destroy) · [`joint.destroy()`](#joint-destroy) · [`world.destroy()`](#world-destroy) · [Determinism](#determinism)
 
 **G** &nbsp; [`world.gravity`](#world-gravity) · [`world.groundOf()`](#world-groundof)
+
+**H** &nbsp; [Hulls and compounds](#hulls)
 
 **I** &nbsp; [`body.id`](#body-id) · [`joint.id`](#joint-id) · [`body.inertia`](#body-inertia)
 
@@ -295,19 +297,21 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 
 | Option | Default | Meaning |
 |---|---|---|
-| `type` | `'dynamic'`; `'static'` for a mesh or heightfield | `'dynamic'`: moved by gravity, and later by contacts and forces. `'static'`: never moves unless you move it, as the ground. `'kinematic'`: moves at the velocity you give it, ignoring gravity, as a lift or a moving platform. `'character'`: moves at the velocity you give it, but collides as a person walking does; see [Character bodies](#characters). A mesh or heightfield can't be dynamic or a character. |
-| `shape` | `'box'` | `'box'`, `'sphere'`, `'capsule'`, `'mesh'` or `'heightfield'`; the last two are level geometry, see [Meshes and heightfields](#meshes). |
+| `type` | `'dynamic'`; `'static'` for a mesh or heightfield | `'dynamic'`: moved by gravity, and later by contacts and forces. `'static'`: never moves unless you move it, as the ground. `'kinematic'`: moves at the velocity you give it, ignoring gravity, as a lift or a moving platform. `'character'`: moves at the velocity you give it, but collides as a person walking does; see [Character bodies](#characters). A mesh or heightfield can't be dynamic or a character; a hull or compound can't be a character. |
+| `shape` | `'box'` | `'box'`, `'sphere'`, `'capsule'`, `'hull'`, `'compound'`, `'mesh'` or `'heightfield'`. A hull is the convex solid round some points, and a compound several shapes as one body: see [Hulls and compounds](#hulls). The last two are level geometry: see [Meshes and heightfields](#meshes). |
 | `size` | `[1, 1, 1]` | A box's full width, height and depth, along its own x, y and z, in metres. |
 | `radius` | `0.5` | A sphere's or capsule's radius, in metres. |
 | `height` | `2` | A capsule's full height, tip to tip, along its own y, in metres. At least twice `radius`. The defaults are Godot's capsule, about a person. |
-| `vertices` | `[]` | A mesh's corners, three numbers each, in metres, in its own frame. Any array or typed array. |
+| `vertices` | a hull's: a 1 m cube's corners; a mesh's: `[]` | A hull's points, or a mesh's corners, three numbers each, in metres, in its own frame. Any array or typed array. A hull's must span a solid: 4 or more, not all in one plane. |
 | `indices` | `[]` | A mesh's triangles, three corner numbers each, counting from 0. |
 | `heights` | `[0, 0, 0, 0]` | A heightfield's heights, in metres, row by row: `columns` along x to a row, rows along z. The default is a flat 1 m square. |
 | `columns` | `2` | How many heights to a heightfield's row: 2 or more. |
 | `spacing` | `1` | Metres between a heightfield's neighbouring heights, along x and z. |
+| `parts` | one 1 m box | A compound's shapes: a list of one or more, each `{ shape, size, radius, height, vertices, position, rotation, density }`. `shape` is `'box'` (the default), `'sphere'`, `'capsule'` or `'hull'`, sized by the same options and defaults as a body of that shape; `position` and `rotation` place it from the body's origin and against its rotation; `density` is the body's unless given. See [Hulls and compounds](#hulls). |
 | `density` | `1000` | kg/m³; water's. The mass is the density times the shape's volume. Not for a mesh or heightfield, which encloses none. |
 | `mass` | from `density` | kg. Give this instead of `density` for a body of a known weight. Not for a mesh or heightfield. |
-| `inertia` | from the shape and mass | The moments of inertia `[x, y, z]` about the body's own axes, in kg·m²: how hard it is to turn about each. Worked out for a solid shape; give it for one that isn't, such as a hollow ball. `null` goes back to working it out. Not for a mesh or heightfield. |
+| `inertia` | from the shape and mass | The moments of inertia `[x, y, z]` about the body's own axes, in kg·m²: how hard it is to turn about each. Worked out for a solid shape, a hull's or compound's about its principal axes (see [Hulls and compounds](#hulls)); give it for one that isn't solid, such as a hollow ball. `null` goes back to working it out. Not for a mesh or heightfield. |
+| `centerOfMass` | from the shape | Where its mass is centred, `[x, y, z]` in metres, in its own frame: a box's, ball's or capsule's centre, and worked out for a hull or compound. Give it to move it, as a car body's is lowered so it doesn't roll over on a turn; the inertia stays the shape's, about its own centre of mass, unless `inertia` is given too. `null` goes back to the shape's. Not for a mesh, heightfield or character. |
 | `friction` | `0.5` | How much sideways push a contact can resist for each newton pressing it together: 0 is ice. The middle of everyday dry materials, about 0.3 to 0.8. |
 | `restitution` | `0` | How much of the speed it hits at comes back as a bounce, from 0 (none) to 1 (all of it). |
 | `damping` | `0` | Velocity lost per second, as air drag would take it, in 1/s. 0 is none. |
@@ -319,14 +323,14 @@ Adds a body and returns its [handle](#body). With no options it is a dynamic 1 m
 | `lockRotation` | `[false, false, false]` | The world axes it never turns about, x, y and z: `[true, false, true]` keeps it upright. See [Character bodies](#characters). |
 | `maxSlope` | `π / 4` (45°) | A character's steepest walkable ground, in radians, from 0 to π/2: about where walking turns into climbing, the slope friction 1 can hold. Characters only. |
 | `stepHeight` | its height ÷ 9 | The tallest step a character walks up, in metres: a capsule's height, a box's, or a sphere's diameter, over 9. Building codes cap a stair's rise near 0.2 m, a ninth of a 1.8 m person, so a 20 cm toy climbs 2.2 cm. `null` follows the size again. Characters only. |
-| `position` | `[0, 0, 0]` | Where the body's centre is, in metres. |
+| `position` | `[0, 0, 0]` | Where the body's origin is, in metres: a box's, ball's or capsule's centre, and the point a hull's points and a compound's parts are given from. |
 | `rotation` | `[0, 0, 0, 1]` | A quaternion `[x, y, z, w]`, normalized as it comes in. |
 | `velocity` | `[0, 0, 0]` | m/s. Not for a static body. |
 | `angularVelocity` | `[0, 0, 0]` | rad/s about each world axis. Not for a static body. A body other than a sphere spins at most half a turn a step, which the step holds it to; see [Contacts](#contacts). |
 
 Returns: a [`Body`](#body).
 
-Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, lockRotation, maxSlope, stepHeight, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static', 'kinematic' or 'character', got …`; `addBody: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got …`; `addBody: a <shape> has no <option>`; `addBody: type must be 'static' or 'kinematic' for a <shape>, got …`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: vertices must be finite numbers, three to a vertex, got …`; `addBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `addBody: columns must be a whole number, 2 or more, got …`; `addBody: spacing must be a positive number, got …`; `addBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `addBody: friction must be 0 or more, got …`; `addBody: restitution must be from 0 to 1, got …`; `addBody: damping must be 0 or more, got …`; `addBody: angularDamping must be 0 or more, got …`; `addBody: gravityScale must be a finite number, got …`; `addBody: layers must be a whole number that fits in 32 bits, got …`; `addBody: mask must be a whole number that fits in 32 bits, got …`; `addBody: sensor must be true or false, got …`; `addBody: lockRotation must be 3 true or false values, got …`; `addBody: maxSlope must be an angle from 0 to π/2, in radians, got …`; `addBody: stepHeight must be 0 or more, or null to follow the size, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a <type> body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
+Throws: `addBody: this world was destroyed`; `addBody: options must be an object, got …`; `addBody: unknown option '…' (did you mean '…'?)`; `addBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, parts, density, mass, inertia, centerOfMass, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, lockRotation, maxSlope, stepHeight, position, rotation, velocity, angularVelocity)`; `addBody: type must be 'dynamic', 'static', 'kinematic' or 'character', got …`; `addBody: shape must be 'box', 'sphere', 'capsule', 'hull', 'compound', 'mesh' or 'heightfield', got …`; `addBody: a <shape> has no <option>`; `addBody: type must be 'static' or 'kinematic' for a <shape>, got …`; `addBody: size must be 3 positive numbers, got …`; `addBody: radius must be a positive number, got …`; `addBody: height must be a positive number, got …`; `addBody: height must be at least twice radius (…), got …`; `addBody: vertices must be finite numbers, three to a vertex, got …`; `addBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `addBody: columns must be a whole number, 2 or more, got …`; `addBody: spacing must be a positive number, got …`; `addBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `addBody: vertices must span a solid (4 points not in one plane), got …`; `addBody: type must be 'dynamic', 'static' or 'kinematic' for a <shape>, got …`; `addBody: parts must be a list of one or more parts, got …`; `addBody: parts[…] must be an object, got …`; `addBody: parts[…]: unknown option '…' (did you mean '…'?)`; `addBody: parts[…]: unknown option '…' (the options are shape, size, radius, height, vertices, position, rotation, density)`; `addBody: parts[…].shape must be 'box', 'sphere', 'capsule' or 'hull', got …`; `addBody: parts[…]: a <shape> has no <option>`; `addBody: parts[…].size must be 3 positive numbers, got …`; `addBody: parts[…].radius must be a positive number, got …`; `addBody: parts[…].height must be a positive number, got …`; `addBody: parts[…].height must be at least twice radius (…), got …`; `addBody: parts[…].vertices must be finite numbers, three to a vertex, got …`; `addBody: parts[…].vertices must span a solid (4 points not in one plane), got …`; `addBody: parts[…].position must be 3 finite numbers, got …`; `addBody: parts[…].rotation must be 4 finite numbers, not all zero, got …`; `addBody: parts[…].density must be a positive number, got …`; `addBody: give mass or density, not both`; `addBody: mass must be a positive number, got …`; `addBody: density must be a positive number, got …`; `addBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `addBody: centerOfMass must be 3 finite numbers, got …`; `addBody: a character body has no centerOfMass`; `addBody: friction must be 0 or more, got …`; `addBody: restitution must be from 0 to 1, got …`; `addBody: damping must be 0 or more, got …`; `addBody: angularDamping must be 0 or more, got …`; `addBody: gravityScale must be a finite number, got …`; `addBody: layers must be a whole number that fits in 32 bits, got …`; `addBody: mask must be a whole number that fits in 32 bits, got …`; `addBody: sensor must be true or false, got …`; `addBody: lockRotation must be 3 true or false values, got …`; `addBody: maxSlope must be an angle from 0 to π/2, in radians, got …`; `addBody: stepHeight must be 0 or more, or null to follow the size, got …`; `addBody: position must be 3 finite numbers, got …`; `addBody: rotation must be 4 finite numbers, not all zero, got …`; `addBody: a <type> body has no <option>`; `addBody: velocity must be 3 finite numbers, got …`; `addBody: angularVelocity must be 3 finite numbers, got …`; `addBody: a world holds at most 16777216 bodies (the slot field of an id is 24 bits)`.
 
 ```js
 const ground = world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
@@ -347,7 +351,7 @@ has (`got 10 numbers`), rather than every number in it.
 Changes any of the options [`addBody`](#world-addbody) took, with the same names, defaults and
 checks, and leaves the rest as they are.
 
-Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, density, mass, inertia, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, lockRotation, maxSlope, stepHeight, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static', 'kinematic' or 'character', got …`; `setBody: shape must be 'box', 'sphere', 'capsule', 'mesh' or 'heightfield', got …`; `setBody: a <shape> has no <option>`; `setBody: type must be 'static' or 'kinematic' for a <shape>, got …`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: vertices must be finite numbers, three to a vertex, got …`; `setBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `setBody: columns must be a whole number, 2 or more, got …`; `setBody: spacing must be a positive number, got …`; `setBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `setBody: friction must be 0 or more, got …`; `setBody: restitution must be from 0 to 1, got …`; `setBody: damping must be 0 or more, got …`; `setBody: angularDamping must be 0 or more, got …`; `setBody: gravityScale must be a finite number, got …`; `setBody: layers must be a whole number that fits in 32 bits, got …`; `setBody: mask must be a whole number that fits in 32 bits, got …`; `setBody: sensor must be true or false, got …`; `setBody: lockRotation must be 3 true or false values, got …`; `setBody: maxSlope must be an angle from 0 to π/2, in radians, got …`; `setBody: stepHeight must be 0 or more, or null to follow the size, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a <type> body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
+Throws: `setBody: this world was destroyed`; `setBody: body must be a Body, got …`; `setBody: that body belongs to another world`; `setBody: this body was removed`; `setBody: changes must be an object, got …`; `setBody: unknown option '…' (did you mean '…'?)`; `setBody: unknown option '…' (the options are type, shape, size, radius, height, vertices, indices, heights, columns, spacing, parts, density, mass, inertia, centerOfMass, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, lockRotation, maxSlope, stepHeight, position, rotation, velocity, angularVelocity)`; `setBody: type must be 'dynamic', 'static', 'kinematic' or 'character', got …`; `setBody: shape must be 'box', 'sphere', 'capsule', 'hull', 'compound', 'mesh' or 'heightfield', got …`; `setBody: a <shape> has no <option>`; `setBody: type must be 'static' or 'kinematic' for a <shape>, got …`; `setBody: size must be 3 positive numbers, got …`; `setBody: radius must be a positive number, got …`; `setBody: height must be a positive number, got …`; `setBody: height must be at least twice radius (…), got …`; `setBody: vertices must be finite numbers, three to a vertex, got …`; `setBody: indices must be whole numbers below the vertex count (…), three to a triangle, got …`; `setBody: columns must be a whole number, 2 or more, got …`; `setBody: spacing must be a positive number, got …`; `setBody: heights must be finite numbers, rows of columns (…), 2 rows or more, got …`; `setBody: vertices must span a solid (4 points not in one plane), got …`; `setBody: type must be 'dynamic', 'static' or 'kinematic' for a <shape>, got …`; `setBody: parts must be a list of one or more parts, got …`; `setBody: parts[…] must be an object, got …`; `setBody: parts[…]: unknown option '…' (did you mean '…'?)`; `setBody: parts[…]: unknown option '…' (the options are shape, size, radius, height, vertices, position, rotation, density)`; `setBody: parts[…].shape must be 'box', 'sphere', 'capsule' or 'hull', got …`; `setBody: parts[…]: a <shape> has no <option>`; `setBody: parts[…].size must be 3 positive numbers, got …`; `setBody: parts[…].radius must be a positive number, got …`; `setBody: parts[…].height must be a positive number, got …`; `setBody: parts[…].height must be at least twice radius (…), got …`; `setBody: parts[…].vertices must be finite numbers, three to a vertex, got …`; `setBody: parts[…].vertices must span a solid (4 points not in one plane), got …`; `setBody: parts[…].position must be 3 finite numbers, got …`; `setBody: parts[…].rotation must be 4 finite numbers, not all zero, got …`; `setBody: parts[…].density must be a positive number, got …`; `setBody: give mass or density, not both`; `setBody: mass must be a positive number, got …`; `setBody: density must be a positive number, got …`; `setBody: inertia must be 3 positive numbers, or null to follow the shape, got …`; `setBody: centerOfMass must be 3 finite numbers, got …`; `setBody: a character body has no centerOfMass`; `setBody: friction must be 0 or more, got …`; `setBody: restitution must be from 0 to 1, got …`; `setBody: damping must be 0 or more, got …`; `setBody: angularDamping must be 0 or more, got …`; `setBody: gravityScale must be a finite number, got …`; `setBody: layers must be a whole number that fits in 32 bits, got …`; `setBody: mask must be a whole number that fits in 32 bits, got …`; `setBody: sensor must be true or false, got …`; `setBody: lockRotation must be 3 true or false values, got …`; `setBody: maxSlope must be an angle from 0 to π/2, in radians, got …`; `setBody: stepHeight must be 0 or more, or null to follow the size, got …`; `setBody: position must be 3 finite numbers, got …`; `setBody: rotation must be 4 finite numbers, not all zero, got …`; `setBody: a <type> body has no <option>`; `setBody: velocity must be 3 finite numbers, got …`; `setBody: angularVelocity must be 3 finite numbers, got …`.
 
 ```js
 world.setBody(crate, { size: [2, 1, 1] });           // twice as long, and twice as heavy
@@ -826,9 +830,11 @@ kept, and used if it is made dynamic.
 <a id="body-inertia"></a>
 ### `body.inertia` → `[x, y, z]`
 
-The body's moments of inertia about its own x, y and z axes, in kg·m², as a frozen copy: how hard
-it is to turn about each. Worked out from the shape and mass, or the `inertia` it was given. Read
-only; change it with [`setBody`](#world-setbody).
+The body's principal moments of inertia, in kg·m², as a frozen copy: how hard it is to turn about
+each of three axes at right angles. For a box, ball or capsule, or a body given `inertia`, those
+are its own x, y and z axes; for a hull or compound, its principal axes (see
+[Hulls and compounds](#hulls)). Worked out from the shape and mass, or the `inertia` it was given.
+Read only; change it with [`setBody`](#world-setbody).
 
 Throws: `inertia: this world was destroyed`; `inertia: this body was removed`; `body.inertia is read only; use setBody(body, { inertia })`.
 
@@ -843,8 +849,9 @@ its parts about its centre.
 <a id="body-position"></a>
 ### `body.position` → `[x, y, z]`
 
-Where the body's centre is, in metres, as a frozen copy. Read only; move it with
-[`setPosition`](#body-setposition).
+Where the body's origin is, in metres, as a frozen copy: a box's, ball's or capsule's centre, and
+the point a hull's points and a compound's parts are given from. Where its mass is centred is
+[`centerOfMass`](#body-centerofmass). Read only; move it with [`setPosition`](#body-setposition).
 
 Throws: `position: this world was destroyed`; `position: this body was removed`; `body.position is read only; use setPosition(x, y, z)`.
 
@@ -854,6 +861,24 @@ if (ball.position[1] < -100) ball.setPosition(0, 5, 0);
 
 Notes: frozen, so `ball.position[1] = 5` throws in a module rather than changing a copy for
 nothing. For many bodies at once, read [`world.transforms`](#world-transforms).
+
+<a id="body-centerofmass"></a>
+### `body.centerOfMass` → `[x, y, z]`
+
+Where the body's mass is centred, in the world, in metres, as a frozen copy: the point it turns
+about, and the point its `velocity` is the velocity of. The same as `position` for a box, ball or
+capsule unless it was given a `centerOfMass`. Read only; move it with
+[`setBody`](#world-setbody).
+
+Throws: `centerOfMass: this world was destroyed`; `centerOfMass: this body was removed`; `body.centerOfMass is read only; use setBody(body, { centerOfMass })`.
+
+```js
+const hammer = world.addBody({
+  shape: 'compound',
+  parts: [{ shape: 'capsule', radius: 0.02, height: 0.3 }, { size: [0.12, 0.04, 0.04], position: [0, 0.16, 0], density: 7800 }],
+});
+console.log(hammer.centerOfMass);   // [0, 0.129, 0]: most of its mass is in the head
+```
 
 <a id="body-rotation"></a>
 ### `body.rotation` → `[x, y, z, w]`
@@ -1119,6 +1144,75 @@ Throws: `destroy: this world was destroyed`.
 const tie = world.addJoint({ a: ball, b: crate });
 tie.destroy();
 ```
+
+<a id="hulls"></a>
+## Hulls and compounds
+
+Shapes that aren't a box, a ball or a capsule, for bodies that move: rocks, crates with bevelled
+edges, wedges, car bodies, and tools, furniture and anything else made of several pieces.
+
+```js
+// A rock: any points; the hull keeps the corners of the convex solid round them.
+const rock = world.addBody({ shape: 'hull', vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0.6, 0.6, 0.6], position: [0, 3, 0] });
+// A hammer: a wooden handle and a steel head, as one rigid body.
+const hammer = world.addBody({
+  shape: 'compound',
+  parts: [
+    { shape: 'capsule', radius: 0.02, height: 0.3, density: 700 },
+    { shape: 'box', size: [0.12, 0.04, 0.04], position: [0, 0.16, 0], density: 7800 },
+  ],
+  position: [2, 1, 0],
+});
+```
+
+- **A hull is the skin round its points.** Give any points, three numbers each, in the body's own
+  frame: a model's vertices, say, from [`readGlb`](#readglb). The hull is the smallest convex solid
+  that holds them all, what a sheet of rubber stretched round them would make, found by quickhull
+  (Barber, Dobkin and Huhdanpaa, 1996). Points inside it, or on its edges and faces, are dropped,
+  and triangles lying in one plane are merged, so a cube's 8 corners make 6 square faces, and a
+  cube made as a hull stacks exactly as a box does. [`bodyOf`](#world-bodyof) gives back the
+  corners it kept.
+- **A hull is convex.** An L, a bowl or a cup comes out as its hull, filled in. Make it a compound
+  of convex parts instead.
+- **Its points must span a solid**: four or more, not all in one plane, or it throws. A flat hull
+  has no volume, so no mass.
+- **Building one costs once.** It happens in `addBody`, and in `setBody` when `vertices` change,
+  never in a step: 200 points take about 3 ms on an i7-1260P. A step's cost grows with a hull's
+  corners and faces: a pile of 60 hulls of about 10 corners each cost 1.5 times the same pile of
+  boxes.
+- **A compound is several shapes as one body.** Its `parts` are boxes, spheres, capsules and hulls,
+  each placed from the body's origin. They move as one, each collides as a shape of its own, and
+  they never collide with each other. Each part's `density` is its own, or the body's; a `mass`
+  given to the body scales them all to it. A part can't be a mesh, a heightfield or another
+  compound.
+- **The centre of mass is worked out, and the body turns about it.** A hull's from its volume, a
+  compound's from its parts' masses. A thrown hammer turns about a point near its head, and its
+  handle swings round it. `position` and [`world.transforms`](#world-transforms) stay at the
+  body's origin, where its points and parts are measured from, so a renderer draws a model where
+  its own file puts it; [`centerOfMass`](#body-centerofmass) says where its mass is.
+- **Its inertia is about its principal axes.** A lopsided shape's inertia isn't three numbers
+  about its own axes, but it is about three others at right angles, its principal axes, the ones
+  it spins about steadily. Bearing finds them when the body is made (Jacobi's method, from square
+  roots only, so the same on every machine), and [`inertia`](#body-inertia) gives the moments
+  about them.
+- **Velocity is the centre of mass's.** `velocity` and [`setVelocity`](#body-setvelocity) are how
+  fast the centre of mass moves, as in Rapier and Jolt, and a force or impulse with no `point` acts
+  there, so it never spins the body.
+- **`centerOfMass` moves it,** on any body that isn't level geometry or a character: a car body's,
+  lowered so it doesn't roll over on a turn. The inertia stays the shape's, about its own centre of
+  mass, unless `inertia` is given too. A character's casts take its shape from its centre, so it
+  can't have one.
+- **Hulls collide by separating axes**, as boxes do: each face's direction, and the pairs of edges
+  that can meet (Gregorius, 2013), then the face most against the other clipped to its sides for
+  up to four points. A hull made of a box's corners gives the box's contacts, within the contact
+  tolerance.
+- **A compound's parts are tried in pairs.** Each part of one body against each part of the other,
+  where their reaches overlap: fine for a hammer or a chair, and a body of dozens of parts against
+  another costs the two counts multiplied.
+- **Not for characters or queries.** A character can't be a hull or compound: its casts and its
+  feet are worked out for a box, ball or capsule. A query's shape is a box, ball or capsule too:
+  a hull is built from its points by quickhull, too dear to do for each query. Queries see hulls
+  and compounds as bodies like any other.
 
 <a id="meshes"></a>
 ## Meshes and heightfields

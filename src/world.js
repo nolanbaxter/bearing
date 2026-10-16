@@ -26,7 +26,8 @@ import {
 } from './core/check.js';
 import { rotate } from './core/math.js';
 import { Slots, resized, MAX_ID, MAX_SLOTS } from './core/slots.js';
-import { volume, inertia as shapeInertia } from './shapes.js';
+import { volume, inertia as shapeInertia, hullMass, shifted, turnedTensor, matrixOf, principal } from './shapes.js';
+import { build } from './hull.js';
 import {
   Contacts, PIXEL, narrow, store, inertias, prepare, makeSoft, warmStart, solve, restitution, touched,
 } from './contact.js';
@@ -37,12 +38,14 @@ import {
 import { Broadphase } from './broadphase.js';
 import { Pairs } from './pairs.js';
 import { Body } from './body.js';
-import { Shape, Manifold, SPHERE as SPHERE_KIND, CAPSULE as CAPSULE_KIND, BOX as BOX_KIND } from './collide.js';
+import {
+  Shape, Manifold, Part, Parts, SPHERE as SPHERE_KIND, CAPSULE as CAPSULE_KIND, BOX as BOX_KIND, HULL as HULL_KIND,
+} from './collide.js';
 import { ray, shapeCast as cast, overlap as overlapping, sense } from './query.js';
 import { Events, END } from './events.js';
 import { walk, settle, CHARACTER } from './character.js';
 import { lockedInverse } from './contact.js';
-import { cos } from './core/math.js';
+import { cos, quatMultiply } from './core/math.js';
 import { Mesh, Heightfield } from './mesh.js';
 
 const TYPES = ['dynamic', 'static', 'kinematic', 'character'];
@@ -50,16 +53,25 @@ const DYNAMIC = 0, STATIC = 1, KINEMATIC = 2;   // and CHARACTER, 3, from charac
 /** Options only a character has. */
 const WALKING = ['maxSlope', 'stepHeight'];
 
-const SHAPES = ['box', 'sphere', 'capsule', 'mesh', 'heightfield'];
-const BOX = 0, SPHERE = 1, CAPSULE = 2, MESH = 3;   // a heightfield is 4: shape >= MESH is level geometry
-/** What a query's shape can be: anything a body can be but level geometry. */
+const SHAPES = ['box', 'sphere', 'capsule', 'hull', 'compound', 'mesh', 'heightfield'];
+const BOX = 0, SPHERE = 1, CAPSULE = 2, HULL = 3, COMPOUND = 4, MESH = 5;   // a heightfield is 6: shape >= MESH is level geometry
+/**
+ * What a query's shape can be: a box, ball or capsule. A hull is built from
+ * its points by quickhull, too dear to do afresh for each query.
+ */
 const QUERY_SHAPES = ['box', 'sphere', 'capsule'];
 /** Which sizes each shape has; giving one another shape has throws. */
 const SHAPE_SIZES = {
-  box: ['size'], sphere: ['radius'], capsule: ['radius', 'height'],
+  box: ['size'], sphere: ['radius'], capsule: ['radius', 'height'], hull: ['vertices'], compound: ['parts'],
   mesh: ['vertices', 'indices'], heightfield: ['heights', 'columns', 'spacing'],
 };
-const SIZES = ['size', 'radius', 'height', 'vertices', 'indices', 'heights', 'columns', 'spacing'];
+const SIZES = ['size', 'radius', 'height', 'vertices', 'indices', 'heights', 'columns', 'spacing', 'parts'];
+/** What a compound's part can be, and what it takes. */
+const PART_SHAPES = ['box', 'sphere', 'capsule', 'hull'];
+const PART_OPTIONS = ['shape', 'size', 'radius', 'height', 'vertices', 'position', 'rotation', 'density'];
+/** A 1 m cube's corners: a hull with no vertices given starts as the box a body starts as. */
+const CUBE_CORNERS = [-0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5,
+  -0.5, -0.5, 0.5, 0.5, -0.5, 0.5, -0.5, 0.5, 0.5, 0.5, 0.5, 0.5];
 
 const WORLD_OPTIONS = ['gravity', 'substeps', 'sleeping'];
 const RAY_OPTIONS = ['maxDistance', 'mask', 'ignore'];
@@ -123,11 +135,12 @@ const SLEEP_TIME = 1;
 // of thin boxes whipping its end blew apart. Box2D 3 and Jolt cap spin at a
 // quarter turn a step (47 rad/s at 60 Hz); half a turn (188 rad/s at 60 Hz)
 // held every case measured, and scales with the step. A sphere's contacts
-// don't depend on how it spins, so it spins as fast as it is made to.
+// don't depend on how it spins, so it spins as fast as it is made to, unless
+// its centre of mass is off its centre and its centre swings round.
 const SPIN = Math.PI;
 const BODY_OPTIONS = [
-  'type', 'shape', 'size', 'radius', 'height', 'vertices', 'indices', 'heights', 'columns', 'spacing',
-  'density', 'mass', 'inertia',
+  'type', 'shape', 'size', 'radius', 'height', 'vertices', 'indices', 'heights', 'columns', 'spacing', 'parts',
+  'density', 'mass', 'inertia', 'centerOfMass',
   'friction', 'restitution', 'damping', 'angularDamping', 'gravityScale', 'layers', 'mask', 'sensor',
   'lockRotation', 'maxSlope', 'stepHeight',
   'position', 'rotation', 'velocity', 'angularVelocity',
@@ -146,7 +159,7 @@ const DEFAULTS = Object.freeze({
   // A mesh starts empty; a heightfield as a flat 1 m square, two samples
   // by two, a metre apart, as a box starts as a 1 m cube.
   vertices: [], indices: [], heights: [0, 0, 0, 0], columns: 2, spacing: 1, geometry: null,
-  density: 1000, mass: 0, massGiven: false, inertia: [0, 0, 0], inertiaGiven: false,
+  density: 1000, mass: 0, massGiven: false, inertia: [0, 0, 0], inertiaGiven: false, centerOfMass: null,
   friction: 0.5, restitution: 0, damping: 0, angularDamping: 0, gravityScale: 1,
   // In the first layer, and colliding with all 32: everything collides with
   // everything until told otherwise (rule 110).
@@ -171,7 +184,15 @@ const COLUMNS = [
   ['_dims', Float64Array, 3],        // box: size; sphere: radius; capsule: radius, height
   ['_density', Float64Array, 1],
   ['_mass', Float64Array, 1],
-  ['_inertia', Float64Array, 3],     // principal moments about the body's own axes, kg·m²
+  ['_inertia', Float64Array, 3],     // principal moments, kg·m², about the axes the step turns the body by
+  // A hull's or compound's centre of mass is off its origin, and its principal
+  // axes off its own: the step works from those (see _pose). Both are zero
+  // turns and offsets for a box, ball or capsule, unless given a centre of mass.
+  ['_offset', Float64Array, 3],      // the centre of mass from the origin, along the principal axes
+  ['_frame', Float64Array, 4],       // the principal axes as a turn from the body's own: q = rotation ⊗ frame
+  ['_framed', Uint8Array, 1],        // 1 if either is not zero
+  ['_com', Float64Array, 3],         // the centre of mass in the body's own frame, as given or worked out
+  ['_comGiven', Uint8Array, 1],
   ['_invInertia', Float64Array, 3],
   ['_force', Float64Array, 3],       // applied since the last step, cleared by it
   ['_torque', Float64Array, 3],
@@ -237,8 +258,18 @@ export class World {
     this._gravity = o.gravity === undefined ? [...GRAVITY] : vec3('World', 'gravity', o.gravity);
     this._slots = new Slots();
     for (const [name, Type] of COLUMNS) this[name] = new Type(0);
-    /** A mesh's or heightfield's triangles (mesh.js), by slot; null for any other shape. */
+    /**
+     * By slot, the shape as given: a mesh's or heightfield's triangles
+     * (mesh.js), a hull ({ hull }, in the body's own frame) or a compound's
+     * parts ({ parts }); null for a box, ball or capsule.
+     */
     this._geometry = [];
+    /**
+     * By slot, the shape as the step sees it, in the frame of its centre of
+     * mass and principal axes: a hull's Hull, or Parts for a compound or a
+     * box, ball or capsule given a centre of mass; else null.
+     */
+    this._inner = [];
     /**
      * Slots with a force or torque waiting for the next step. A list, so a step
      * with nothing applied checks nothing (rule 28), however many bodies there
@@ -298,6 +329,8 @@ export class World {
     this._sensedCount = 0;
     this._sensorCount = 0;
     this._characterCount = 0;
+    /** Bodies whose centre of mass or principal axes are off their origin's: transforms convert only those. */
+    this._framedCount = 0;
     /** Steps that asked about sensor pairs: for the off-means-off test, which reads it. */
     this._sensorPasses = 0;
     /** Steps that moved characters: for the same. */
@@ -453,11 +486,14 @@ export class World {
       out.columns = g.columns;
       out.spacing = g.spacing;
     } else {
-      for (const k of SHAPE_SIZES[spec.shape]) out[k] = k === 'size' ? [...spec.size] : spec[k];
+      if (spec.shape === 'hull') out.vertices = Array.from(g.hull.vertices);
+      else if (spec.shape === 'compound') out.parts = g.parts.map(partOf);
+      else for (const k of SHAPE_SIZES[spec.shape]) out[k] = k === 'size' ? [...spec.size] : spec[k];
       // Whichever the body was given, so addBody(world.bodyOf(b)) makes a copy.
       if (spec.massGiven) out.mass = spec.mass;
       else out.density = spec.density;
       if (spec.inertiaGiven) out.inertia = [...spec.inertia];
+      if (spec.centerOfMass !== null) out.centerOfMass = [...spec.centerOfMass];
     }
     for (const k of MATERIAL) out[k] = spec[k];
     out.lockRotation = [...spec.lockRotation];
@@ -790,11 +826,16 @@ export class World {
       touched(this, pairs, next);
     }
 
-    const p = this._position, q = this._rotation;
+    const p = this._position, q = this._rotation, framed = this._framedCount > 0 ? this._framed : null;
     for (let i = 0; i < this._awakeCount; i++) {
       const s = list[i], t7 = s * 7, s3 = s * 3, s4 = s * 4;
-      tr[t7] = p[s3]; tr[t7 + 1] = p[s3 + 1]; tr[t7 + 2] = p[s3 + 2];
-      tr[t7 + 3] = q[s4]; tr[t7 + 4] = q[s4 + 1]; tr[t7 + 5] = q[s4 + 2]; tr[t7 + 6] = q[s4 + 3];
+      if (framed !== null && framed[s] === 1) {
+        this._pose(s, POSE);
+        for (let k = 0; k < 7; k++) tr[t7 + k] = POSE[k];
+      } else {
+        tr[t7] = p[s3]; tr[t7 + 1] = p[s3 + 1]; tr[t7 + 2] = p[s3 + 2];
+        tr[t7 + 3] = q[s4]; tr[t7 + 4] = q[s4 + 1]; tr[t7 + 5] = q[s4 + 2]; tr[t7 + 6] = q[s4 + 3];
+      }
       at[s] = step;
     }
     this._stepDt = 0;
@@ -1137,7 +1178,7 @@ export class World {
       // still turn a body as fast as it must: a rod struck at one end turns
       // about it, and capped after the solve it went on into the wall. Time
       // of impact (impact.js) predicts a body's path with the same cap.
-      if (shape[s] !== SPHERE) {
+      if (shape[s] !== SPHERE || this._framed[s] === 1) {
         const w2 = w[s3] * w[s3] + w[s3 + 1] * w[s3 + 1] + w[s3 + 2] * w[s3 + 2];
         if (w2 > most * most) {
           const k = most / Math.sqrt(w2);
@@ -1218,13 +1259,15 @@ export class World {
       // Half the box's extent along each world axis.
       let ex, ey, ez;
       const shape = this._shape[s];
-      // Where the box's centre is from the body's: off it only for level geometry.
+      // Where the box's centre is from the body's: off it only for level
+      // geometry, hulls and parts.
       let ox = 0, oy = 0, oz = 0;
-      if (shape === BOX || shape >= MESH) {
+      const inner = this._inner[s];
+      if (shape === BOX || shape >= MESH || inner !== null) {
         let hx = d[s3] * 0.5, hy = d[s3 + 1] * 0.5, hz = d[s3 + 2] * 0.5;
-        if (shape >= MESH) {
-          // The box round its triangles in its own frame, turned into the world's.
-          const g = this._geometry[s], lo = g.lo, hi = g.hi;
+        if (shape >= MESH || inner !== null) {
+          // The box round its triangles, corners or parts in its own frame, turned into the world's.
+          const g = inner !== null ? inner : this._geometry[s], lo = g.lo, hi = g.hi;
           const cx = (lo[0] + hi[0]) * 0.5, cy = (lo[1] + hi[1]) * 0.5, cz = (lo[2] + hi[2]) * 0.5;
           hx = (hi[0] - lo[0]) * 0.5; hy = (hi[1] - lo[1]) * 0.5; hz = (hi[2] - lo[2]) * 0.5;
           ox = ax[a9] * cx + ax[a9 + 3] * cy + ax[a9 + 6] * cz;
@@ -1299,6 +1342,7 @@ export class World {
     this._slots = new Slots();
     for (const [name, Type] of COLUMNS) this[name] = new Type(0);
     this._geometry = [];
+    this._inner = [];
     this._forcedSlots = [];
     this._broadphase = new Broadphase();
     this._pairs = new Pairs(this);
@@ -1389,15 +1433,63 @@ export class World {
     const s = this._slotOf(caller, id);
     const value = xyz(caller, x, y, z);
     this._wake(s);
-    this._position.set(value, s * 3);
+    this._pose(s, POSE);
+    this._place7(s, value, POSE.subarray(3, 7));
     this._moved(s);
   }
 
   _setRotation(caller, id, q) {
     const s = this._slotOf(caller, id);
     this._wake(s);
-    this._rotation.set(q, s * 4);
+    this._pose(s, POSE);
+    this._place7(s, POSE.subarray(0, 3), q);
     this._moved(s);
+  }
+
+  /** body.position or body.rotation: the origin's, as given, a frozen copy. */
+  _poseOf(caller, id, rotation) {
+    const s = this._slotOf(caller, id);
+    this._pose(s, POSE);
+    return Object.freeze(rotation ? [POSE[3], POSE[4], POSE[5], POSE[6]] : [POSE[0], POSE[1], POSE[2]]);
+  }
+
+  /**
+   * Slot s's origin and rotation as given, into out[0..6]: the step works
+   * from its centre of mass p and principal axes q, and the origin is
+   * P = p - q·offset, turned Q = q ⊗ frame⁻¹.
+   */
+  _pose(s, out) {
+    const p = this._position, q = this._rotation, s3 = 3 * s, s4 = 4 * s;
+    if (this._framed[s] === 0) {
+      out[0] = p[s3]; out[1] = p[s3 + 1]; out[2] = p[s3 + 2];
+      out[3] = q[s4]; out[4] = q[s4 + 1]; out[5] = q[s4 + 2]; out[6] = q[s4 + 3];
+      return out;
+    }
+    const o = this._offset, f = this._frame;
+    rotate(q, s4, o[s3], o[s3 + 1], o[s3 + 2], false, v3);
+    out[0] = p[s3] - v3[0]; out[1] = p[s3 + 1] - v3[1]; out[2] = p[s3 + 2] - v3[2];
+    INVERSE[0] = -f[s4]; INVERSE[1] = -f[s4 + 1]; INVERSE[2] = -f[s4 + 2]; INVERSE[3] = f[s4 + 3];
+    quatMultiply(q, s4, INVERSE, 0, out, 3);
+    return out;
+  }
+
+  /** Slot s placed with its origin at P and turned Q, as given: the inverse of _pose. */
+  _place7(s, P, Q) {
+    const p = this._position, q = this._rotation, s3 = 3 * s, s4 = 4 * s;
+    if (this._framed[s] === 0) {
+      p[s3] = P[0]; p[s3 + 1] = P[1]; p[s3 + 2] = P[2];
+      q[s4] = Q[0]; q[s4 + 1] = Q[1]; q[s4 + 2] = Q[2]; q[s4 + 3] = Q[3];
+      return;
+    }
+    quatMultiply(Q, 0, this._frame, s4, q, s4);
+    const o = this._offset;
+    rotate(q, s4, o[s3], o[s3 + 1], o[s3 + 2], false, v3);
+    p[s3] = P[0] + v3[0]; p[s3 + 1] = P[1] + v3[1]; p[s3 + 2] = P[2] + v3[2];
+  }
+
+  /** body.centerOfMass: where the step works from, in the world, a frozen copy. */
+  _centerOf(caller, id) {
+    return this._vector(caller, id, this._position, 3);
   }
 
   /** After a teleport: drawn there, stamped, filed afresh, and what a static body held woken. */
@@ -1500,6 +1592,8 @@ export class World {
     this._force.fill(0, s * 3, s * 3 + 3);
     this._torque.fill(0, s * 3, s * 3 + 3);
     this._geometry[s] = null;
+    this._inner[s] = null;
+    if (this._framed[s] === 1) { this._framed[s] = 0; this._framedCount--; }
     if (this._sensor[s] === 1) { this._sensor[s] = 0; this._sensorCount--; }
     // The next body in the slot starts its count afresh, whatever its type.
     if (this._type[s] === CHARACTER) { this._type[s] = DYNAMIC; this._characterCount--; }
@@ -1550,9 +1644,11 @@ export class World {
   _resize(capacity) {
     this._slots.resize(capacity);
     for (const [name, , per] of COLUMNS) this[name] = resized(this[name], capacity * per);
-    const g = this._geometry, had = g.length;
-    g.length = capacity;
-    for (let s = had; s < capacity; s++) g[s] = null;
+    for (const g of [this._geometry, this._inner]) {
+      const had = g.length;
+      g.length = capacity;
+      for (let s = had; s < capacity; s++) g[s] = null;
+    }
     this._broadphase.resize(capacity);
   }
 
@@ -1560,7 +1656,7 @@ export class World {
   _spec(s) {
     const shape = SHAPES[this._shape[s]];
     const d = this._dims;
-    const s3 = s * 3, s4 = s * 4;
+    const s3 = s * 3, pose = this._pose(s, POSE);
     return {
       type: TYPES[this._type[s]],
       shape,
@@ -1573,6 +1669,7 @@ export class World {
       massGiven: this._massGiven[s] === 1,
       inertia: [this._inertia[s3], this._inertia[s3 + 1], this._inertia[s3 + 2]],
       inertiaGiven: this._inertiaGiven[s] === 1,
+      centerOfMass: this._comGiven[s] === 1 ? [this._com[s3], this._com[s3 + 1], this._com[s3 + 2]] : null,
       friction: this._friction[s],
       restitution: this._restitution[s],
       damping: this._damping[s],
@@ -1585,8 +1682,8 @@ export class World {
       maxSlope: this._maxSlope[s],
       stepHeight: this._stepHeight[s],
       stepGiven: this._stepGiven[s] === 1,
-      position: [this._position[s3], this._position[s3 + 1], this._position[s3 + 2]],
-      rotation: [this._rotation[s4], this._rotation[s4 + 1], this._rotation[s4 + 2], this._rotation[s4 + 3]],
+      position: [pose[0], pose[1], pose[2]],
+      rotation: [pose[3], pose[4], pose[5], pose[6]],
       velocity: [this._velocity[s3], this._velocity[s3 + 1], this._velocity[s3 + 2]],
       angularVelocity: [this._angular[s3], this._angular[s3 + 1], this._angular[s3 + 2]],
     };
@@ -1602,24 +1699,54 @@ export class World {
     this._geometry[s] = spec.geometry;
     const d = this._dims;
     if (shape === BOX) d.set(spec.size, s3);
-    else if (shape >= MESH) d.fill(0, s3, s3 + 3);
+    else if (shape === HULL || shape === COMPOUND || shape >= MESH) d.fill(0, s3, s3 + 3);
     else { d[s3] = spec.radius; d[s3 + 1] = shape === CAPSULE ? spec.height : 0; d[s3 + 2] = 0; }
 
     // Mass follows the shape unless it was given (rule 36: no
     // updateMassProperties()). Given a mass, the density is what makes it.
-    const v = volume(spec);
     this._massGiven[s] = spec.massGiven ? 1 : 0;
-    if (spec.massGiven) {
-      this._mass[s] = spec.mass;
-      this._density[s] = spec.mass / v;
-    } else {
-      this._density[s] = spec.density;
-      this._mass[s] = spec.density * v;
-    }
-    // Inertia follows the shape and mass in the same way, unless it was given.
     this._inertiaGiven[s] = spec.inertiaGiven ? 1 : 0;
-    if (spec.inertiaGiven) this._inertia.set(spec.inertia, s3);
-    else this._inertia.set(shapeInertia(spec, this._mass[s], v3), s3);
+    const solid = shape === HULL || shape === COMPOUND ? solidMass(spec) : null;
+    let center = ZERO, turn = IDENTITY;
+    if (solid !== null) {
+      this._mass[s] = solid.mass;
+      this._density[s] = solid.density;
+      center = solid.center;
+      // Its inertia about its principal axes, unless given, about its own.
+      if (spec.inertiaGiven) this._inertia.set(spec.inertia, s3);
+      else {
+        const axes = principal(solid.tensor);
+        this._inertia.set(axes.moments, s3);
+        turn = axes.rotation;
+      }
+    } else {
+      const v = volume(spec);
+      if (spec.massGiven) {
+        this._mass[s] = spec.mass;
+        this._density[s] = spec.mass / v;
+      } else {
+        this._density[s] = spec.density;
+        this._mass[s] = spec.density * v;
+      }
+      // Inertia follows the shape and mass in the same way, unless it was given.
+      if (spec.inertiaGiven) this._inertia.set(spec.inertia, s3);
+      else this._inertia.set(shapeInertia(spec, this._mass[s], v3), s3);
+    }
+    // A centre of mass given moves where it is; the inertia stays the shape's,
+    // about its own centre of mass, unless that is given too.
+    this._comGiven[s] = spec.centerOfMass !== null ? 1 : 0;
+    if (spec.centerOfMass !== null) center = spec.centerOfMass;
+    this._com.set(center, s3);
+    // The frame the step works in: centred on the centre of mass, turned to
+    // the principal axes. The offset is the centre of mass along those axes.
+    const R = matrixOf(turn), framed = center[0] !== 0 || center[1] !== 0 || center[2] !== 0 || turn !== IDENTITY;
+    this._frame.set(turn, s * 4);
+    for (let k = 0; k < 3; k++) this._offset[s3 + k] = R[k] * center[0] + R[3 + k] * center[1] + R[6 + k] * center[2];
+    this._framedCount += (framed ? 1 : 0) - this._framed[s];
+    this._framed[s] = framed ? 1 : 0;
+    this._inner[s] = shape === HULL ? spec.geometry.hull.moved(center, transposed(R))
+      : shape === COMPOUND ? new Parts(spec.geometry.parts.map((part) => inner(part, center, turn)))
+        : shape <= CAPSULE && framed ? new Parts([inner({ ...spec, position: ZERO, rotation: IDENTITY }, center, turn)]) : null;
     // Level geometry has none, and is never dynamic: nothing turns it.
     for (let k = 0; k < 3; k++) this._invInertia[s3 + k] = this._inertia[s3 + k] > 0 ? 1 / this._inertia[s3 + k] : 0;
     // What contacts use: how much a push moves it (nothing, unless it is
@@ -1630,7 +1757,21 @@ export class World {
     // The solver works out awake bodies' world inverse inertia each step; a
     // static one's must stay zero, even if it was dynamic before.
     if (spec.type === 'static') this._invI.fill(0, s * 6, s * 6 + 6);
-    if (shape === BOX) {
+    const g = this._inner[s];
+    if (shape === HULL) {
+      this._size[s] = g.size;
+      this._reach[s] = g.reach;
+    } else if (shape === COMPOUND) {
+      // The thinnest of its parts, which is the thinnest thing of it that can touch.
+      let size = Infinity, reach = 0;
+      for (const part of g.list) {
+        const o = part.position;
+        size = Math.min(size, part.size);
+        reach = Math.max(reach, Math.sqrt(o[0] * o[0] + o[1] * o[1] + o[2] * o[2]) + part.reach);
+      }
+      this._size[s] = size;
+      this._reach[s] = reach;
+    } else if (shape === BOX) {
       this._size[s] = Math.min(spec.size[0], spec.size[1], spec.size[2]);
       this._reach[s] = 0.5 * Math.sqrt(spec.size[0] * spec.size[0] + spec.size[1] * spec.size[1] + spec.size[2] * spec.size[2]);
     } else if (shape >= MESH) {
@@ -1641,6 +1782,8 @@ export class World {
       this._size[s] = 2 * spec.radius;
       this._reach[s] = shape === CAPSULE ? spec.height * 0.5 : spec.radius;
     }
+    // A box, ball or capsule given a centre of mass reaches that much farther from it.
+    if (shape <= CAPSULE && framed) this._reach[s] += Math.sqrt(center[0] * center[0] + center[1] * center[1] + center[2] * center[2]);
     this._friction[s] = spec.friction;
     this._restitution[s] = spec.restitution;
     this._damping[s] = spec.damping;
@@ -1651,8 +1794,7 @@ export class World {
     const sensor = spec.sensor ? 1 : 0;
     this._sensorCount += sensor - this._sensor[s];
     this._sensor[s] = sensor;
-    this._position.set(spec.position, s3);
-    this._rotation.set(spec.rotation, s * 4);
+    this._place7(s, spec.position, spec.rotation);
     this._velocity.set(spec.velocity, s3);
     this._angular.set(spec.angularVelocity, s3);
     this._lock[s] = (spec.lockRotation[0] ? 1 : 0) | (spec.lockRotation[1] ? 2 : 0) | (spec.lockRotation[2] ? 4 : 0);
@@ -1678,11 +1820,10 @@ export class World {
 
   /** Copies a slot's position and rotation out to `transforms`, and to `previous`, for a teleport. */
   _place(s) {
-    const t7 = s * 7, s3 = s * 3, s4 = s * 4;
+    const t7 = s * 7, s3 = s * 3;
     const tr = this._transforms;
-    tr[t7] = this._position[s3]; tr[t7 + 1] = this._position[s3 + 1]; tr[t7 + 2] = this._position[s3 + 2];
-    tr[t7 + 3] = this._rotation[s4]; tr[t7 + 4] = this._rotation[s4 + 1];
-    tr[t7 + 5] = this._rotation[s4 + 2]; tr[t7 + 6] = this._rotation[s4 + 3];
+    this._pose(s, POSE);
+    for (let k = 0; k < 7; k++) tr[t7 + k] = POSE[k];
     this._previous.set(tr.subarray(t7, t7 + 7), t7);
     // Where the solver measures this step's movement from, for a body that
     // won't be moving in it (static, or asleep) until something wakes it.
@@ -1740,7 +1881,12 @@ function resolve(caller, base, given) {
     // Its triangles enclose nothing, so it has no mass to fall with or turn,
     // nor anything to walk with.
     if (type === 'dynamic' || type === 'character') fail(caller, `type must be 'static' or 'kinematic' for a ${shape}, got '${type}'`);
-    for (const k of ['mass', 'density', 'inertia']) if (has(k)) fail(caller, `a ${shape} has no ${k}`);
+    for (const k of ['mass', 'density', 'inertia', 'centerOfMass']) if (has(k)) fail(caller, `a ${shape} has no ${k}`);
+  }
+  // A character finds its way by casting its own shape, and stands on its
+  // lowest point: a box, ball or capsule's, found in closed form.
+  if ((shape === 'hull' || shape === 'compound') && type === 'character') {
+    fail(caller, `type must be 'dynamic', 'static' or 'kinematic' for a ${shape}, got 'character'`);
   }
   // A new shape starts from its own defaults; sizes of the old one don't carry over.
   const fresh = shape !== base.shape;
@@ -1756,6 +1902,10 @@ function resolve(caller, base, given) {
     const heights = has('heights') ? given.heights : fresh ? DEFAULTS.heights : geometry.heights;
     grid(caller, heights, columns);
     geometry = new Heightfield(heights, columns, spacing);
+  } else if (shape === 'hull' && (fresh || has('vertices'))) {
+    geometry = { hull: hullOf(caller, 'vertices', has('vertices') ? vertexList(caller, given.vertices) : CUBE_CORNERS) };
+  } else if (shape === 'compound' && (fresh || has('parts'))) {
+    geometry = { parts: has('parts') ? partList(caller, given.parts) : partList(caller, [{}]) };
   }
   const size = has('size') ? positive3(caller, 'size', given.size) : fresh ? [...DEFAULTS.size] : base.size;
   const radius = has('radius') ? positive(caller, 'radius', given.radius) : fresh ? DEFAULTS.radius : base.radius;
@@ -1782,6 +1932,12 @@ function resolve(caller, base, given) {
     inertia = [i[0], i[1], i[2]];
     inertiaGiven = true;
   }
+  // null again: the centre of mass follows the shape.
+  let centerOfMass = base.centerOfMass;
+  if (given.centerOfMass === null) centerOfMass = null;
+  else if (has('centerOfMass')) centerOfMass = vec3(caller, 'centerOfMass', given.centerOfMass);
+  // A character is never turned by anything, and casts its shape from its centre.
+  if (type === 'character' && centerOfMass !== null) fail(caller, 'a character body has no centerOfMass');
 
   const friction = has('friction') ? atLeastZero(caller, 'friction', given.friction) : base.friction;
   let restitution = base.restitution;
@@ -1839,11 +1995,137 @@ function resolve(caller, base, given) {
       ? vec3(caller, 'angularVelocity', given.angularVelocity) : base.angularVelocity;
   }
   return {
-    type, shape, size, radius, height, geometry, density, mass, massGiven, inertia, inertiaGiven,
+    type, shape, size, radius, height, geometry, density, mass, massGiven, inertia, inertiaGiven, centerOfMass,
     friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor,
     lockRotation, maxSlope, stepHeight, stepGiven, position, rotation, velocity, angularVelocity,
   };
 }
+
+/** The hull of a list of points, or a throw naming `name` if they don't span a solid. */
+function hullOf(caller, name, vertices) {
+  const hull = build(vertices);
+  const n = vertices.length / 3;
+  if (hull === null) fail(caller, `${name} must span a solid (4 points not in one plane), got ${n < 4 ? `${n} points` : `${n} points in one plane`}`);
+  return hull;
+}
+
+/**
+ * A compound's parts, checked: a list of one or more, each a plain object
+ * of PART_OPTIONS, named by where it is in the list (`parts[1].radius`).
+ */
+function partList(caller, value) {
+  if (!Array.isArray(value) || value.length === 0) fail(caller, `parts must be a list of one or more parts, got ${show(value)}`);
+  return value.map((given, i) => {
+    const name = `parts[${i}]`;
+    const o = options(caller, given, name);
+    known(`${caller}: ${name}`, o, PART_OPTIONS);
+    const has = (k) => o[k] !== undefined;
+    const shape = has('shape') ? oneOf(caller, `${name}.shape`, o.shape, PART_SHAPES) : 'box';
+    for (const k of ['size', 'radius', 'height', 'vertices']) {
+      if (has(k) && !SHAPE_SIZES[shape].includes(k)) fail(caller, `${name}: a ${shape} has no ${k}`);
+    }
+    const part = {
+      shape,
+      size: has('size') ? positive3(caller, `${name}.size`, o.size) : [...DEFAULTS.size],
+      radius: has('radius') ? positive(caller, `${name}.radius`, o.radius) : DEFAULTS.radius,
+      height: has('height') ? positive(caller, `${name}.height`, o.height) : DEFAULTS.height,
+      hull: shape === 'hull' ? hullOf(caller, `${name}.vertices`, has('vertices') ? vertexList(caller, o.vertices, `${name}.vertices`) : CUBE_CORNERS) : null,
+      position: has('position') ? vec3(caller, `${name}.position`, o.position) : [0, 0, 0],
+      rotation: has('rotation') ? quat(caller, `${name}.rotation`, o.rotation) : [0, 0, 0, 1],
+      density: has('density') ? positive(caller, `${name}.density`, o.density) : null,
+    };
+    if (shape === 'capsule' && part.height < 2 * part.radius) {
+      fail(caller, `${name}.height must be at least twice radius (${2 * part.radius}), got ${part.height}`);
+    }
+    return part;
+  });
+}
+
+/** A part as bodyOf gives it back: the options it was made from. */
+function partOf(part) {
+  const out = { shape: part.shape };
+  if (part.shape === 'hull') out.vertices = Array.from(part.hull.vertices);
+  else for (const k of SHAPE_SIZES[part.shape]) out[k] = k === 'size' ? [...part.size] : part[k];
+  out.position = [...part.position];
+  out.rotation = [...part.rotation];
+  if (part.density !== null) out.density = part.density;
+  return out;
+}
+
+/**
+ * A hull's or compound's mass, centre of mass (in its own frame) and inertia
+ * tensor about it (shapes.js). A compound's parts are summed: their masses,
+ * their centres weighted by mass, and their tensors, each turned to the
+ * body's frame and moved to the shared centre by the parallel-axis theorem.
+ * Given a mass, every part is scaled to it, and the density is the body's.
+ */
+function solidMass(spec) {
+  if (spec.shape === 'hull') {
+    const h = hullMass(spec.geometry.hull);
+    const mass = spec.massGiven ? spec.mass : spec.density * h.volume, density = mass / h.volume;
+    return { mass, density, center: h.center, tensor: h.tensor.map((x) => x * density) };
+  }
+  const parts = spec.geometry.parts.map((part) => {
+    const R = matrixOf(part.rotation);
+    let volume_, center = [0, 0, 0], tensor;
+    if (part.shape === 'hull') {
+      const h = hullMass(part.hull);
+      volume_ = h.volume;
+      center = [0, 1, 2].map((k) => R[3 * k] * h.center[0] + R[3 * k + 1] * h.center[1] + R[3 * k + 2] * h.center[2]);
+      tensor = turnedTensor(h.tensor, R);
+    } else {
+      volume_ = volume(part);
+      const I = shapeInertia(part, volume_, [0, 0, 0]);
+      tensor = turnedTensor([I[0], 0, 0, I[1], 0, I[2]], R);
+    }
+    const rho = part.density !== null ? part.density : spec.density, m = rho * volume_;
+    return { m, center: center.map((x, k) => x + part.position[k]), tensor: tensor.map((x) => x * rho) };
+  });
+  let mass = 0;
+  const center = [0, 0, 0];
+  for (const p of parts) {
+    mass += p.m;
+    for (let k = 0; k < 3; k++) center[k] += p.m * p.center[k];
+  }
+  for (let k = 0; k < 3; k++) center[k] /= mass;
+  let tensor = [0, 0, 0, 0, 0, 0];
+  for (const p of parts) {
+    const t = shifted(p.tensor, p.m, [0, 1, 2].map((k) => p.center[k] - center[k]));
+    tensor = tensor.map((x, k) => x + t[k]);
+  }
+  if (spec.massGiven) {
+    const scale = spec.mass / mass;
+    tensor = tensor.map((x) => x * scale);
+    mass = spec.mass;
+  }
+  return { mass, density: spec.density, center, tensor };
+}
+
+/**
+ * Part (a part's options, or a box, ball or capsule's own) in the frame the
+ * step works in: its position from the centre of mass along the principal
+ * axes, and its turn from them. `turn` is those axes as a quaternion.
+ */
+function inner(part, center, turn) {
+  const R = matrixOf(turn), o = part.position, q = part.rotation;
+  const x = o[0] - center[0], y = o[1] - center[1], z = o[2] - center[2];
+  const position = [0, 1, 2].map((k) => R[k] * x + R[3 + k] * y + R[6 + k] * z);
+  const rotation = [0, 0, 0, 0];
+  quatMultiply([-turn[0], -turn[1], -turn[2], turn[3]], 0, q, 0, rotation, 0);
+  const kind = part.shape === 'box' ? BOX_KIND : part.shape === 'sphere' ? SPHERE_KIND : part.shape === 'capsule' ? CAPSULE_KIND : HULL_KIND;
+  const half = part.shape === 'box' ? part.size.map((x) => x * 0.5)
+    : part.shape === 'capsule' ? [part.radius, (part.height - 2 * part.radius) * 0.5, 0] : [part.radius, 0, 0];
+  return new Part(kind, half, part.shape === 'hull' ? part.hull : null, position, rotation);
+}
+
+/** A rotation matrix's transpose (9 numbers, row by row): its inverse. */
+function transposed(R) {
+  return [R[0], R[3], R[6], R[1], R[4], R[7], R[2], R[5], R[8]];
+}
+
+const ZERO = Object.freeze([0, 0, 0]), IDENTITY = Object.freeze([0, 0, 0, 1]);
+/** _pose's and _place7's scratch; neither is re-entered. */
+const POSE = new Float64Array(7), INVERSE = new Float64Array(4);
 
 /** How tall a shape stands along its own y: a capsule's height, a box's, a sphere's diameter. */
 function tallness(spec) {
@@ -1894,8 +2176,8 @@ const list = (value) => Array.isArray(value) || (ArrayBuffer.isView(value) && !(
 const entry = (value, i) => `${show(value[i])} at index ${i}`;
 
 /** A mesh's vertices: finite numbers, three to a vertex. */
-function vertexList(caller, value) {
-  const rule = 'vertices must be finite numbers, three to a vertex';
+function vertexList(caller, value, name = 'vertices') {
+  const rule = `${name} must be finite numbers, three to a vertex`;
   if (!list(value)) fail(caller, `${rule}, got ${show(value)}`);
   if (value.length % 3 !== 0) fail(caller, `${rule}, got ${value.length} numbers`);
   for (let i = 0; i < value.length; i++) {

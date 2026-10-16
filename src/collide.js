@@ -30,16 +30,23 @@
 // four-point face contact and a one-point edge contact on rounding noise. The
 // solver derives it from the bodies' size; the narrowphase only applies it.
 //
+// HULLS are separating axes too, over their faces and the pairs of their
+// edges that can meet, and clipping: see "hulls" below.
+//
 // Nothing here allocates: everything works in module scratch, which is safe
-// because a step never re-enters it.
+// because a step never re-enters it. Hulls' scratch grows to the largest
+// hull it has seen, once.
+
+import { build } from './hull.js';
+import { closest } from './gjk.js';
 
 /** Shape kinds, numbered in the order pairs are dispatched: a pair is always handled lower first. */
-export const SPHERE = 0, CAPSULE = 1, BOX = 2;
+export const SPHERE = 0, CAPSULE = 1, BOX = 2, HULL = 3;
 /**
  * One triangle of a mesh or heightfield, placed in the world. Not dispatched
  * by collide(): a triangle against a shape is triangle.js's.
  */
-export const TRIANGLE = 3;
+export const TRIANGLE = 4;
 
 /** One shape placed in the world, as collide() reads it. */
 export class Shape {
@@ -52,6 +59,8 @@ export class Shape {
     this.half = new Float64Array(3);
     /** Triangle: its corners, a, b and c, in the world. Its centre is their mean, and axes[0..2] its unit normal. */
     this.points = new Float64Array(9);
+    /** Hull: its corners and faces in its own frame (hull.js), placed by center and axes. */
+    this.hull = null;
   }
 
   /** Places the shape: `q` is a unit quaternion [x, y, z, w] at q[o..o+3]. */
@@ -64,6 +73,89 @@ export class Shape {
     a[6] = 2 * (x * z + y * w); a[7] = 2 * (y * z - x * w); a[8] = 1 - 2 * (x * x + y * y);
     return this;
   }
+}
+
+/**
+ * One shape of a compound body (or the one shape of a box, ball or capsule
+ * whose centre of mass was moved off its centre), in its body's own frame:
+ * the frame the step works in, centred on the centre of mass and turned to
+ * the principal axes (World). `half` and `hull` are as Shape's.
+ */
+export class Part {
+  constructor(kind, half, hull, position, rotation) {
+    this.kind = kind;
+    this.half = Float64Array.from(half);
+    this.hull = hull;
+    this.position = Float64Array.from(position);
+    this.rotation = Float64Array.from(rotation);
+    /** How far it reaches from its own centre, and its thinnest size: as a body's _reach and _size. */
+    const h = this.half;
+    this.reach = kind === BOX ? Math.sqrt(h[0] * h[0] + h[1] * h[1] + h[2] * h[2])
+      : kind === SPHERE ? h[0] : kind === CAPSULE ? h[0] + h[1] : hull.reach;
+    this.size = kind === BOX ? 2 * Math.min(h[0], h[1], h[2]) : kind === HULL ? hull.size : 2 * h[0];
+  }
+}
+
+/** A body's parts, and the box round them in its own frame. */
+export class Parts {
+  constructor(list) {
+    this.list = list;
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    const s = new Shape(), corner = new Float64Array(3);
+    for (const part of list) {
+      setPart(part, s);
+      s.place(part.position[0], part.position[1], part.position[2], part.rotation);
+      // Its reach along each of the body's axes, from its centre.
+      for (let k = 0; k < 3; k++) {
+        corner[0] = k === 0 ? 1 : 0; corner[1] = k === 1 ? 1 : 0; corner[2] = k === 2 ? 1 : 0;
+        const up = reachAlong(s, corner[0], corner[1], corner[2]), down = reachAlong(s, -corner[0], -corner[1], -corner[2]);
+        lo[k] = Math.min(lo[k], s.center[k] - down);
+        hi[k] = Math.max(hi[k], s.center[k] + up);
+      }
+    }
+    this.lo = lo;
+    this.hi = hi;
+  }
+}
+
+/** Shape s takes part's kind and size; place() it after. */
+export function setPart(part, s) {
+  s.kind = part.kind;
+  s.half[0] = part.half[0]; s.half[1] = part.half[1]; s.half[2] = part.half[2];
+  s.hull = part.hull;
+}
+
+const partQ = new Float64Array(4);
+
+/**
+ * Part `part` of a body whose centre is at p[po..] and rotation q[qo..],
+ * placed in the world as shape s: its centre at p + q·position, turned by
+ * q ⊗ rotation.
+ */
+export function placePart(part, p, po, q, qo, s) {
+  setPart(part, s);
+  const r = part.rotation;
+  const x = q[qo], y = q[qo + 1], z = q[qo + 2], w = q[qo + 3];
+  partQ[0] = w * r[0] + x * r[3] + y * r[2] - z * r[1];
+  partQ[1] = w * r[1] + y * r[3] + z * r[0] - x * r[2];
+  partQ[2] = w * r[2] + z * r[3] + x * r[1] - y * r[0];
+  partQ[3] = w * r[3] - x * r[0] - y * r[1] - z * r[2];
+  const o = part.position, tx = 2 * (y * o[2] - z * o[1]), ty = 2 * (z * o[0] - x * o[2]), tz = 2 * (x * o[1] - y * o[0]);
+  s.place(p[po] + o[0] + w * tx + (y * tz - z * ty), p[po + 1] + o[1] + w * ty + (z * tx - x * tz),
+    p[po + 2] + o[2] + w * tz + (x * ty - y * tx), partQ, 0);
+  return s;
+}
+
+/** How far placed shape s reaches from its centre along the unit (x, y, z). */
+export function reachAlong(s, x, y, z) {
+  const A = s.axes, h = s.half;
+  if (s.kind === SPHERE) return h[0];
+  if (s.kind === CAPSULE) return Math.abs(A[3] * x + A[4] * y + A[5] * z) * h[1] + h[0];
+  if (s.kind === BOX) return support(A, h, x, y, z);
+  const v = s.hull.vertices, lx = A[0] * x + A[1] * y + A[2] * z, ly = A[3] * x + A[4] * y + A[5] * z, lz = A[6] * x + A[7] * y + A[8] * z;
+  let most = -Infinity;
+  for (let i = 0; i < v.length; i += 3) most = Math.max(most, v[i] * lx + v[i + 1] * ly + v[i + 2] * lz);
+  return most;
 }
 
 export const MAX_POINTS = 4;
@@ -101,12 +193,18 @@ function pair(a, b, margin, tolerance, out) {
   if (a.kind === SPHERE) {
     if (b.kind === SPHERE) sphereSphere(a, b, margin, out);
     else if (b.kind === CAPSULE) sphereCapsule(a, b, margin, out);
-    else sphereBox(a, b, margin, out);
+    else if (b.kind === BOX) sphereBox(a, b, margin, out);
+    else sphereHull(a, b, margin, out);
   } else if (a.kind === CAPSULE) {
     if (b.kind === CAPSULE) capsuleCapsule(a, b, margin, tolerance, out);
-    else capsuleBox(a, b, margin, tolerance, out);
-  } else {
+    else if (b.kind === BOX) capsuleBox(a, b, margin, tolerance, out);
+    else capsuleHull(a, b, margin, tolerance, out);
+  } else if (a.kind === BOX && b.kind === BOX) {
     boxBox(a, b, margin, tolerance, out);
+  } else {
+    // A box against a hull is a hull of eight corners against it: rare
+    // enough that its own closed form wouldn't pay for itself.
+    hullHull(a, b, margin, tolerance, out);
   }
 }
 
@@ -812,6 +910,11 @@ function clipPolygon(src, sf, sl, count, dst, df, dl, px, py, pz, offset, plane)
  * any tie, the first point found.
  */
 function reduce(n, nx, ny, nz, out) {
+  reducePoints(kept, keptSep, keptId, n, nx, ny, nz, out);
+}
+
+/** reduce()'s work on any list of n points, with their separations and ids. */
+function reducePoints(kept, keptSep, keptId, n, nx, ny, nz, out) {
   if (n <= MAX_POINTS) {
     for (let k = 0; k < n; k++) addPoint(out, kept[3 * k], kept[3 * k + 1], kept[3 * k + 2], keptSep[k], keptId[k]);
     return;
@@ -834,14 +937,10 @@ function reduce(n, nx, ny, nz, out) {
     if (area > most) { most = area; c = k; }
     if (area < least) { least = area; d = k; }
   }
-  keep(out, a);
-  if (b !== a) keep(out, b);
-  if (c >= 0) keep(out, c);
-  if (d >= 0) keep(out, d);
-}
-
-function keep(out, k) {
-  addPoint(out, kept[3 * k], kept[3 * k + 1], kept[3 * k + 2], keptSep[k], keptId[k]);
+  addPoint(out, kept[3 * a], kept[3 * a + 1], kept[3 * a + 2], keptSep[a], keptId[a]);
+  if (b !== a) addPoint(out, kept[3 * b], kept[3 * b + 1], kept[3 * b + 2], keptSep[b], keptId[b]);
+  if (c >= 0) addPoint(out, kept[3 * c], kept[3 * c + 1], kept[3 * c + 2], keptSep[c], keptId[c]);
+  if (d >= 0) addPoint(out, kept[3 * d], kept[3 * d + 1], kept[3 * d + 2], keptSep[d], keptId[d]);
 }
 
 /**
@@ -877,4 +976,406 @@ function boxEdge(x, i, nx, ny, nz, s) {
   const ex = X[3 * i] * h[i], ey = X[3 * i + 1] * h[i], ez = X[3 * i + 2] * h[i];
   s[0] = cx - ex; s[1] = cy - ey; s[2] = cz - ez;
   s[3] = cx + ex; s[4] = cy + ey; s[5] = cz + ez;
+}
+
+// ---- hulls ----
+//
+// Separating axes between convex polyhedra (Gregorius, "The Separating Axis
+// Test between Convex Polyhedra", GDC 2013). The candidates are each hull's
+// face normals, and the cross product of an edge of each, but only for the
+// pairs of edges that make a face of the two hulls' Minkowski difference:
+// those whose arcs cross on the sphere of directions, an edge's arc running
+// between the normals of the faces either side of it. Any other pair can't
+// be where the hulls are nearest, and its axis would say nothing true. A face
+// is kept unless an edge beats it by more than the tolerance, as between
+// boxes; the other hull's face most against it is then clipped to its sides,
+// for up to four points reduced as boxes' are, and two edges give one point.
+// Apart within the margin with nothing clipped, the hulls are nearest at a
+// corner or an edge's end, and GJK finds where.
+
+/** A unit cube's hull: a box against a hull is placed as this, scaled. */
+const CUBE = build([-0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5,
+  -0.5, -0.5, 0.5, 0.5, -0.5, 0.5, -0.5, 0.5, 0.5, 0.5, 0.5, 0.5]);
+
+/** The next power of two at least n: scratch grows by doubling, once per larger hull. */
+function grown(n) {
+  let c = 16;
+  while (c < n) c *= 2;
+  return c;
+}
+
+/** A hull placed in the world for one call: its corners, its faces' planes, and each edge's arc. */
+export class Placed {
+  constructor() {
+    this.hull = null;
+    this.v = new Float64Array(24);
+    this.planes = new Float64Array(24);
+    /** Per edge, the normal of the face on its second side crossed with the first's: the arc's axis. */
+    this.arcs = new Float64Array(36);
+    this.center = new Float64Array(3);
+  }
+
+  /** Shape s, a hull or a box as CUBE scaled, placed in the world. */
+  set(s) {
+    const box = s.kind === BOX, h = box ? CUBE : s.hull, hv = h.vertices, hp = h.planes;
+    const V = hv.length / 3, F = hp.length / 4, E = h.edges.length / 2;
+    this.hull = h;
+    if (this.v.length < 3 * V) this.v = new Float64Array(grown(3 * V));
+    if (this.planes.length < 4 * F) this.planes = new Float64Array(grown(4 * F));
+    if (this.arcs.length < 3 * E) this.arcs = new Float64Array(grown(3 * E));
+    const A = s.axes, c = s.center, half = s.half, v = this.v, p = this.planes;
+    this.center[0] = c[0]; this.center[1] = c[1]; this.center[2] = c[2];
+    for (let i = 0; i < V; i++) {
+      let x = hv[3 * i], y = hv[3 * i + 1], z = hv[3 * i + 2];
+      if (box) { x *= 2 * half[0]; y *= 2 * half[1]; z *= 2 * half[2]; }
+      v[3 * i] = c[0] + A[0] * x + A[3] * y + A[6] * z;
+      v[3 * i + 1] = c[1] + A[1] * x + A[4] * y + A[7] * z;
+      v[3 * i + 2] = c[2] + A[2] * x + A[5] * y + A[8] * z;
+    }
+    for (let f = 0; f < F; f++) {
+      const x = hp[4 * f], y = hp[4 * f + 1], z = hp[4 * f + 2];
+      const nx = A[0] * x + A[3] * y + A[6] * z, ny = A[1] * x + A[4] * y + A[7] * z, nz = A[2] * x + A[5] * y + A[8] * z;
+      // A cube's faces are along its axes, so a box's are as far out as its half size that way.
+      const d = box ? Math.abs(x) * half[0] + Math.abs(y) * half[1] + Math.abs(z) * half[2] : hp[4 * f + 3];
+      p[4 * f] = nx; p[4 * f + 1] = ny; p[4 * f + 2] = nz;
+      p[4 * f + 3] = d + nx * c[0] + ny * c[1] + nz * c[2];
+    }
+    const sd = h.sides, arc = this.arcs;
+    for (let e = 0; e < E; e++) {
+      const l = 4 * sd[2 * e], r = 4 * sd[2 * e + 1];
+      arc[3 * e] = p[r + 1] * p[l + 2] - p[r + 2] * p[l + 1];
+      arc[3 * e + 1] = p[r + 2] * p[l] - p[r] * p[l + 2];
+      arc[3 * e + 2] = p[r] * p[l + 1] - p[r + 1] * p[l];
+    }
+    return this;
+  }
+
+  /** The least of n·x over the corners. */
+  lowest(nx, ny, nz) {
+    const v = this.v, V = this.hull.vertices.length / 3;
+    let m = Infinity;
+    for (let i = 0; i < V; i++) {
+      const d = v[3 * i] * nx + v[3 * i + 1] * ny + v[3 * i + 2] * nz;
+      if (d < m) m = d;
+    }
+    return m;
+  }
+}
+
+const placedA = new Placed(), placedB = new Placed();
+// GJK's answer, for the hulls' fallbacks: the shape gjk.js's Closest has,
+// made here so this module needs nothing of gjk.js while it loads.
+const near = { distance: 0, a: new Float64Array(3), b: new Float64Array(3) };
+
+/** A contact point's id from the features that made it: mixed, so any number of faces fits in 32 bits. */
+function mix(kind, i, j, k) {
+  return (Math.imul(kind + 1, 0x9e3779b1) ^ Math.imul(i + 1, 0x85ebca77) ^ Math.imul(j + 1, 0xc2b2ae3d)
+    ^ Math.imul(k + 1, 0x27d4eb2f)) >>> 0;
+}
+
+function hullHull(a, b, margin, tolerance, out) {
+  const A = placedA.set(a), B = placedB.set(b);
+  const ha = A.hull, hb = B.hull, pa = A.planes, pb = B.planes;
+  const FA = ha.planes.length / 4, FB = hb.planes.length / 4;
+  // a's faces: how far b's lowest corner is above each.
+  let faceA = -Infinity, fa = 0;
+  for (let f = 0; f < FA; f++) {
+    const s = B.lowest(pa[4 * f], pa[4 * f + 1], pa[4 * f + 2]) - pa[4 * f + 3];
+    if (s > margin) return;
+    if (s > faceA) { faceA = s; fa = f; }
+  }
+  let faceB = -Infinity, fb = 0;
+  for (let f = 0; f < FB; f++) {
+    const s = A.lowest(pb[4 * f], pb[4 * f + 1], pb[4 * f + 2]) - pb[4 * f + 3];
+    if (s > margin) return;
+    if (s > faceB) { faceB = s; fb = f; }
+  }
+  // Pairs of edges whose arcs cross. b's normals are turned round, since the
+  // difference is a minus b; the test is Gregorius's with that folded in.
+  const ea = ha.edges, sa = ha.sides, eb = hb.edges, sb = hb.sides, va = A.v, vb = B.v, arcA = A.arcs, arcB = B.arcs;
+  const EA = ea.length / 2, EB = eb.length / 2;
+  let edgeSep = -Infinity, ei = -1, ej = -1, enx = 0, eny = 0, enz = 0;
+  for (let i = 0; i < EA; i++) {
+    const l = 4 * sa[2 * i], r = 4 * sa[2 * i + 1];
+    const ax = arcA[3 * i], ay = arcA[3 * i + 1], az = arcA[3 * i + 2];
+    const u = 3 * ea[2 * i], w = 3 * ea[2 * i + 1];
+    const ux = va[w] - va[u], uy = va[w + 1] - va[u + 1], uz = va[w + 2] - va[u + 2];
+    const ul = Math.sqrt(ux * ux + uy * uy + uz * uz);
+    for (let j = 0; j < EB; j++) {
+      const c = 4 * sb[2 * j], d = 4 * sb[2 * j + 1];
+      const cba = pb[c] * ax + pb[c + 1] * ay + pb[c + 2] * az, dba = pb[d] * ax + pb[d + 1] * ay + pb[d + 2] * az;
+      if (!(cba * dba < 0)) continue;
+      const bx = arcB[3 * j], by = arcB[3 * j + 1], bz = arcB[3 * j + 2];
+      const adc = pa[l] * bx + pa[l + 1] * by + pa[l + 2] * bz, bdc = pa[r] * bx + pa[r + 1] * by + pa[r + 2] * bz;
+      if (!(adc * bdc < 0 && cba * bdc < 0)) continue;
+      const p = 3 * eb[2 * j], q = 3 * eb[2 * j + 1];
+      const tx = vb[q] - vb[p], ty = vb[q + 1] - vb[p + 1], tz = vb[q + 2] - vb[p + 2];
+      const len = normalize(uy * tz - uz * ty, uz * tx - ux * tz, ux * ty - uy * tx);
+      if (!(len > PARALLEL * ul * Math.sqrt(tx * tx + ty * ty + tz * tz))) continue;
+      let nx = unit[0], ny = unit[1], nz = unit[2];
+      // Away from a: the edge is on a's surface, its centre inside.
+      if (nx * (va[u] - A.center[0]) + ny * (va[u + 1] - A.center[1]) + nz * (va[u + 2] - A.center[2]) < 0) {
+        nx = -nx; ny = -ny; nz = -nz;
+      }
+      const s = nx * (vb[p] - va[u]) + ny * (vb[p + 1] - va[u + 1]) + nz * (vb[p + 2] - va[u + 2]);
+      if (s > margin) return;
+      if (s > edgeSep) { edgeSep = s; ei = i; ej = j; enx = nx; eny = ny; enz = nz; }
+    }
+  }
+  if (ei >= 0 && edgeSep > Math.max(faceA, faceB) + tolerance) hullEdges(A, ei, B, ej, enx, eny, enz, margin, out);
+  else if (faceB > faceA + tolerance) hullFace(B, fb, A, true, margin, out);
+  else hullFace(A, fa, B, false, margin, out);
+  if (out.count === 0 && Math.max(faceA, faceB, edgeSep) > 0) nearest(a, b, 0, margin, out);
+}
+
+// The incident face, clipped to the reference face's sides: its points, the
+// feature that made each, and the line each edge leaving a point lies on (an
+// incident edge, or a side plane past CUT).
+let clipP = new Float64Array(48), clipQ = new Float64Array(48);
+let featP = new Int32Array(16), featQ = new Int32Array(16), lineP = new Int32Array(16), lineQ = new Int32Array(16);
+let keptP = new Float64Array(48), keptS = new Float64Array(16), keptI = new Uint32Array(16);
+const CUT = 1 << 20;
+
+/**
+ * Face rf of placed hull R as the reference, against the face of I most
+ * nearly opposite it. `flipped`: R is the collide() call's b, and the normal,
+ * which points from R to I here, is turned to point from a to b.
+ */
+function hullFace(R, rf, I, flipped, margin, out) {
+  const rp = R.planes, ip = I.planes, rh = R.hull, ih = I.hull;
+  const nx = rp[4 * rf], ny = rp[4 * rf + 1], nz = rp[4 * rf + 2], d = rp[4 * rf + 3];
+  let inc = 0, least = Infinity;
+  for (let f = 0; f < ih.planes.length / 4; f++) {
+    const dot = ip[4 * f] * nx + ip[4 * f + 1] * ny + ip[4 * f + 2] * nz;
+    if (dot < least) { least = dot; inc = f; }
+  }
+  const i0 = ih.start[inc], m = ih.start[inc + 1] - i0, r0 = rh.start[rf], k = rh.start[rf + 1] - r0;
+  if (clipP.length < 3 * (m + k)) {
+    const c = grown(m + k);
+    clipP = new Float64Array(3 * c); clipQ = new Float64Array(3 * c);
+    featP = new Int32Array(c); featQ = new Int32Array(c); lineP = new Int32Array(c); lineQ = new Int32Array(c);
+    keptP = new Float64Array(3 * c); keptS = new Float64Array(c); keptI = new Uint32Array(c);
+  }
+  const iv = I.v, rv = R.v;
+  for (let j = 0; j < m; j++) {
+    const v = 3 * ih.loops[i0 + j];
+    clipP[3 * j] = iv[v]; clipP[3 * j + 1] = iv[v + 1]; clipP[3 * j + 2] = iv[v + 2];
+    featP[j] = j; lineP[j] = j;
+  }
+  // Inside each side: the side's outward normal is its edge crossed with n,
+  // since the face's corners run counter-clockwise seen from outside.
+  let count = m, src = 0;
+  for (let j = 0; j < k && count > 0; j++) {
+    const p = 3 * rh.loops[r0 + j], q = 3 * rh.loops[r0 + (j + 1 < k ? j + 1 : 0)];
+    const ex = rv[q] - rv[p], ey = rv[q + 1] - rv[p + 1], ez = rv[q + 2] - rv[p + 2];
+    const mx = ey * nz - ez * ny, my = ez * nx - ex * nz, mz = ex * ny - ey * nx;
+    const offset = mx * rv[p] + my * rv[p + 1] + mz * rv[p + 2];
+    count = src === 0
+      ? clipSides(clipP, featP, lineP, count, clipQ, featQ, lineQ, mx, my, mz, offset, j)
+      : clipSides(clipQ, featQ, lineQ, count, clipP, featP, lineP, mx, my, mz, offset, j);
+    src = 1 - src;
+  }
+  const poly = src === 0 ? clipP : clipQ, feat = src === 0 ? featP : featQ;
+  let n = 0;
+  for (let j = 0; j < count; j++) {
+    const x = poly[3 * j], y = poly[3 * j + 1], z = poly[3 * j + 2];
+    const separation = x * nx + y * ny + z * nz - d;
+    if (separation > margin) continue;
+    const h = separation * 0.5;
+    keptP[3 * n] = x - nx * h; keptP[3 * n + 1] = y - ny * h; keptP[3 * n + 2] = z - nz * h;
+    keptS[n] = separation;
+    keptI[n] = mix(flipped ? 1 : 0, rf, inc, feat[j]);
+    n++;
+  }
+  if (n === 0) return;
+  if (flipped) setNormal(out, -nx, -ny, -nz);
+  else setNormal(out, nx, ny, nz);
+  reducePoints(keptP, keptS, keptI, n, nx, ny, nz, out);
+}
+
+/**
+ * clipPolygon's work for faces of any number of sides: the polygon in src
+ * clipped to (x, y, z)·m <= offset, into dst; returns the count. A point
+ * made by the cut is named by the line it was on and the plane, or the two
+ * planes for a corner of the reference face.
+ */
+function clipSides(src, sf, sl, count, dst, df, dl, mx, my, mz, offset, plane) {
+  let n = 0;
+  for (let v = 0; v < count; v++) {
+    const w = v + 1 < count ? v + 1 : 0;
+    const ax = src[3 * v], ay = src[3 * v + 1], az = src[3 * v + 2];
+    const bx = src[3 * w], by = src[3 * w + 1], bz = src[3 * w + 2];
+    const da = ax * mx + ay * my + az * mz - offset, db = bx * mx + by * my + bz * mz - offset;
+    const line = sl[v];
+    if (da <= 0) {
+      dst[3 * n] = ax; dst[3 * n + 1] = ay; dst[3 * n + 2] = az;
+      df[n] = sf[v]; dl[n] = line;
+      n++;
+    }
+    if ((da <= 0) !== (db <= 0)) {
+      const t = da / (da - db);
+      dst[3 * n] = ax + (bx - ax) * t; dst[3 * n + 1] = ay + (by - ay) * t; dst[3 * n + 2] = az + (bz - az) * t;
+      df[n] = line < CUT ? CUT + 2 * (line * 4096 + plane) : 2 * CUT + 2 * (Math.min(line - CUT, plane) * 4096 + Math.max(line - CUT, plane));
+      dl[n] = da <= 0 ? CUT + plane : line;
+      n++;
+    }
+  }
+  return n;
+}
+
+/** Edge i of A against edge j of B along n, which points from A to B: the one point where they pass closest. */
+function hullEdges(A, i, B, j, nx, ny, nz, margin, out) {
+  const ea = A.hull.edges, eb = B.hull.edges, va = A.v, vb = B.v;
+  const u = 3 * ea[2 * i], w = 3 * ea[2 * i + 1], p = 3 * eb[2 * j], q = 3 * eb[2 * j + 1];
+  for (let k = 0; k < 3; k++) {
+    segA[k] = va[u + k]; segA[3 + k] = va[w + k];
+    segB[k] = vb[p + k]; segB[3 + k] = vb[q + k];
+  }
+  closestSegments(segA, segB);
+  const pax = segA[0] + (segA[3] - segA[0]) * segS, pay = segA[1] + (segA[4] - segA[1]) * segS, paz = segA[2] + (segA[5] - segA[2]) * segS;
+  const pbx = segB[0] + (segB[3] - segB[0]) * segT, pby = segB[1] + (segB[4] - segB[1]) * segT, pbz = segB[2] + (segB[5] - segB[2]) * segT;
+  const separation = (pbx - pax) * nx + (pby - pay) * ny + (pbz - paz) * nz;
+  if (separation > margin) return;
+  // Apart and nearest off an edge's end: left to GJK, as boxes leave it to boxBoxClosest.
+  if (separation > 0 && (segS === 0 || segS === 1 || segT === 0 || segT === 1)) return;
+  setNormal(out, nx, ny, nz);
+  addPoint(out, (pax + pbx) * 0.5, (pay + pby) * 0.5, (paz + pbz) * 0.5, separation, mix(2, i, j, 0));
+}
+
+/**
+ * Apart: the true closest points of a and b's cores, by GJK, as one point
+ * midway between their surfaces. ra is a's radius round its core (a ball's
+ * or a capsule's), b's being 0. Returns the distance between the cores.
+ */
+function nearest(a, b, ra, margin, out) {
+  const d = closest(a, b, near);
+  if (!(d > 0) || d - ra > margin) return d;
+  const nx = (near.b[0] - near.a[0]) / d, ny = (near.b[1] - near.a[1]) / d, nz = (near.b[2] - near.a[2]) / d;
+  const separation = d - ra, t = ra + separation * 0.5;
+  setNormal(out, nx, ny, nz);
+  addPoint(out, near.a[0] + nx * t, near.a[1] + ny * t, near.a[2] + nz * t, separation, mix(3, 0, 0, 0));
+  return d;
+}
+
+/**
+ * A ball against a hull. Its centre outside: the nearest point of the hull,
+ * by GJK. Inside: out through the face it is least deep under, which for a
+ * point inside a convex solid is always the nearest way out.
+ */
+function sphereHull(a, b, margin, out) {
+  const B = placedB.set(b), p = B.planes, F = B.hull.planes.length / 4, c = a.center, r = a.half[0];
+  let most = -Infinity, f = 0;
+  for (let k = 0; k < F; k++) {
+    const s = p[4 * k] * c[0] + p[4 * k + 1] * c[1] + p[4 * k + 2] * c[2] - p[4 * k + 3];
+    if (s > most) { most = s; f = k; }
+  }
+  if (most - r > margin) return;
+  // Outside, unless GJK finds the centre on the surface to rounding.
+  if (most > 0 && nearest(a, b, r, margin, out) > 0) return;
+  // From the ball into the face: against the face's outward normal.
+  const nx = -p[4 * f], ny = -p[4 * f + 1], nz = -p[4 * f + 2];
+  const separation = most - r, t = r + separation * 0.5;
+  setNormal(out, nx, ny, nz);
+  addPoint(out, c[0] + nx * t, c[1] + ny * t, c[2] + nz * t, separation, mix(4, f, 0, 0));
+}
+
+/**
+ * A capsule against a hull. Apart: GJK's closest points, and where those are
+ * on a face's inside, the segment clipped to that face for a point at each
+ * end of what lies over it, so a capsule lying on a hull rests on a line, as
+ * on a box. Its segment into the hull: separating axes over the hull's faces
+ * and its edges crossed with the segment, as capsuleBoxDeep.
+ */
+function capsuleHull(a, b, margin, tolerance, out) {
+  const B = placedB.set(b), p = B.planes, h = B.hull, F = h.planes.length / 4, r = a.half[0];
+  segment(a, segA);
+  const d = closest(a, b, near);
+  if (d > 0) {
+    if (d - r > margin) return;
+    const nx = (near.b[0] - near.a[0]) / d, ny = (near.b[1] - near.a[1]) / d, nz = (near.b[2] - near.a[2]) / d;
+    // The face most against the way to the hull: nearest on its inside when
+    // the way is its normal, to within PARALLEL as an angle.
+    let f = 0, most = -Infinity;
+    for (let k = 0; k < F; k++) {
+      const dot = -(p[4 * k] * nx + p[4 * k + 1] * ny + p[4 * k + 2] * nz);
+      if (dot > most) { most = dot; f = k; }
+    }
+    if (1 - most <= PARALLEL && clipToHullFace(B, f, r, margin, out)) return;
+    nearest(a, b, r, margin, out);
+    return;
+  }
+  const dx = segA[3] - segA[0], dy = segA[4] - segA[1], dz = segA[5] - segA[2];
+  const dl = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  let bestSep = -Infinity, bestFace = -1, edgeI = -1, nx = 0, ny = 0, nz = 0;
+  for (let k = 0; k < F; k++) {
+    const mx = p[4 * k], my = p[4 * k + 1], mz = p[4 * k + 2];
+    const s = Math.min(segA[0] * mx + segA[1] * my + segA[2] * mz, segA[3] * mx + segA[4] * my + segA[5] * mz) - p[4 * k + 3] - r;
+    if (s > bestSep) { bestSep = s; bestFace = k; }
+  }
+  const e = h.edges, v = B.v, E = e.length / 2;
+  for (let i = 0; i < E; i++) {
+    const u = 3 * e[2 * i], w = 3 * e[2 * i + 1];
+    const tx = v[w] - v[u], ty = v[w + 1] - v[u + 1], tz = v[w + 2] - v[u + 2];
+    const l = normalize(dy * tz - dz * ty, dz * tx - dx * tz, dx * ty - dy * tx);
+    if (!(l > PARALLEL * dl * Math.sqrt(tx * tx + ty * ty + tz * tz))) continue;
+    let mx = unit[0], my = unit[1], mz = unit[2];
+    // Out of the hull through this edge: away from its centre.
+    if (mx * (v[u] - B.center[0]) + my * (v[u + 1] - B.center[1]) + mz * (v[u + 2] - B.center[2]) < 0) { mx = -mx; my = -my; mz = -mz; }
+    const top = -B.lowest(-mx, -my, -mz);
+    // Only the edge that reaches farthest out that way: a box has four edges
+    // along each axis, and three of them are inside along it.
+    if (top - (mx * v[u] + my * v[u + 1] + mz * v[u + 2]) > tolerance) continue;
+    const s = Math.min(segA[0] * mx + segA[1] * my + segA[2] * mz, segA[3] * mx + segA[4] * my + segA[5] * mz) - r - top;
+    if (s > bestSep + tolerance) { bestSep = s; edgeI = i; nx = mx; ny = my; nz = mz; }
+  }
+  if (bestSep > margin) return;
+  if (edgeI < 0) {
+    clipToHullFace(B, bestFace, r, margin, out);
+    return;
+  }
+  // The hull's edge and the segment, where they pass closest: from the capsule into the hull is -m.
+  const u = 3 * e[2 * edgeI], w = 3 * e[2 * edgeI + 1];
+  for (let k = 0; k < 3; k++) { segB[k] = v[u + k]; segB[3 + k] = v[w + k]; }
+  closestSegments(segA, segB);
+  const px = segA[0] + dx * segS, py = segA[1] + dy * segS, pz = segA[2] + dz * segS;
+  const qx = segB[0] + (segB[3] - segB[0]) * segT, qy = segB[1] + (segB[4] - segB[1]) * segT, qz = segB[2] + (segB[5] - segB[2]) * segT;
+  const separation = (px - qx) * nx + (py - qy) * ny + (pz - qz) * nz - r;
+  setNormal(out, -nx, -ny, -nz);
+  const t = r + separation * 0.5;
+  addPoint(out, px - nx * t, py - ny * t, pz - nz * t, separation, mix(5, edgeI, 0, 0));
+}
+
+/**
+ * The capsule's segment (segA) clipped to the sides of face f of placed hull
+ * B: a point at each end of what lies over the face, each with its own
+ * separation less the radius r. Normal: into the face. Returns whether it
+ * added any point.
+ */
+function clipToHullFace(B, f, r, margin, out) {
+  const p = B.planes, h = B.hull, v = B.v;
+  const nx = p[4 * f], ny = p[4 * f + 1], nz = p[4 * f + 2];
+  const i0 = h.start[f], k = h.start[f + 1] - i0;
+  let u0 = 0, u1 = 1;
+  for (let j = 0; j < k; j++) {
+    const s = 3 * h.loops[i0 + j], q = 3 * h.loops[i0 + (j + 1 < k ? j + 1 : 0)];
+    const ex = v[q] - v[s], ey = v[q + 1] - v[s + 1], ez = v[q + 2] - v[s + 2];
+    const mx = ey * nz - ez * ny, my = ez * nx - ex * nz, mz = ex * ny - ey * nx;
+    const offset = mx * v[s] + my * v[s + 1] + mz * v[s + 2];
+    const d0 = segA[0] * mx + segA[1] * my + segA[2] * mz - offset, d1 = segA[3] * mx + segA[4] * my + segA[5] * mz - offset;
+    if (d0 > 0 && d1 > 0) return false;
+    if (d0 > 0) u0 = Math.max(u0, d0 / (d0 - d1));
+    else if (d1 > 0) u1 = Math.min(u1, d0 / (d0 - d1));
+  }
+  if (u0 > u1) return false;
+  setNormal(out, -nx, -ny, -nz);
+  for (let e = 0; e < (u1 > u0 ? 2 : 1); e++) {
+    const u = e === 0 ? u0 : u1;
+    const x = segA[0] + (segA[3] - segA[0]) * u, y = segA[1] + (segA[4] - segA[1]) * u, z = segA[2] + (segA[5] - segA[2]) * u;
+    const above = x * nx + y * ny + z * nz - p[4 * f + 3], separation = above - r;
+    if (separation > margin) continue;
+    // Midway between the capsule's surface, r below the segment, and the face, `above` below it.
+    const t = (above + r) * 0.5;
+    addPoint(out, x - nx * t, y - ny * t, z - nz * t, separation, mix(6, f, e, 0));
+  }
+  return out.count > 0;
 }

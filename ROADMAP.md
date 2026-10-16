@@ -439,12 +439,46 @@ lighter than two it is wedged between at an angle (225,000:1, contacts 20° apar
 into one for a step. Speed on the settled 1,000-box pile against the last commit: within noise
 (+3.9%, +2.5%, −6.2%).
 
-**14. Convex hulls and compound shapes ⬜**
+**14. Convex hulls and compound shapes ✅** *(approved and done 2026-10-16)*
 *Concepts:* quickhull; mass properties of polyhedra; compound shapes; centres of mass apart from the origin.
-Hulls built from points (quickhull), reusing milestone 3's separating axes and clipping; compound
-bodies of several shapes, with a centre of mass apart from the body's origin *(proposal)*.
-*Done when:* hull inertia matches integration; a compound tumbles about its true centre of mass;
-hull contacts pass the same reference tests as boxes.
+`shape: 'hull'` (`vertices`) and `shape: 'compound'` (`parts`: boxes, spheres, capsules and hulls,
+each placed and with its own density), `body.centerOfMass`, and a `centerOfMass` option for any
+body. `position` and `transforms` stay at the origin; the step works from the centre of mass and
+principal axes; `velocity` is the centre of mass's. Neither shape can be a character or a query
+shape.
+*Done when:* hull mass, centre and inertia exact for a box's corners and a tetrahedron, and within
+0.1% of integration for an irregular hull; quickhull's hulls hold every point, face outward and
+merge flat faces; hull contacts pass the box tests; a compound tumbles about its true centre of
+mass; placement, queries and fast motion work; boxes, balls and capsules unchanged; a hull pile
+in the benchmark.
+*Result:* `src/hull.js` (quickhull), the mass properties in `src/shapes.js`, hull pairs in
+`src/collide.js` and `src/triangle.js`, parts pairs in `src/contact.js`, held by
+`test/hulls.test.js`'s 23 tests:
+- **Quickhull and mass.** A cube's 8 corners with points inside and on it give 8 corners and 6
+  square faces; 300 points on a sphere and 2,000 in a cloud are all inside their hulls, every
+  face turns outward, and V − E + F = 2. A hull of a box's corners has the box's mass, centre and
+  inertia to 1e-12; a tetrahedron its formulas; an irregular hull of 40 points matches slicing it
+  into 4,000 exact cross-sections and summing them to 0.1%; two boxes as a compound sum by the
+  parallel-axis theorem exactly.
+- **Contacts.** A hull of a box's corners against the box code over 27,000 random poses: the same
+  points every time, and within 3.6 mm (the tolerance is 5 mm) where they overlap less than
+  2 cm. A stack of 10 such hulls strays and sinks exactly as the boxes; the slope test and the
+  edge-balance test pass as the box's do; 48 irregular hulls land on a box, a ball, a capsule, a
+  mesh and a heightfield and are all asleep in 20 s.
+- **Compounds.** A thrown hammer's centre of mass flies straight to 1e-12 m with its angular
+  momentum exact; an L stands with its centre of mass 5 mm inside its foot and tips 5 mm past
+  it; a lopsided compound tumbles exactly as a box of its inertia; a dumbbell rolls on its two
+  balls, slowing as a ball does, without hopping; a tall box with its centre of mass lowered
+  rights itself from 35°, where it falls over without.
+- **The rest.** Rays, casts, overlaps and sensors find every part; bodyOf round-trips; a hull
+  rod at 200 m/s stops on a 2 cm wall from 50 starts; worlds without hulls give the same results
+  to the bit, at +0.2% to +7.1% of the time (median +1.9%, paired per step, a noisy machine).
+  The 1,000-hull pile in `bench/compare.html`: 45 to 52 ms a step, 5 to 6 times faster than
+  cannon-es and 14 times Rapier's as it lands (`bench/RESULTS.md`).
+- **Found on the way.** A box made a hull has four parallel edges along each axis, and the first
+  of them won the capsule's and the triangle's edge tests (an edge counts now only if it reaches
+  farthest along the axis); and a box given a centre of mass had its shape placed at its world
+  position.
 
 ### Part four: 1.0
 
@@ -652,3 +686,13 @@ Winding's way, copied before the first one:
   bodies sliding past each other (d² over their size); both were in the code before, and the new
   paths of fast bodies found them. Mesh and heightfield pairs keep their speculative contacts: a
   time of impact against each triangle is a bigger change, for when a game needs it.
+- **2026-10-16.** Milestone 14 done, as approved with the `centerOfMass` option. Found and not
+  fixed, for Nolan to decide:
+  - Milestone 13's rod tests only flew rods lined up with their flight, from starts inside one
+    step's travel. A 10 cm rod at 200 m/s turned any way goes through a 1 cm wall 52 times in 100
+    (in milestone 13's code too); lined up and spinning, 8 in 50 when the starts cover a whole
+    step. Struck on a corner, the rod is spun hard and pivots its far end through the wall within
+    the step, where its contact, the face that met, doesn't reach.
+  - Tumbling's energy can rise: a body spun mostly about its longest or shortest axis gains 2e-4
+    to 4e-4 of its energy in 120 s. Momentum stays exact, which bounds it; "energy only falls" is
+    true only near the middle axis, where `test/motion.test.js` spins its bodies.

@@ -12,7 +12,8 @@
 // a capsule by its segment clipped to the triangle, lying on it, or its
 // closest point otherwise; a box by separating axes (the triangle's face, the
 // box's three faces, and each box edge against each triangle edge) and
-// clipping, as boxes against boxes (collide.js). It leaves every clipped
+// clipping, as boxes against boxes (collide.js); a hull the same way, with
+// its own faces and edges in place of the box's. It leaves every clipped
 // point in `out`; reducing to four is done once, over the whole manifold.
 //
 // TWO-SIDED. A triangle is touched from whichever side the shape's centre
@@ -32,7 +33,7 @@
 // together, not at its edge, so it too is left out: the box's own corners,
 // wherever they lie, are what holds it.
 
-import { Shape, Manifold, SPHERE, CAPSULE, TRIANGLE, MAX_POINTS } from './collide.js';
+import { Shape, Manifold, Placed, SPHERE, CAPSULE, HULL, TRIANGLE, MAX_POINTS } from './collide.js';
 import { closest, Closest } from './gjk.js';
 import { FLAT, triangleNormal } from './mesh.js';
 import { resized } from './core/slots.js';
@@ -63,6 +64,7 @@ export function touch(s, t, flags, margin, tolerance, out, tri) {
   corners = front ? flags & 7 : (flags >> 3) & 7;
   if (s.kind === SPHERE) sphere(s, t, margin, tolerance, out);
   else if (s.kind === CAPSULE) capsule(s, t, margin, tolerance, out);
+  else if (s.kind === HULL) hull(s, t, margin, tolerance, out);
   else box(s, t, margin, tolerance, out);
   return out.count;
 }
@@ -473,6 +475,177 @@ function closestPoints(b, t, margin, tolerance, out) {
   const nx = (near.b[0] - near.a[0]) / d, ny = (near.b[1] - near.a[1]) / d, nz = (near.b[2] - near.a[2]) / d;
   aim(out, nx, ny, nz);
   add(out, near.a[0] + nx * d / 2, near.a[1] + ny * d / 2, near.a[2] + nz * d / 2, d, mix + 255);
+}
+
+// ---- a hull ----
+
+const H = new Placed();
+let hullP = new Float64Array(3 * 16), hullQ = new Float64Array(3 * 16);
+let hullPi = new Uint32Array(16), hullQi = new Uint32Array(16);
+
+/** The triangle's least reach along unit (x, y, z), from the origin: its nearest corner that way. */
+function low(x, y, z) {
+  return Math.min(P[0] * x + P[1] * y + P[2] * z, P[3] * x + P[4] * y + P[5] * z, P[6] * x + P[7] * y + P[8] * z);
+}
+
+/**
+ * A hull against the triangle, as box(): separating axes over the
+ * triangle's face, the hull's faces, and each hull edge crossed with each
+ * triangle edge, then clipping. Each axis's gap is measured by how far both
+ * shapes reach along it, which is true for any axis, so no pair of edges
+ * needs the pruning hulls against hulls use; it costs a pass over the hull's
+ * corners for each.
+ */
+function hull(b, t, margin, tolerance, out) {
+  H.set(b);
+  const v = H.v, pl = H.planes, h = H.hull, F = h.planes.length / 4;
+  // The triangle's face, turned to the hull: the hull's lowest corner above it.
+  const faceT = H.lowest(up[0], up[1], up[2]) - (P[0] * up[0] + P[1] * up[1] + P[2] * up[2]);
+  if (faceT > margin) return;
+  // The hull's faces: the triangle's nearest corner above each.
+  let faceB = -Infinity, fb = 0;
+  for (let f = 0; f < F; f++) {
+    const sb = low(pl[4 * f], pl[4 * f + 1], pl[4 * f + 2]) - pl[4 * f + 3];
+    if (sb > margin) return;
+    if (sb > faceB) { faceB = sb; fb = f; }
+  }
+  const e = h.edges, E = e.length / 2;
+  let edgeSep = -Infinity, ex = 0, ey = 0, ez = 0, edgeK = -1, edgeE = -1;
+  for (let k = 0; k < E; k++) {
+    const i = 3 * e[2 * k], j = 3 * e[2 * k + 1];
+    const ux = v[j] - v[i], uy = v[j + 1] - v[i + 1], uz = v[j + 2] - v[i + 2];
+    const lu = Math.sqrt(ux * ux + uy * uy + uz * uz);
+    for (let te = 0; te < 3; te++) {
+      const a = 3 * te, q = 3 * ((te + 1) % 3);
+      const wx = P[q] - P[a], wy = P[q + 1] - P[a + 1], wz = P[q + 2] - P[a + 2];
+      let mx = uy * wz - uz * wy, my = uz * wx - ux * wz, mz = ux * wy - uy * wx;
+      const l = Math.sqrt(mx * mx + my * my + mz * mz);
+      if (!(l > PARALLEL * lu * Math.sqrt(wx * wx + wy * wy + wz * wz))) continue;
+      mx /= l; my /= l; mz /= l;
+      // The triangle past the hull along m, or along -m: whichever is apart more, and that way round.
+      const plus = low(mx, my, mz) + H.lowest(-mx, -my, -mz), minus = low(-mx, -my, -mz) + H.lowest(mx, my, mz);
+      if (minus > plus) { mx = -mx; my = -my; mz = -mz; }
+      // Only the edge that reaches farthest towards the triangle: a box has
+      // four edges along each axis, and three are behind along it.
+      if (-H.lowest(-mx, -my, -mz) - (mx * v[i] + my * v[i + 1] + mz * v[i + 2]) > tolerance) continue;
+      const sep = Math.max(plus, minus);
+      if (sep > margin) return;
+      if (sep > edgeSep) { edgeSep = sep; ex = mx; ey = my; ez = mz; edgeK = k; edgeE = te; }
+    }
+  }
+  // As box(): a face unless an edge, or the hull's own face, beats the
+  // triangle's by more than the tolerance; the triangle's face if those touch
+  // only at seams; and GJK's closest points if apart with nothing clipped.
+  if (edgeK >= 0 && edgeSep > Math.max(faceT, faceB) + tolerance) hullEdge(edgeK, edgeE, ex, ey, ez, margin, tolerance, out);
+  else if (faceB > faceT + tolerance) hullFace(fb, margin, tolerance, out);
+  if (out.count === 0) triangleFaceHull(margin, tolerance, out);
+  if (out.count === 0 && Math.max(faceT, faceB, edgeSep) > 0) closestPoints(b, t, margin, tolerance, out);
+}
+
+/** Room for n points in the hull's clip buffers. */
+function hullRoom(n) {
+  if (hullPi.length >= n) return;
+  let c = hullPi.length;
+  while (c < n) c *= 2;
+  hullP = new Float64Array(3 * c); hullQ = new Float64Array(3 * c);
+  hullPi = new Uint32Array(c); hullQi = new Uint32Array(c);
+}
+
+/**
+ * A hull's corner's id: past the ids a triangle's features take with `mix`
+ * (multiples of 512, below 2^30 for a mesh of up to two million triangles),
+ * and the same on every triangle, as a box's corners' are, so a hull sliding
+ * from triangle to triangle keeps its impulses.
+ */
+const CORNER = 1 << 30;
+
+/** The triangle's face as the reference: the hull's face most against it, clipped to the triangle. */
+function triangleFaceHull(margin, tolerance, out) {
+  const h = H.hull, pl = H.planes, v = H.v, F = h.planes.length / 4;
+  let f = 0, least = Infinity;
+  for (let k = 0; k < F; k++) {
+    const d = pl[4 * k] * up[0] + pl[4 * k + 1] * up[1] + pl[4 * k + 2] * up[2];
+    if (d < least) { least = d; f = k; }
+  }
+  const i0 = h.start[f], m = h.start[f + 1] - i0;
+  hullRoom(m + 3);
+  src = hullP; dst = hullQ; srcId = hullPi; dstId = hullQi;
+  for (let k = 0; k < m; k++) {
+    const i = 3 * h.loops[i0 + k];
+    src[3 * k] = v[i]; src[3 * k + 1] = v[i + 1]; src[3 * k + 2] = v[i + 2];
+    srcId[k] = CORNER + h.loops[i0 + k];
+  }
+  let n = m;
+  for (let e = 0; e < 3 && n > 0; e++) {
+    const a = 3 * e, q2 = 3 * ((e + 1) % 3), o = 3 * ((e + 2) % 3);
+    const vx = P[q2] - P[a], vy = P[q2 + 1] - P[a + 1], vz = P[q2 + 2] - P[a + 2];
+    let mx = up[1] * vz - up[2] * vy, my = up[2] * vx - up[0] * vz, mz = up[0] * vy - up[1] * vx;
+    if (mx * (P[o] - P[a]) + my * (P[o + 1] - P[a + 1]) + mz * (P[o + 2] - P[a + 2]) < 0) { mx = -mx; my = -my; mz = -mz; }
+    n = clip(src, srcId, n, dst, dstId, P[a], P[a + 1], P[a + 2], mx, my, mz, e);
+    flip();
+  }
+  for (let k = 0; k < n; k++) {
+    const x = src[3 * k], y = src[3 * k + 1], z = src[3 * k + 2], sep = above(x, y, z);
+    if (sep > margin) continue;
+    const id = srcId[k], own = id >= CORNER;
+    // The hull's own corners always count; a point clipping made on a seam doesn't (see SEAMS).
+    if (!own && seam(region(x, y, z, tolerance))) continue;
+    add(out, x - up[0] * sep / 2, y - up[1] * sep / 2, z - up[2] * sep / 2, sep, own ? id : mix + 32 + id);
+  }
+  if (out.count > 0) aim(out, -up[0], -up[1], -up[2]);
+}
+
+/** The hull's face f as the reference: the triangle clipped to its sides. */
+function hullFace(f, margin, tolerance, out) {
+  const h = H.hull, pl = H.planes, v = H.v;
+  const nx = pl[4 * f], ny = pl[4 * f + 1], nz = pl[4 * f + 2], d = pl[4 * f + 3];
+  const i0 = h.start[f], m = h.start[f + 1] - i0;
+  hullRoom(m + 3);
+  src = hullP; dst = hullQ; srcId = hullPi; dstId = hullQi;
+  for (let i = 0; i < 9; i++) src[i] = P[i];
+  srcId[0] = 0; srcId[1] = 1; srcId[2] = 2;
+  let n = 3;
+  for (let k = 0; k < m && n > 0; k++) {
+    const p = 3 * h.loops[i0 + k], q = 3 * h.loops[i0 + (k + 1 < m ? k + 1 : 0)];
+    const wx = v[q] - v[p], wy = v[q + 1] - v[p + 1], wz = v[q + 2] - v[p + 2];
+    // Inward: the face's corners run counter-clockwise seen from outside, so n × edge points in.
+    const mx = ny * wz - nz * wy, my = nz * wx - nx * wz, mz = nx * wy - ny * wx;
+    n = clip(src, srcId, n, dst, dstId, v[p], v[p + 1], v[p + 2], mx, my, mz, k & 15);
+    flip();
+  }
+  for (let k = 0; k < n; k++) {
+    const x = src[3 * k], y = src[3 * k + 1], z = src[3 * k + 2];
+    const sep = x * nx + y * ny + z * nz - d;
+    if (sep > margin || seam(region(x, y, z, tolerance))) continue;
+    add(out, x - nx * sep / 2, y - ny * sep / 2, z - nz * sep / 2, sep, mix + 64 + srcId[k]);
+  }
+  if (out.count > 0) aim(out, nx, ny, nz);
+}
+
+/** Hull edge k against triangle edge e, along n from the hull to the triangle: one point, where they pass closest. */
+function hullEdge(k, e, nx, ny, nz, margin, tolerance, out) {
+  const v = H.v, ed = H.hull.edges, i = 3 * ed[2 * k], j = 3 * ed[2 * k + 1];
+  const ox = v[i], oy = v[i + 1], oz = v[i + 2];
+  const ux = v[j] - ox, uy = v[j + 1] - oy, uz = v[j + 2] - oz;
+  const a = 3 * e, q = 3 * ((e + 1) % 3);
+  const vx = P[q] - P[a], vy = P[q + 1] - P[a + 1], vz = P[q + 2] - P[a + 2];
+  // Closest points of o + s u and P_a + w v, s and w in [0, 1] (Ericson, 5.1.9).
+  const rx = ox - P[a], ry = oy - P[a + 1], rz = oz - P[a + 2];
+  const uu = ux * ux + uy * uy + uz * uz, vv = vx * vx + vy * vy + vz * vz, uv = ux * vx + uy * vy + uz * vz;
+  const ur = ux * rx + uy * ry + uz * rz, vr = vx * rx + vy * ry + vz * rz;
+  const den = uu * vv - uv * uv;
+  let s = den > 0 ? Math.max(0, Math.min(1, (uv * vr - vv * ur) / den)) : 0;
+  let w = (uv * s + vr) / vv;
+  if (w < 0) { w = 0; s = Math.max(0, Math.min(1, -ur / uu)); } else if (w > 1) { w = 1; s = Math.max(0, Math.min(1, (uv - ur) / uu)); }
+  const bx = ox + s * ux, by = oy + s * uy, bz = oz + s * uz;
+  const tx = P[a] + w * vx, ty = P[a + 1] + w * vy, tz = P[a + 2] + w * vz;
+  if (seam(region(tx, ty, tz, tolerance))) return;
+  const sep = (tx - bx) * nx + (ty - by) * ny + (tz - bz) * nz;
+  if (sep > margin) return;
+  // Apart and nearest off an edge's end: the closest points take it.
+  if (sep > 0 && (s === 0 || s === 1 || w === 0 || w === 1)) return;
+  aim(out, nx, ny, nz);
+  add(out, (bx + tx) / 2, (by + ty) / 2, (bz + tz) / 2, sep, mix + 384 + ((3 * k + e) & 127));
 }
 
 // ---- a whole mesh ----
