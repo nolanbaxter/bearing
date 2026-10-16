@@ -29,7 +29,7 @@ import { Slots, resized, MAX_ID, MAX_SLOTS } from './core/slots.js';
 import { volume, inertia as shapeInertia, hullMass, shifted, turnedTensor, matrixOf, principal } from './shapes.js';
 import { build } from './hull.js';
 import {
-  Contacts, PIXEL, narrow, store, inertias, prepare, makeSoft, warmStart, solve, restitution, touched,
+  Contacts, PIXEL, narrow, store, inertias, prepare, makeSoft, warmStart, solve, restitution, touched, gapOf,
 } from './contact.js';
 import {
   Joints, Joint, addJoint, setJoint, jointOf, jointSlot, dropJoint, dropJointsOf, gather, warmStartJoints, solveJoints,
@@ -41,7 +41,7 @@ import { Body } from './body.js';
 import {
   Shape, Manifold, Part, Parts, SPHERE as SPHERE_KIND, CAPSULE as CAPSULE_KIND, BOX as BOX_KIND, HULL as HULL_KIND,
 } from './collide.js';
-import { ray, shapeCast as cast, overlap as overlapping, sense } from './query.js';
+import { ray, shapeCast as cast, overlap as overlapping, sense, sweep } from './query.js';
 import { Events, END } from './events.js';
 import { walk, settle, CHARACTER } from './character.js';
 import { lockedInverse } from './contact.js';
@@ -214,6 +214,9 @@ const COLUMNS = [
   ['_motion', Float64Array, 1],      // how far any point of it can move this step, m
   ['_invI', Float64Array, 6],        // world-space inverse inertia, xx xy xz yy yz zz
   ['_start', Float64Array, 3],       // its position when the step began
+  ['_startQ', Float64Array, 4],      // and its rotation, for a fast body caught after the solve (_catch)
+  ['_fast', Uint8Array, 1],          // during _catch: 1 for a fast body, which is never another's target
+  ['_caught', Uint8Array, 1],        // during _catch: 1 for a body put back
   ['_type', Uint8Array, 1],
   ['_shape', Uint8Array, 1],
   ['_massGiven', Uint8Array, 1],
@@ -291,6 +294,9 @@ export class World {
     this._jointSteps = 0;
     /** Times of impact worked out (contact.js): for the off-means-off test, which reads it. */
     this._impacts = 0;
+    /** Steps that had a fast body to sweep, and bodies put back (_catch): for the tests, which read them. */
+    this._catchSteps = 0;
+    this._catches = 0;
     this._substeps = o.substeps === undefined ? SUBSTEPS : wholeFromOne('World', 'substeps', o.substeps);
     /** Steps that ran the contact solver: for the off-means-off test, which reads it. */
     this._solverSteps = 0;
@@ -794,14 +800,19 @@ export class World {
 
     const substeps = this._substeps, h = dt / substeps;
     if (touching > 0 || held > 0) inertias(this);
+    {
+      // Where each awake body starts: what the solver measures its movement
+      // from, and where _catch sweeps it from. Static and sleeping bodies
+      // don't move, so theirs stays where it was set.
+      const p = this._position, q = this._rotation, start = this._start, startQ = this._startQ;
+      for (let i = 0; i < this._awakeCount; i++) {
+        const s3 = list[i] * 3, s4 = list[i] * 4;
+        start[s3] = p[s3]; start[s3 + 1] = p[s3 + 1]; start[s3 + 2] = p[s3 + 2];
+        startQ[s4] = q[s4]; startQ[s4 + 1] = q[s4 + 1]; startQ[s4 + 2] = q[s4 + 2]; startQ[s4 + 3] = q[s4 + 3];
+      }
+    }
     if (touching > 0) {
       this._solverSteps++;
-      // Static and sleeping bodies don't move, so theirs stays where it was set.
-      const p = this._position, start = this._start;
-      for (let i = 0; i < this._awakeCount; i++) {
-        const s3 = list[i] * 3;
-        start[s3] = p[s3]; start[s3 + 1] = p[s3 + 1]; start[s3 + 2] = p[s3 + 2];
-      }
       prepare(this, next);
       makeSoft(STIFFNESS / h, DAMPING_RATIO, h);
     }
@@ -825,8 +836,9 @@ export class World {
       const g = this._gravity;
       restitution(this, next, Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]));
       store(this._pairs, next);
-      touched(this, pairs, next);
     }
+    this._catch(next);
+    if (touching > 0) touched(this, pairs, next);
 
     const p = this._position, q = this._rotation, framed = this._framedCount > 0 ? this._framed : null;
     for (let i = 0; i < this._awakeCount; i++) {
@@ -1290,6 +1302,99 @@ export class World {
       box[b6] = cx - ex - grow; box[b6 + 1] = cy - ey - grow; box[b6 + 2] = cz - ez - grow;
       box[b6 + 3] = cx + ex + grow; box[b6 + 4] = cy + ey + grow; box[b6 + 5] = cz + ez + grow;
     }
+  }
+
+  /**
+   * Fast bodies the solve put through something, put back where they would
+   * have met it (Box2D 3's continuous step).
+   *
+   * WHY. A step's contacts are found once, where the step starts or at the
+   * moment of impact (contact.js, impact.js), and the solver holds them by
+   * the velocity of each point. A body struck hard off its centre is spun up
+   * within a substep: a 10 cm rod meeting a wall corner-first at 200 m/s
+   * needs some 3,000 rad/s to stop that corner, turns 100° in the substep
+   * that follows, and sweeps the rest of itself through the wall where no
+   * contact reaches. Measured, rods turned any way went through a 1 cm wall
+   * 57 times in 100; re-finding their contacts at each substep left 31, and
+   * a lower spin cap 53.
+   *
+   * So after the solve, each fast body (its centre moved more than half its
+   * thinnest size, Box2D's measure: less, and contacts found a step ahead
+   * already see whatever it can reach) sweeps its core, a ball at its centre
+   * a quarter of its thinnest size across, from where the step started it to
+   * where the step ended it. Against everything it collides with, as it is
+   * at the end of the step, but other fast bodies. If the core meets
+   * something, the body goes back to where it did, turned in proportion, and
+   * its velocity into the surface is returned as a contact's restitution would
+   * return it; its contacts meet properly in the next step. It loses the rest
+   * of this step's motion, which is the alternative to going through. Its
+   * velocity kept, a rod caught at a mesh, which has no thickness, drove on
+   * in at 21 m/s, and its centre crossed the plane in the next step. A core
+   * already at a surface and heading in stays where it started. The core, not the whole shape: swept whole, a spinning rod
+   * bouncing off a floor was caught mid-bounce, put back up its path with its
+   * velocity, and gained 27% of its energy; a core meets anything only when
+   * the body's middle would. Measured: rods, cubes and planks turned any way,
+   * spinning or not, 0 through in 100 each, and a rod into a 1 cm steel plate
+   * floating free 0 in 100 (47 before).
+   *
+   * Reads the bodies' end poses and _start/_startQ; changes only the caught.
+   */
+  _catch(next) {
+    const list = this._awakeList, n = this._awakeCount, type = this._type, size = this._size;
+    const p = this._position, q = this._rotation, st = this._start, sq = this._startQ, fast = this._fast;
+    let count = 0;
+    for (let i = 0; i < n; i++) {
+      const s = list[i], s3 = 3 * s;
+      if (type[s] !== DYNAMIC) continue;
+      const dx = p[s3] - st[s3], dy = p[s3 + 1] - st[s3 + 1], dz = p[s3 + 2] - st[s3 + 2], half = 0.5 * size[s];
+      if (dx * dx + dy * dy + dz * dz > half * half) { fast[s] = 1; count++; }
+    }
+    if (count === 0) return;
+    this._catchSteps++;
+    let caught = 0;
+    for (let i = 0; i < n; i++) {
+      const s = list[i], s3 = 3 * s, s4 = 4 * s;
+      if (fast[s] === 0) continue;
+      const dx = p[s3] - st[s3], dy = p[s3 + 1] - st[s3 + 1], dz = p[s3 + 2] - st[s3 + 2];
+      const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      CORE.kind = SPHERE_KIND;
+      CORE.half[0] = 0.125 * size[s];
+      CORE.place(st[s3], st[s3 + 1], st[s3 + 2], IDENTITY, 0);
+      const hit = sweep(this, CORE, s, -1, dx / length, dy / length, dz / length, length, SWEPT, fast, count);
+      if (hit < 0) continue;
+      SWEPT_SLOT[0] = hit;
+      // Back to where its core met: along its path, and turned that far
+      // between its rotations (normalized lerp, on the shorter way round).
+      const f = SWEPT[0] / length;
+      p[s3] = st[s3] + dx * f; p[s3 + 1] = st[s3 + 1] + dy * f; p[s3 + 2] = st[s3 + 2] + dz * f;
+      const sign = sq[s4] * q[s4] + sq[s4 + 1] * q[s4 + 1] + sq[s4 + 2] * q[s4 + 2] + sq[s4 + 3] * q[s4 + 3] < 0 ? -1 : 1;
+      let l = 0;
+      for (let k = 0; k < 4; k++) {
+        const v = (1 - f) * sq[s4 + k] + f * sign * q[s4 + k];
+        TURNED[k] = v;
+        l += v * v;
+      }
+      l = 1 / Math.sqrt(l);
+      for (let k = 0; k < 4; k++) q[s4 + k] = TURNED[k] * l;
+      // It met the surface: its velocity into it goes, as a contact's
+      // restitution would return it, mixed as contacts mix it (the larger).
+      const nx = SWEPT[1], ny = SWEPT[2], nz = SWEPT[3], v = this._velocity;
+      const into = v[s3] * nx + v[s3 + 1] * ny + v[s3 + 2] * nz;
+      if (into < 0) {
+        const k = (1 + Math.max(this._restitution[s], this._restitution[SWEPT_SLOT[0]])) * into;
+        v[s3] -= k * nx; v[s3 + 1] -= k * ny; v[s3 + 2] -= k * nz;
+      }
+      this._caught[s] = 1;
+      this._catches++;
+      caught++;
+    }
+    for (let i = 0; i < n; i++) fast[list[i]] = 0;
+    if (caught === 0) return;
+    // Its contacts' gaps were read where the solve left it: measured again
+    // where it is now, for whether each pair still touches (contact.js).
+    const c = this._caught;
+    for (let m = 0; m < next.count; m++) if (c[next.a[m]] === 1 || c[next.b[m]] === 1) next.gap[m] = gapOf(this, next, m);
+    for (let i = 0; i < n; i++) c[list[i]] = 0;
   }
 
   /** Forces and torques waiting since the last step act for `dt`, and are cleared. */
@@ -2130,6 +2235,8 @@ function transposed(R) {
 const ZERO = Object.freeze([0, 0, 0]), IDENTITY = Object.freeze([0, 0, 0, 1]);
 /** _pose's and _place7's scratch; neither is re-entered. */
 const POSE = new Float64Array(7), INVERSE = new Float64Array(4);
+/** _catch's: the core it sweeps, what the sweep found, and a rotation; a step isn't re-entered. */
+const CORE = new Shape(), SWEPT = new Float64Array(7), TURNED = new Float64Array(4), SWEPT_SLOT = new Int32Array(1);
 
 /** How tall a shape stands along its own y: a capsule's height, a box's, a sphere's diameter. */
 function tallness(spec) {

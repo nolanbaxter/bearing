@@ -573,7 +573,7 @@ function senseTriangle(t) {
 // with a body and moves off it, or along it, isn't stopped by it (advance's
 // `sliding`): a character walking on a floor is always within a pixel of it.
 
-let sweepWorld = null, sweepShape = null, sweepSelf = -1, sweepOther = -1, sweepBest = -1;
+let sweepWorld = null, sweepShape = null, sweepSelf = -1, sweepOther = -1, sweepBest = -1, sweepSkip = null;
 let sweepOx = 0, sweepOy = 0, sweepOz = 0, sweepDx = 0, sweepDy = 0, sweepDz = 0, sweepMax = 0;
 let sweepGx = 0, sweepGy = 0, sweepGz = 0;
 const sweepNormal = new Float64Array(3), sweepPoint = new Float64Array(3);
@@ -595,16 +595,21 @@ function blocks(world, s, o, other) {
  * Slides `cast` (slot self's shape, placed where the move starts) along the
  * unit (dx, dy, dz) for up to maxT, and returns the first slot it would
  * touch, or -1. Into out: [distance, normal (from the body towards the cast),
- * point]. Leaves out slot `other` as well as self, or none if -1.
+ * point]. Leaves out slot `other` as well as self, or none if -1, and any slot
+ * `skip` (a column of flags, or null) marks: `skipped` of them, and when that
+ * is every body in the moving tree, the tree isn't walked at all.
  */
-export function sweep(world, cast, self, other, dx, dy, dz, maxT, out) {
-  sweepWorld = world; sweepShape = cast; sweepSelf = self; sweepOther = other; sweepBest = -1;
+export function sweep(world, cast, self, other, dx, dy, dz, maxT, out, skip = null, skipped = 0) {
+  sweepWorld = world; sweepShape = cast; sweepSelf = self; sweepOther = other; sweepBest = -1; sweepSkip = skip;
   sweepOx = cast.center[0]; sweepOy = cast.center[1]; sweepOz = cast.center[2];
   sweepDx = dx; sweepDy = dy; sweepDz = dz; sweepMax = maxT;
   extents(cast, ext);
   sweepGx = ext[0]; sweepGy = ext[1]; sweepGz = ext[2];
   const trees = world._broadphase.trees;
-  for (let k = 0; k < trees.length; k++) sweepMax = walk(trees[k], sweepOx, sweepOy, sweepOz, dx, dy, dz, sweepMax, sweepGx, sweepGy, sweepGz, sweepVisit);
+  for (let k = 0; k < trees.length; k++) {
+    if (k === MOVING_TREE && skip !== null && trees[k].leaves === skipped) continue;
+    sweepMax = walk(trees[k], sweepOx, sweepOy, sweepOz, dx, dy, dz, sweepMax, sweepGx, sweepGy, sweepGz, sweepVisit);
+  }
   const loose = strays(world);
   for (let i = 0; i < loose.length; i++) sweepVisit(loose[i]);
   cast.center[0] = sweepOx; cast.center[1] = sweepOy; cast.center[2] = sweepOz;
@@ -613,13 +618,13 @@ export function sweep(world, cast, self, other, dx, dy, dz, maxT, out) {
     out[1] = sweepNormal[0]; out[2] = sweepNormal[1]; out[3] = sweepNormal[2];
     out[4] = sweepPoint[0]; out[5] = sweepPoint[1]; out[6] = sweepPoint[2];
   }
-  sweepWorld = null; sweepShape = null;
+  sweepWorld = null; sweepShape = null; sweepSkip = null;
   return sweepBest;
 }
 
 function sweepVisit(s) {
   const world = sweepWorld;
-  if (!blocks(world, sweepSelf, s, sweepOther)) return sweepMax;
+  if ((sweepSkip !== null && sweepSkip[s] === 1) || !blocks(world, sweepSelf, s, sweepOther)) return sweepMax;
   const t = world._shape[s] >= MESH ? sweepLevel(s)
     : advanceBody(world, sweepShape, s, sweepOx, sweepOy, sweepOz, sweepDx, sweepDy, sweepDz, sweepMax, true);
   if (t < 0) return sweepMax;

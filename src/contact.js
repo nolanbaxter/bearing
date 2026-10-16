@@ -893,6 +893,29 @@ function turn(w, invI, s, lx, ly, lz) {
 }
 
 /**
+ * Manifold m's least separation where its bodies are now, as the solve
+ * measures it: for World._catch, which moves a body after the last pass.
+ */
+export function gapOf(world, c, m) {
+  const p = world._position, start = world._start, q = world._rotation;
+  const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3, m3 = 3 * m;
+  const nx = c.normal[m3], ny = c.normal[m3 + 1], nz = c.normal[m3 + 2];
+  const dx = (p[b3] - start[b3]) - (p[a3] - start[a3]);
+  const dy = (p[b3 + 1] - start[b3 + 1]) - (p[a3 + 1] - start[a3 + 1]);
+  const dz = (p[b3 + 2] - start[b3 + 2]) - (p[a3 + 2] - start[a3 + 2]);
+  let least = Infinity;
+  for (let k = 0; k < c.points[m]; k++) {
+    const i = m * P + k, i3 = 3 * i;
+    rotate(q, a * 4, c.la[i3], c.la[i3 + 1], c.la[i3 + 2], false, v3);
+    const cax = v3[0], cay = v3[1], caz = v3[2];
+    rotate(q, b * 4, c.lb[i3], c.lb[i3 + 1], c.lb[i3 + 2], false, v3);
+    const s = (dx + v3[0] - cax) * nx + (dy + v3[1] - cay) * ny + (dz + v3[2] - caz) * nz + c.adjusted[i];
+    if (s < least) least = s;
+  }
+  return least;
+}
+
+/**
  * One pass over every contact: the normal at each point, then friction.
  * `bias` is true while solving, false while relaxing. h is the substep.
  */

@@ -1334,6 +1334,18 @@ into each other, slide no more than friction allows, and bounce as much as their
   a 2 cm wall. Pairs at rest, or moving slowly against each other, never ask, and cost nothing
   more. Against a mesh or heightfield the contact is still made where the step starts, so a fast
   body skimming past a mesh's edge can still be touched by it.
+- **Nothing fast goes through.** A body struck hard off its centre, a rod meeting a wall corner-first
+  at 200 m/s, needs some 3,000 rad/s to stop the corner, and turns through the wall within a step
+  where its contacts don't reach. So after the solve, each body whose centre moved more than half
+  its thinnest size in the step sweeps its core, a ball at its centre a quarter of that size
+  across, from where the step started it to where it ended, against everything it collides with as
+  it is at the end of the step but other fast bodies (Box2D 3's continuous step, with dynamic
+  bodies included). If the core meets something, the body goes back to where it did, turned that
+  far, and its velocity into the surface is returned as restitution would return it: it loses the
+  rest of that step's motion, rather than going through. Measured: rods, 1 cm cubes and planks
+  turned any way, spinning or not, at 50 to 500 m/s, none through a 1 to 5 cm wall, a mesh, a
+  heightfield or a thin steel plate floating free, where turned rods went through a 1 cm wall 57
+  times in 100. A body whose centre moves less than that never sweeps, and costs nothing more.
 - **Spin is capped at half a turn a step, but for a sphere.** A body's contacts are found once a
   step, and a body turning more than half a turn in one would meet the world on sides they never
   saw: a 10 cm rod spun at 400 rad/s and dropped on another came off it at 9,600 rad/s before the
@@ -1544,11 +1556,12 @@ for (const e of world.contacts(coin)) {
   moving when the step starts. A resting body knocked into another in the middle of the step meets
   it unforeseen, as does a spinning box whose contact held one corner while another swung down, and
   that touch begins at the next step, 1/60 s later at 60 Hz. In a scene of bouncing and knocked
-  bodies, 12 of 3,251 pair-steps were.
-- **Round against round, the line is a little soft.** The step measures a pair's gap along the
+  bodies, 12 of 4,138 pair-steps were.
+- **Where a contact curves, the line is a little soft.** The step measures a pair's gap along the
   normal its contact had when the step began. Two balls (or capsules) sliding past each other by d
-  in a step are measured off by up to about d² over their size: 0.3 mm for two 40 cm balls passing
-  at 0.9 m/s. Against a flat face the normal holds, and there is no such error.
+  in a step, or a ball rolling over a box's edge, are measured off by up to about d² over their
+  size: 0.3 mm for two 40 cm balls passing at 0.9 m/s. Against a flat face the normal holds, and
+  there is no such error.
 - **Events cost nothing when nothing changes.** The step writes an event only when a pair starts or
   stops touching, into storage it reuses, and builds objects only when you call `contacts()`.
   Measured on a settled pile of 1,000 boxes kept awake, and while it landed, steps cost the same as

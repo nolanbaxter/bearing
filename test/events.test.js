@@ -38,14 +38,19 @@ function reference(world, bodies) {
   const placed = bodies.filter((b) => b.alive).map((b) => ({ body: b, ...shapeOf(world, b) }));
   // The step measures a pair's gap along the normal its contact had when the
   // step began, so a pair that slid past itself by d in the step is measured
-  // off by up to about d² over its size when both are round: for those, the
-  // line is that wide. (Against a flat face the normal holds as they slide,
-  // and turning carries a contact's anchors with the bodies exactly.)
+  // off by up to about d² over its size when the contact is curved: two round
+  // bodies, or a round one on a box's edge or corner. For those, the line is
+  // that wide. (Against a flat face the normal holds as they slide, and
+  // turning carries a contact's anchors with the bodies exactly.)
   const c = world._contacts, slots = world._slots, st = world._start, slip = new Map();
   for (let n = 0; n < c.count; n++) {
     const a = c.a[n], b = c.b[n], n3 = 3 * n, d = [0, 1, 2].map((k) => world._position[3 * b + k] - st[3 * b + k] - world._position[3 * a + k] + st[3 * a + k]);
     const along = d[0] * c.normal[n3] + d[1] * c.normal[n3 + 1] + d[2] * c.normal[n3 + 2];
-    const round = (world._shape[a] === 1 || world._shape[a] === 2) && (world._shape[b] === 1 || world._shape[b] === 2);
+    const isRound = (x) => world._shape[x] === 1 || world._shape[x] === 2;
+    // On a box's face, the normal is along one of the box's axes.
+    const onEdge = (x) => world._shape[x] === 0 && Math.max(...[0, 1, 2].map((k) => Math.abs(world._axes[9 * x + 3 * k] * c.normal[n3]
+      + world._axes[9 * x + 3 * k + 1] * c.normal[n3 + 1] + world._axes[9 * x + 3 * k + 2] * c.normal[n3 + 2]))) < 1 - 1e-9;
+    const round = (isRound(a) && (isRound(b) || onEdge(b))) || (isRound(b) && onEdge(a));
     if (round) slip.set(key(slots.id(a), slots.id(b)), Math.max(0, d[0] ** 2 + d[1] ** 2 + d[2] ** 2 - along ** 2));
   }
   for (let i = 0; i < placed.length; i++) {
@@ -171,8 +176,9 @@ test('over a scripted scene, the events are exactly the changes in an independen
   assert.ok(compared > 2000, `${compared} pair-steps compared`);
   // Unforeseen touches are the rare case, and a step late at most.
   assert.ok(lateCount < compared / 100, `${lateCount} unforeseen of ${compared}`);
-  // Too near the line to call, so left out: should be all but none.
-  assert.ok(close < compared / 1000, `${close} too close to call, of ${compared}`);
+  // Too near the line to call, so left out: a few, the curved contacts the
+  // step measures along a fixed normal (11 of 4,138 when measured).
+  assert.ok(close < compared / 100, `${close} too close to call, of ${compared}`);
 });
 
 test('world.touching agrees with the events, for every body, every step', () => {

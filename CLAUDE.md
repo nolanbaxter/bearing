@@ -146,7 +146,13 @@ These were made with Nolan and override the rules below where they differ.
   turns, a ball's doesn't, a capsule's axis part does), with a per-point `shift` from a's end to
   b's. Mesh and heightfield pairs aren't asked. Spin cap `SPIN` = π a step, not for spheres,
   applied as each substep starts (`_accelerate`); after the solve it undid a corner strike's spin.
-  `world._impacts` counts for the off-means-off test.
+  `world._impacts` counts for the off-means-off test. The catch (2026-10-16, Nolan chose it): after
+  the solve, `World._catch` sweeps each body whose centre moved more than half its `_size` in the
+  step, as a core ball of radius `_size`/8 from `_start`/`_startQ`, with query.js `sweep()` (sliding
+  rule; fast bodies skipped as targets, the moving tree not walked when all of it is fast); caught,
+  it goes back along its path (rotation nlerped) and its velocity into the surface is reflected
+  with the larger restitution; its manifolds' gaps are measured again (`gapOf`) for events.
+  `_catchSteps`/`_catches` count.
 - **Hulls and compounds** (2026-10-16, milestone 14, approved with the `centerOfMass` option):
   `shape: 'hull'` (`vertices`; `src/hull.js` quickhull, triangles merged into polygons within FLAT
   of the hull's size, points on edges dropped, d of each face through the farthest corner) and

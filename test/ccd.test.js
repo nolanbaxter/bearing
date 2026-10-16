@@ -106,14 +106,88 @@ test('a 20 cm ball through a 30 cm gap comes out at its speed', () => {
   }
 });
 
-test('a 10 cm rod at 200 m/s, spinning at up to 80 rad/s, never passes a 2 cm wall', () => {
-  for (let k = 0; k < 50; k += 2) {
+test('a 10 cm rod at 200 m/s, spinning at up to 80 rad/s, never passes a 2 cm wall, wherever in a step it reaches it', () => {
+  // 50 starts spread over a whole step's travel (3.3 m). Spread over 0.65 m
+  // only, as this test once was, it missed 5 starts in 100 that went through.
+  for (let k = 0; k < 50; k++) {
     const world = new World({ gravity: [0, 0, 0] });
     world.addBody({ type: 'static', size: [0.02, 4, 4], position: [0, 0, 0] });
-    const rod = world.addBody({ size: [0.1, 0.02, 0.02], position: [-3 - k * 0.013, 0, 0], velocity: [200, 0, 0], angularVelocity: [0, 0, 30 + k] });
+    const rod = world.addBody({ size: [0.1, 0.02, 0.02], position: [-3 - k * 0.0731, 0, 0], velocity: [200, 0, 0], angularVelocity: [0, 0, 30 + k] });
     for (let n = 0; n < 30; n++) world.step(DT);
-    assert.ok(rod.position[0] < 0, `spin ${30 + k} rad/s: through, at x ${rod.position[0]}`);
+    assert.ok(rod.position[0] < 0, `start ${k}, spin ${30 + k} rad/s: through, at x ${rod.position[0]}`);
   }
+});
+
+/** A fixed run of numbers in [0, 1), the same every time. */
+const numbers = (seed) => () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+/**
+ * `make`'s body thrown at `speed` along x, from any of a step's starts, at
+ * a wall `at` builds: whether it ends past the wall's middle, x = 0.
+ */
+function thrown(at, size, speed, spin, rnd) {
+  const world = new World({ gravity: [0, 0, 0] });
+  at(world);
+  const body = world.addBody({
+    size, position: [-3 - rnd() * speed / 60, 0, 0], rotation: [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5, 1],
+    velocity: [speed, 0, 0], angularVelocity: [spin * rnd(), spin * rnd(), spin * rnd()],
+  });
+  for (let n = 0; n < 40; n++) world.step(DT);
+  return { world, body, through: body.position[0] > 0 };
+}
+
+test('bodies turned any way, spinning or not, never pass a thin wall: rods, small cubes and planks', () => {
+  // Before the core sweep (World._catch), turned rods went through a 1 cm wall 57 times in 100.
+  const wall = (thick) => (world) => world.addBody({ type: 'static', size: [thick, 6, 6] });
+  for (const [what, size, speed, spin, thick] of [
+    ['a rod', [0.1, 0.02, 0.02], 200, 0, 0.01], ['a spinning rod', [0.1, 0.02, 0.02], 200, 100, 0.01],
+    ['a 1 cm cube', [0.01, 0.01, 0.01], 500, 0, 0.01], ['a plank', [1, 0.1, 0.1], 50, 0, 0.05],
+  ]) {
+    const rnd = numbers(5);
+    for (let i = 0; i < 40; i++) assert.ok(!thrown(wall(thick), size, speed, spin, rnd).through, `${what}, throw ${i}: through`);
+  }
+});
+
+test('turned rods never pass a mesh wall or a heightfield either', () => {
+  const rnd = numbers(11);
+  const mesh = (world) => world.addBody({ shape: 'mesh', vertices: [0, -3, -3, 0, 3, -3, 0, 3, 3, 0, -3, 3], indices: [0, 1, 2, 0, 2, 3] });
+  for (let i = 0; i < 30; i++) assert.ok(!thrown(mesh, [0.1, 0.02, 0.02], 200, 0, rnd).through, `mesh, throw ${i}: through`);
+  for (let i = 0; i < 30; i++) {
+    const world = new World({ gravity: [0, 0, 0] });
+    world.addBody({ shape: 'heightfield', heights: new Array(25).fill(0), columns: 5, spacing: 2 });
+    const rod = world.addBody({ size: [0.1, 0.02, 0.02], position: [0.3, 3 + rnd() * 200 / 60, -0.4], rotation: [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5, 1], velocity: [0, -200, 0] });
+    for (let n = 0; n < 40; n++) world.step(DT);
+    assert.ok(rod.position[1] > 0, `heightfield, throw ${i}: through`);
+  }
+});
+
+test('a turned rod at 200 m/s never passes a 1 cm steel plate floating free', () => {
+  // Its sweep looks at slow bodies where they end the step; before, 47 in 100 went through.
+  const rnd = numbers(7);
+  for (let i = 0; i < 40; i++) {
+    let plate;
+    const { body } = thrown((world) => { plate = world.addBody({ size: [0.01, 6, 6], density: 7800 }); }, [0.1, 0.02, 0.02], 200, 0, rnd);
+    assert.ok(body.position[0] < plate.position[0], `throw ${i}: through`);
+  }
+});
+
+test('a body caught at a wall comes back off it or rests against it, and its energy only falls', () => {
+  const rnd = numbers(5);
+  let back = 0, caught = 0;
+  for (let i = 0; i < 40; i++) {
+    const { world, body } = thrown((w) => w.addBody({ type: 'static', size: [0.01, 6, 6] }), [0.1, 0.02, 0.02], 200, 0, rnd);
+    for (let n = 0; n < 80; n++) world.step(DT);
+    caught += world._catches;
+    assert.ok(body.position[0] < 0, `throw ${i}: through`);
+    // Never driven in: its middle stays clear of the wall's face.
+    assert.ok(body.position[0] < -0.005, `throw ${i}: its centre is ${body.position[0]} into the wall`);
+    if (body.velocity[0] < -0.1) back++;
+    const v = body.velocity, w = body.angularVelocity, I = body.inertia;
+    assert.ok(0.5 * body.mass * (v[0] ** 2 + v[1] ** 2 + v[2] ** 2) < 0.5 * body.mass * 200 * 200, `throw ${i}: gained energy`);
+    assert.ok(Number.isFinite(w[0] + w[1] + w[2] + I[0]));
+  }
+  assert.ok(caught > 0, 'nothing was caught');
+  assert.ok(back > 20, `only ${back} of 40 came back`);
 });
 
 test('spin is capped at half a turn a step, but for a sphere', () => {
@@ -167,6 +241,20 @@ test('a chain of 30 thin boxes whipping as it falls stays together', () => {
     const gap = Math.hypot(...end(links[i - 1], link / 2).map((v, k) => v - end(links[i], -link / 2)[k]));
     assert.ok(gap < 0.001, `joint ${i}: ${gap} m apart`);
   }
+});
+
+test('off means off: a world where nothing moves half its size in a step sweeps nothing after the solve', () => {
+  const world = new World();
+  world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
+  for (let i = 0; i < 10; i++) world.addBody({ position: [i * 1.1, 0.5 + i, 0] });
+  for (let n = 0; n < 120; n++) world.step(DT);
+  assert.equal(world._catchSteps, 0);
+  // And the count counts: a fast rod at a wall is swept.
+  const fast = new World({ gravity: [0, 0, 0] });
+  fast.addBody({ type: 'static', size: [0.01, 6, 6] });
+  fast.addBody({ size: [0.1, 0.02, 0.02], position: [-3, 0, 0], velocity: [200, 0, 0] });
+  for (let n = 0; n < 3; n++) fast.step(DT);
+  assert.ok(fast._catchSteps > 0);
 });
 
 test('off means off: nothing moving fast against anything asks for a time of impact', () => {

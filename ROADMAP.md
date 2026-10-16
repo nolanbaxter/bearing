@@ -696,6 +696,20 @@ Winding's way, copied before the first one:
   - Tumbling's energy can rise: a body spun mostly about its longest or shortest axis gains 2e-4
     to 4e-4 of its energy in 120 s. Momentum stays exact, which bounds it; "energy only falls" is
     true only near the middle axis, where `test/motion.test.js` spins its bodies.
+- **2026-10-16.** Milestone 13's gap fixed, the option Nolan chose of three measured (a quarter-turn
+  spin cap left 53 of 100 turned rods through a 1 cm wall; re-finding contacts each substep, 31):
+  after the solve, each body whose centre moved more than half its thinnest size sweeps a core, a
+  ball at its centre a quarter of that size across, along its path, against everything but other
+  fast bodies as they end the step (Box2D 3's continuous step, with slow dynamic bodies as targets,
+  which a thin plate floating free needs: 47 through in 100 without). Caught, a body goes back to
+  where its core met, turned that far, its velocity into the surface returned as restitution
+  would; kept, a rod caught at a mesh drove on in and crossed it the next step. The whole shape
+  swept instead caught a spinning rod mid-bounce and gained it 27% of its energy. Now none of 100
+  through for rods turned, spinning or lined up, 1 cm cubes at 500 m/s and 1 m planks, nor through
+  a mesh, a heightfield or the plate; the settling pile is unchanged (+0.1%, to the bit), and 1,000
+  marbles falling, every one fast every step, cost 5.8% more a step. Milestone 13's rod test now
+  starts over a whole step's travel. The events test's line for curved contacts now includes a
+  ball on a box's edge, which a ball rolling off the floor met.
 - **2026-10-16.** Tumbling's energy rise fixed, at Nolan's word ("just fix that"): a body tumbling
   freely that would end a substep with more energy than it had when last spun by anything else is
   turned back onto it, keeping its momentum exact. The off-axis cases now hold their energy to

@@ -130,6 +130,14 @@ All notable changes to Bearing are recorded here. The format follows
   velocity exactly, where before it could be stopped at any speed; a 10 cm rod at 200 m/s spinning
   at up to 80 rad/s stops on a 2 cm wall, where before it passed 28 times in 50. Nothing to flag
   and no option; pairs at rest never ask.
+- Nothing fast goes through. A body struck hard off its centre is spun up within a substep and
+  turned through a thin wall where its contacts don't reach: rods turned any way went through a
+  1 cm wall 57 times in 100. Now, after the solve, a body whose centre moved more than half its
+  thinnest size sweeps a small ball at its centre along its path, against everything but other
+  fast bodies, as they end the step; if the ball meets something, the body goes back to where it
+  did, with its velocity into the surface returned as restitution would. Rods, cubes and planks
+  turned any way, spinning or not, at 50 to 500 m/s, now pass none of a thin wall, a mesh, a
+  heightfield or a thin plate floating free.
 - A body other than a sphere spins at most half a turn a step, π / dt rad/s, 188 rad/s at 60 Hz.
   Faster, its contacts missed the sides it turned onto: a 10 cm rod spun at 400 rad/s gained energy
   from them until it reached 9,600 rad/s, and a chain of thin boxes whipping its end blew apart.
