@@ -28,6 +28,10 @@ export function examples(): void {
   const all = world.raycastAll([0, 5, 0], [0, -1, 0]);
   const cast = world.shapeCast({ shape: "capsule", radius: 0.3, height: 1.8 }, [0, 5, 0], [1, 0, 0], { rotation: [0, 0, 0, 1], mask: 1 });
   const near: Body[] = world.overlap({ shape: "sphere", radius: 2 }, [0, 0, 0]);
+  const loaded: World = World.load(JSON.parse(JSON.stringify(world.save())));
+  const lines: Float32Array = loaded.debugLines({ contacts: false, boxes: true });
+  // @ts-expect-error: debug lines are drawn or not, true or false
+  loaded.debugLines({ shapes: 1 });
   const box = world.overlap({}, [0, 0, 0], { mask: ~1 });
   const substeps: number = new World({ substeps: 4 }).substeps;
   const bounce: number = world.bodyOf(ground).restitution;

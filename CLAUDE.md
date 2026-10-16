@@ -171,6 +171,14 @@ These were made with Nolan and override the rules below where they differ.
   `parted()` in `contact.js`, n × m culled by reach, each pair with its own `meet()` (collide +
   time of impact), Memory matched by `key`; `core()`/`carried()` anchor on a part's own core.
   Queries loop over parts (`shapes()`/`shapeOf()` in `query.js`).
+- **Save, load and debug lines** (2026-10-16, milestone 15, approved): `world.save()`,
+  `World.load(data)`, `world.debugLines(options)`. `src/save.js` walks the world's fields
+  generically into a table of objects (class name + fields), shared objects by index, typed
+  arrays tagged, NaN/±Infinity/-0 as strings; `CLASSES` lists every class a world holds; a load
+  makes each empty (`Object.create`, the broadphase by its constructor for its `_visit`), then
+  fills it. `FORMAT` (1) must change whenever a stored field does: `test/save.test.js` holds the
+  World's field names. `_lines` (the debug buffer) isn't saved. `src/debug.js`: nine floats a
+  segment, colours fixed and documented, rings of 16 chords from Bearing's own sin/cos.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

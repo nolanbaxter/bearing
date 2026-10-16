@@ -210,6 +210,34 @@ await test('hulls and compounds made, piled on a mesh and removed 30 times: thei
   assert.ok(grown < 1024 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
 });
 
+await test('a world saved, loaded and drawn 30 times: the loaded worlds go, and the drawing keeps one array', async () => {
+  const world = new World();
+  world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
+  for (let i = 0; i < 60; i++) world.addBody({ shape: i % 2 ? 'sphere' : 'box', position: [(i % 6) - 3, 1 + Math.floor(i / 6), 0] });
+  let before = 0, loaded = null, lines = null;
+  for (let round = 0; round < 30; round++) {
+    if (round === WARM) {
+      await collect();
+      before = heap();
+    }
+    for (let s = 0; s < 5; s++) world.step(1 / 60);
+    const copy = World.load(JSON.parse(JSON.stringify(world.save())));
+    for (let s = 0; s < 5; s++) copy.step(1 / 60);
+    if (round === WARM) loaded = new WeakRef(copy);
+    if (round % 2) copy.destroy();
+    const drawn = world.debugLines({ boxes: true });
+    if (round > WARM) assert.equal(drawn.buffer, lines, `round ${round}: a new array for the same drawing`);
+    lines = drawn.buffer;
+  }
+  await collect();
+  assert.equal(loaded.deref(), undefined, 'a loaded world is still held');
+  const grown = heap() - before;
+  // One loaded world holds 371 KB, measured, so one kept each round would be
+  // 7.4 MB over the 20 measured rounds: 1 MB tells them apart, as V8's
+  // warm-up, a few hundred KB in the other tests, doesn't reach.
+  assert.ok(grown < 1024 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
+});
+
 await test('meshes and heightfields made, landed on and removed 30 times: their triangles and pair memories go', async () => {
   const world = new World();
   world.step(1 / 60);

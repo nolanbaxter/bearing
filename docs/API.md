@@ -63,7 +63,7 @@ Every call, setting and entry, A to Z by its name.
 
 **C** &nbsp; [`body.centerOfMass`](#body-centerofmass) · [Character bodies](#characters) · [Contact events and sensors](#events) · [Contacts](#contacts) · [`world.contacts()`](#world-contacts)
 
-**D** &nbsp; [`body.destroy()`](#body-destroy) · [`joint.destroy()`](#joint-destroy) · [`world.destroy()`](#world-destroy) · [Determinism](#determinism)
+**D** &nbsp; [`world.debugLines()`](#world-debuglines) · [`body.destroy()`](#body-destroy) · [`joint.destroy()`](#joint-destroy) · [`world.destroy()`](#world-destroy) · [Determinism](#determinism)
 
 **G** &nbsp; [`world.gravity`](#world-gravity) · [`world.groundOf()`](#world-groundof)
 
@@ -73,7 +73,7 @@ Every call, setting and entry, A to Z by its name.
 
 **J** &nbsp; [Joint](#joint) · [`world.jointCount`](#world-jointcount) · [`world.jointOf()`](#world-jointof) · [Joints](#joints)
 
-**L** &nbsp; [Layers and masks](#layers) · [Limits](#limits)
+**L** &nbsp; [Layers and masks](#layers) · [Limits](#limits) · [`World.load()`](#world-load)
 
 **M** &nbsp; [`body.mass`](#body-mass) · [Meshes and heightfields](#meshes) · [`world.moved()`](#world-moved)
 
@@ -85,7 +85,7 @@ Every call, setting and entry, A to Z by its name.
 
 **R** &nbsp; [`world.raycast()`](#world-raycast) · [`world.raycastAll()`](#world-raycastall) · [`readGlb()`](#readglb) · [`world.remove()`](#world-remove) · [`body.rotation`](#body-rotation)
 
-**S** &nbsp; [`body.setAngularVelocity()`](#body-setangularvelocity) · [`body.setAxisAngle()`](#body-setaxisangle) · [`world.setBody()`](#world-setbody) · [`body.setEuler()`](#body-seteuler) · [`world.setJoint()`](#world-setjoint) · [`body.setPosition()`](#body-setposition) · [`body.setRotation()`](#body-setrotation) · [`body.setVelocity()`](#body-setvelocity) · [`world.shapeCast()`](#world-shapecast) · [`world.sleeping`](#world-sleeping) · [Sleeping](#sleeping) · [`body.slot`](#body-slot) · [`world.step()`](#world-step) · [`world.stepCount`](#world-stepcount) · [`world.substeps`](#world-substeps)
+**S** &nbsp; [`world.save()`](#world-save) · [`body.setAngularVelocity()`](#body-setangularvelocity) · [`body.setAxisAngle()`](#body-setaxisangle) · [`world.setBody()`](#world-setbody) · [`body.setEuler()`](#body-seteuler) · [`world.setJoint()`](#world-setjoint) · [`body.setPosition()`](#body-setposition) · [`body.setRotation()`](#body-setrotation) · [`body.setVelocity()`](#body-setvelocity) · [`world.shapeCast()`](#world-shapecast) · [`world.sleeping`](#world-sleeping) · [Sleeping](#sleeping) · [`body.slot`](#body-slot) · [`world.step()`](#world-step) · [`world.stepCount`](#world-stepcount) · [`world.substeps`](#world-substeps)
 
 **T** &nbsp; [`world.touching()`](#world-touching) · [`world.transforms`](#world-transforms)
 
@@ -722,6 +722,89 @@ down a little where the real motion keeps it all: measured over 120 s at 60 Hz, 
 flipping at 5 rad/s keeps all of it to within 0.001%, at 20 rad/s 99.98%, and at 50 rad/s 99.4%.
 It never gains energy, so it never blows up. A sphere or a cube turns at a constant
 angular velocity, exactly.
+
+<a id="world-save"></a>
+### `world.save()` → `object`
+
+The whole world as plain data: everything a step reads, so a world loaded from it with
+[`World.load`](#world-load) steps exactly as this one would have, to the bit, on any machine. A
+replay, a test, a level loaded where it was left, a bug report that reproduces.
+
+Returns: a fresh object of plain numbers, strings, lists and objects, ready for `JSON.stringify`
+as it is.
+
+Throws: `save: this world was destroyed`.
+
+```js
+const data = world.save();
+const text = JSON.stringify(data);          // to a file, or a bug report
+const again = World.load(JSON.parse(text)); // steps exactly as world would
+```
+
+Notes: everything, not only the bodies as [`bodyOf`](#world-bodyof) gives them: their state in
+the step's own frame, the impulses contacts carry from one step to the next, sleep timers and
+islands, the broadphase's trees and its pairs in order, joints, characters, and the last step's
+events. With less, a loaded pile would start without the impulses holding it and twitch, and
+drift from the saved one. So it is large: a world of 1,000 boxes is 3.5 MB of JSON, and takes
+36 ms to save (i7-1260P). Numbers JSON can't hold, NaN, ±Infinity and -0, are written as strings,
+so JSON carries every bit. The data's layout follows Bearing's own, and says which in its
+`format`: data saved by another version of Bearing may not load (see
+[`World.load`](#world-load)).
+
+<a id="world-load"></a>
+### `World.load(data)` → `World`
+
+A world from what [`world.save()`](#world-save) returned, directly or through JSON: every body,
+joint and setting, with the same ids, so [`world.body(id)`](#world-body) finds each one, and
+stepping exactly as the saved world would have.
+
+Returns: a new [`World`](#world), its own: changing it changes nothing in the world it was saved
+from, or the data.
+
+Throws: `load: data must be what world.save() returned, got …`; `load: data is format …; this Bearing reads format 1`; `load: data is damaged: …`.
+
+```js
+const checkpoint = world.save();
+// ... later, back to where it was:
+const world2 = World.load(checkpoint);
+```
+
+Notes: `format` is the layout of the data, which changes when Bearing's stored state does; data
+of another format throws rather than load as something subtly different. Handles from the saved
+world belong to it: take the loaded world's own from `world.body(id)` with the same ids.
+
+<a id="world-debuglines"></a>
+### `world.debugLines(options)` → `Float32Array`
+
+The world as line segments, for any engine to draw in one loop: nine numbers a segment, its two
+ends `x y z` and `x y z`, then its colour, `r g b` from 0 to 1. Bearing draws nothing; this is the
+data.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `shapes` | `true` | Every body's collision shape: a box's 12 edges, a ball's 3 rings, a capsule's rings and sides, a hull's edges, a compound's parts, a mesh's or heightfield's triangles. Awake bodies blue, asleep dimmer, static grey, kinematic purple, characters green, sensors yellow. |
+| `contacts` | `true` | The last step's contact points, each a red line out along its normal (from `a` towards `b`) a quarter of the smaller body's thinnest size long. |
+| `joints` | `true` | Each joint, orange: a line from each body's centre to its anchor on that body. |
+| `boxes` | `false` | The boxes the broadphase files each body in, which it is filed again on leaving. |
+
+Returns: a `Float32Array`, a view of the world's own array, which the next call replaces: copy it
+to keep it.
+
+Throws: `debugLines: this world was destroyed`; `debugLines: options must be an object, got …`; `debugLines: unknown option '…' (did you mean '…'?)`; `debugLines: unknown option '…' (the options are shapes, contacts, joints, boxes)`; `debugLines: <option> must be true or false, got …`.
+
+```js
+const lines = world.debugLines({ contacts: false });
+for (let i = 0; i < lines.length; i += 9) {
+  const from = [lines[i], lines[i + 1], lines[i + 2]], to = [lines[i + 3], lines[i + 4], lines[i + 5]];
+  const colour = [lines[i + 6], lines[i + 7], lines[i + 8]];
+  // Your engine's own line: Winding's engine.debug.line(from, to, colour), say.
+}
+```
+
+Notes: shapes are drawn where the step works with them: a hull or compound about its centre of
+mass, as it collides. Contacts are where the last step found them, at its start. It costs nothing
+until called, and a call allocates only when the world has more to draw than the array has held.
+A big mesh or heightfield is many segments: three for each of its triangles.
 
 <a id="world-destroy"></a>
 ### `world.destroy()`

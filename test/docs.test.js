@@ -27,7 +27,14 @@ function surface(prefix, cls) {
     .map((name) => `${prefix}-${name.toLowerCase()}`);
 }
 
-const expected = ['world', 'readglb', ...surface('world', World), ...surface('body', Body), ...surface('joint', Joint)];
+/** A class's own static methods, as `prefix-name` anchors: World.load. */
+function statics(prefix, cls) {
+  return Object.getOwnPropertyNames(cls)
+    .filter((name) => !['length', 'name', 'prototype'].includes(name) && !name.startsWith('_'))
+    .map((name) => `${prefix}-${name.toLowerCase()}`);
+}
+
+const expected = ['world', 'readglb', ...surface('world', World), ...statics('world', World), ...surface('body', Body), ...surface('joint', Joint)];
 
 test('the package exports World, Body, Joint and readGlb, and nothing else', () => {
   assert.deepEqual(Object.keys(bearing).sort(), ['Body', 'Joint', 'World', 'readGlb']);

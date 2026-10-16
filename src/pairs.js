@@ -286,7 +286,7 @@ export class Pairs {
  * What a mesh pair's manifolds left behind, for warm starting: per manifold,
  * its normal and what Pairs keeps for one, grown by doubling.
  */
-class Memory {
+export class Memory {
   constructor() {
     this.count = 0;
     this.capacity = 0;

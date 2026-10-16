@@ -482,11 +482,25 @@ in the benchmark.
 
 ### Part four: 1.0
 
-**15. Save, load and debug lines ⬜**
+**15. Save, load and debug lines ✅** *(approved and done 2026-10-16)*
 *Concepts:* serialisation; exact floating-point round trips; replays.
-`world.save()` to plain data and `World.load(data)` back, exact to the bit; `world.debugLines()`
-as line segments in a `Float32Array` *(proposal)*.
-*Done when:* a saved world, loaded and stepped, matches the original to the bit.
+`world.save()` to plain, JSON-safe data and `World.load(data)` back, exact to the bit: a full
+snapshot of everything a step reads, with ids kept, its layout named by `format`.
+`world.debugLines(options)` as line segments in a `Float32Array`, nine numbers each (two ends and
+a colour): `shapes`, `contacts`, `joints`, `boxes`.
+*Done when:* a mixed world saved mid-run, loaded and stepped matches the original to the bit,
+directly and through JSON; `save(load(save(w)))` equals `save(w)`; unknown formats and damaged data
+throw; debug lines draw every shape kind, contacts and joints; the soak leaves nothing behind.
+*Result:* `src/save.js` and `src/debug.js`, held by `test/save.test.js`: a world of a sleeping
+pile, bouncing balls, a capsule, a hull, a compound, a jointed chain with a motor, a character, a
+sensor, a kinematic platform, a mesh, a heightfield, a fast rod and a waiting force, saved after
+150 steps, loads and steps 600 more identically to the bit with the same events, directly and
+through JSON, and its next save is the same to the character; every id, `bodyOf`, ground and
+raycast comes back. The world is saved by walking its fields, not by a list, so a field added
+later is saved too; a test holds the world's field names to a list, so a change also changes
+`format`. A world of 1,000 boxes is 3.5 MB of JSON, saved in 36 ms and loaded in 55 (i7-1260P).
+Debug lines count right for every shape kind, contacts and joints, reuse one array, and cost
+nothing until called; the soak saves, loads and draws 30 times and keeps nothing.
 
 **16. Performance pass and workers ⬜**
 *Concepts:* profiling; cache behaviour; writing JavaScript the JIT optimises well; graph colouring;
@@ -696,6 +710,10 @@ Winding's way, copied before the first one:
   - Tumbling's energy can rise: a body spun mostly about its longest or shortest axis gains 2e-4
     to 4e-4 of its energy in 120 s. Momentum stays exact, which bounds it; "energy only falls" is
     true only near the middle axis, where `test/motion.test.js` spins its bodies.
+- **2026-10-16.** Milestone 15 done, as approved. The save is larger than proposed (3.5 MB of JSON
+  for 1,000 boxes, not about 1): every number a step reads is in it, a body's axes, rest pose,
+  bounds and both transforms among them, and each is needed for the loaded world to step to the
+  bit.
 - **2026-10-16.** Milestone 13's gap fixed, the option Nolan chose of three measured (a quarter-turn
   spin cap left 53 of 100 turned rods through a 1 cm wall; re-finding contacts each substep, 31):
   after the solve, each body whose centre moved more than half its thinnest size sweeps a core, a

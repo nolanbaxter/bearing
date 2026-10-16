@@ -47,6 +47,8 @@ import { walk, settle, CHARACTER } from './character.js';
 import { lockedInverse } from './contact.js';
 import { cos, quatMultiply } from './core/math.js';
 import { Mesh, Heightfield } from './mesh.js';
+import { save, load } from './save.js';
+import { debugLines } from './debug.js';
 
 const TYPES = ['dynamic', 'static', 'kinematic', 'character'];
 const DYNAMIC = 0, STATIC = 1, KINEMATIC = 2;   // and CHARACTER, 3, from character.js
@@ -74,6 +76,7 @@ const CUBE_CORNERS = [-0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5, 0.5, -0.5, 0.5, 0
   -0.5, -0.5, 0.5, 0.5, -0.5, 0.5, -0.5, 0.5, 0.5, 0.5, 0.5, 0.5];
 
 const WORLD_OPTIONS = ['gravity', 'substeps', 'sleeping'];
+const DEBUG_OPTIONS = ['shapes', 'contacts', 'joints', 'boxes'];
 const RAY_OPTIONS = ['maxDistance', 'mask', 'ignore'];
 const CAST_OPTIONS = ['maxDistance', 'mask', 'ignore', 'rotation'];
 const OVERLAP_OPTIONS = ['mask', 'ignore', 'rotation'];
@@ -306,6 +309,8 @@ export class World {
     /** Steps that looked for islands: for the off-means-off test, which reads it. */
     this._islandSteps = 0;
     this._destroyed = false;
+    /** debugLines()'s array, reused from call to call (debug.js); empty until asked for. */
+    this._lines = new Float32Array(0);
   }
 
   /** The state that isn't a column: fresh at creation, and again when destroyed. */
@@ -521,6 +526,31 @@ export class World {
   /** Removes a body, with its joints, or a joint. */
   remove(handle) {
     this._remove('remove', handle);
+  }
+
+  // ---- saving and drawing ----
+
+  /** The whole world as plain, JSON-safe data, for World.load() (save.js). */
+  save() {
+    this._live('save');
+    return save(this, World);
+  }
+
+  /** The world save() wrote `data` from, ready to step exactly as it would have. */
+  static load(data) {
+    return load(data, World);
+  }
+
+  /**
+   * The world as line segments, nine numbers each: two ends and a colour
+   * (debug.js). The world's own array, replaced by the next call.
+   */
+  debugLines(options_) {
+    this._live('debugLines');
+    const o = options('debugLines', options_);
+    known('debugLines', o, DEBUG_OPTIONS);
+    const pick = (k, d) => (o[k] === undefined ? d : flag('debugLines', k, o[k]));
+    return debugLines(this, { shapes: pick('shapes', true), contacts: pick('contacts', true), joints: pick('joints', true), boxes: pick('boxes', false) });
   }
 
   // ---- joints (joints.js) ----
@@ -1450,6 +1480,7 @@ export class World {
     for (const [name, Type] of COLUMNS) this[name] = new Type(0);
     this._geometry = [];
     this._inner = [];
+    this._lines = new Float32Array(0);
     this._forcedSlots = [];
     this._broadphase = new Broadphase();
     this._pairs = new Pairs(this);

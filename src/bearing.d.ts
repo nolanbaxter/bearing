@@ -265,6 +265,24 @@ export type PartInfo = {
   | { shape: 'hull'; vertices: number[] }
 );
 
+/** What world.save() returns: plain data, its layout Bearing's own, named by `format`. */
+export interface SavedWorld {
+  format: number;
+  objects: unknown[];
+}
+
+/** What world.debugLines draws. */
+export interface DebugLineOptions {
+  /** Every body's collision shape, default true. */
+  shapes?: boolean;
+  /** The last step's contact points and normals, default true. */
+  contacts?: boolean;
+  /** Each joint's anchors, default true. */
+  joints?: boolean;
+  /** The broadphase's boxes, default false. */
+  boxes?: boolean;
+}
+
 /** What world.groundOf finds under a character. */
 export interface Ground {
   body: Body;
@@ -498,6 +516,12 @@ export class World {
   body(id: number): Body;
   /** Moves the world on by dt seconds, exactly. */
   step(dt: number): void;
+  /** The whole world as plain, JSON-safe data, for World.load. */
+  save(): SavedWorld;
+  /** A world from what save() returned, directly or through JSON, stepping exactly as the saved one would. */
+  static load(data: SavedWorld): World;
+  /** Line segments, nine numbers each: two ends, then r g b. The world's own array: the next call replaces it. */
+  debugLines(options?: DebugLineOptions): Float32Array;
   destroy(): void;
 }
 

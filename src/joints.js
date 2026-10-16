@@ -490,7 +490,7 @@ function orient(world, j, axis) {
 }
 
 /** Joint j's anchor on side 0 (a) or 1 (b), in the world, now: a fresh array. */
-function worldAnchor(world, j, side) {
+export function worldAnchor(world, j, side) {
   const J = world._joints, s = side === 0 ? J.a[j] : J.b[j], local = side === 0 ? J.localA : J.localB;
   if (s < 0) return [local[3 * j], local[3 * j + 1], local[3 * j + 2]];
   const p = world._position;

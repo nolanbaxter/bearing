@@ -159,5 +159,11 @@ All notable changes to Bearing are recorded here. The format follows
   `world.transforms` stay at the origin, so a renderer draws a model where its file puts it.
   `velocity` is the centre of mass's. A lopsided body's inertia is about its principal axes,
   found exactly when it is made, and `body.inertia` gives the moments about them.
+- `world.save()` and `World.load(data)`: the whole world as plain, JSON-safe data, and back, so a
+  loaded world steps exactly as the saved one would have, to the bit, with the same ids. For
+  replays, tests, checkpoints and bug reports that reproduce.
+- `world.debugLines(options)`: the world as line segments in one `Float32Array`, nine numbers each
+  (two ends and a colour), for any engine to draw: collision shapes, the last step's contacts,
+  joints, and the broadphase's boxes.
 - The `centerOfMass` option, `[x, y, z]` in the body's own frame or `null` for the shape's, moves
   any body's centre of mass, as a car's is lowered so it doesn't roll over.
