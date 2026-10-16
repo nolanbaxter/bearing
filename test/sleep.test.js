@@ -50,6 +50,46 @@ test('a body buzzing in place, going nowhere, still goes to sleep: what counts i
   assert.ok(slept, 'never slept');
 });
 
+test('a heap of turned boxes goes to sleep: friction pulls back the slip it let through', () => {
+  // 288 boxes dropped turned, eight layers of six by six. Before milestone 16,
+  // friction only stopped speeds, so a heap's contacts crept a few millimetres
+  // a second in the solver's leftover error, and creepers out of step kept the
+  // island awake: 235 of these were still awake after 40 s. Now friction pulls
+  // back slip (contact.js, store) and the rest pose is taken again each second.
+  const world = new World();
+  ground(world);
+  const boxes = [];
+  for (let i = 0; i < 288; i++) {
+    const x = i % 6, z = Math.floor(i / 6) % 6, y = Math.floor(i / 36);
+    const a = [Math.sin(i * 1.3), Math.cos(i * 0.7), Math.sin(i * 2.1) + 0.1], l = Math.hypot(...a), t = ((i * 0.618034) % 1) * Math.PI;
+    boxes.push(world.addBody({
+      position: [(x - 3) * 1.8, 1 + y * 1.8, (z - 3) * 1.8],
+      rotation: [...a.map((v) => v / l * Math.sin(t / 2)), Math.cos(t / 2)],
+    }));
+  }
+  steps(world, 20);
+  assert.ok(asleep(boxes), `${boxes.filter((b) => !b.asleep).length} still awake after 20 s`);
+});
+
+test('a steady creep slower than a pixel a second sleeps; a faster one never does', () => {
+  // On ice nothing slows a box, so it keeps the speed it is given. A 1 m box's
+  // pixel is 5 mm: 4 mm/s strays 4 mm in any second, 6 mm/s strays 6. Two
+  // boxes side by side, one island, the second dropped 45 cm so it comes to
+  // rest 0.3 s after the first: measured from where each first came to rest,
+  // as before milestone 16, each was still from 1 s to 1.25 s of every 1.25 s,
+  // never both at once, and they never slept.
+  const run = (speed) => {
+    const world = new World();
+    ground(world, { friction: 0 });
+    const box = world.addBody({ position: [0, 0.5, 0], friction: 0, velocity: [speed, 0, 0] });
+    world.addBody({ position: [0, 0.95, 1], friction: 0, velocity: [speed, 0, 0] });
+    steps(world, 10);
+    return box;
+  };
+  assert.ok(run(0.004).asleep, '4 mm/s: awake');
+  assert.ok(!run(0.006).asleep, '6 mm/s: asleep');
+});
+
 test('a resting stack sleeps as one island, and a ball into it wakes it and not a stack beside it', () => {
   const world = new World();
   ground(world);

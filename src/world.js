@@ -104,17 +104,27 @@ const STIFFNESS = 1 / 8;
 // each other; 10 settled the pyramid stillest, and it is Box2D 3's.
 const DAMPING_RATIO = 10;
 
-// SLEEPING. A body is still while no point of it has strayed more than its
-// own tolerance, about a pixel, from where it was when it last came to rest:
-// freezing it there can't be seen. An island sleeps once every body in it has
-// been still for SLEEP_TIME. Moving steadily, that is any speed under its
-// tolerance over SLEEP_TIME, 5 mm/s for a 1 m box and 0.05 mm/s for a 1 cm marble.
+// SLEEPING. A body is still while no point of it strays more than its own
+// tolerance, about a pixel, within any SLEEP_TIME: where it was is taken again
+// each SLEEP_TIME it stays within it. An island sleeps once every body in it
+// has been still for SLEEP_TIME. Moving steadily, that is any speed under its
+// tolerance over SLEEP_TIME, 5 mm/s for a 1 m box and 0.05 mm/s for a 1 cm
+// marble, however long it keeps it up.
+//
+// Measured from where it first came to rest instead, as this was before
+// milestone 16, a box creeping at 2 mm/s strayed its 5 mm in 2.5 s, started
+// again, and was still only 60% of the time; and an island sleeps only when
+// all its bodies are still at once. The benchmark's 1,000-box pile, one
+// island, had a few dozen such boxes among 900 and never slept. The creep is
+// the solver's (friction pulls back what it can; see store() in contact.js),
+// and freezing it is the point of sleeping.
 //
 // It is how far the body has gone that counts, not how fast it is going. A
 // heap of 1,000 boxes measured with a speed rule had 909 still awake after
 // 40 s: a few boxes buzzed at 1.3 cm/s, twice the speed that counts as still,
 // while going nowhere (one strayed 0.18 mm in 30 s), and kept the whole heap
-// awake. Going by distance, a buzz in place is still, and a real creep isn't.
+// awake. Going by distance, a buzz in place is still, and a creep faster than
+// a pixel a second isn't.
 //
 // SLEEP_TIME is the shortest that froze nothing about to move, measured with
 // sleeping on and off over 8 s at 60 Hz: boxes on slopes 0.25° to 2° past
@@ -865,7 +875,7 @@ export class World {
     if (touching > 0) {
       const g = this._gravity;
       restitution(this, next, Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]));
-      store(this._pairs, next);
+      store(this, next);
     }
     this._catch(next);
     if (touching > 0) touched(this, pairs, next);
@@ -936,8 +946,14 @@ export class World {
       // sleep, woken by their ground moving, if a scene of thousands measures it.
       if (type[s] === CHARACTER ? false : type[s] === KINEMATIC ? v[s3] === 0 && v[s3 + 1] === 0 && v[s3 + 2] === 0
         && w[s3] === 0 && w[s3 + 1] === 0 && w[s3 + 2] === 0 : strayed < size[s] * PIXEL) {
+        const before = still[s];
         still[s] += dt;
         if (still[s] >= SLEEP_TIME) ready = true;
+        // Each whole SLEEP_TIME still, where it rests is taken again.
+        if (Math.floor(still[s] / SLEEP_TIME) !== Math.floor(before / SLEEP_TIME)) {
+          rest[r7] = p[s3]; rest[r7 + 1] = p[s3 + 1]; rest[r7 + 2] = p[s3 + 2];
+          rest[r7 + 3] = q[s4]; rest[r7 + 4] = q[s4 + 1]; rest[r7 + 5] = q[s4 + 2]; rest[r7 + 6] = q[s4 + 3];
+        }
       } else {
         this._settle(s);
       }

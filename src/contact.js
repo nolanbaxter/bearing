@@ -67,7 +67,7 @@
 
 import { collide, Shape, Manifold, Parts, placePart, SPHERE, CAPSULE, BOX as BOX_KIND, HULL } from './collide.js';
 import { touchLevel, Touches } from './triangle.js';
-import { rotate } from './core/math.js';
+import { rotate, atan2 } from './core/math.js';
 import { resized } from './core/slots.js';
 import { impact, posed, UNSURE } from './impact.js';
 
@@ -135,6 +135,10 @@ export class Contacts {
     grow('normalMass', Float64Array, p); grow('tangentMass1', Float64Array, p); grow('tangentMass2', Float64Array, p);
     grow('normalImpulse', Float64Array, p); grow('tangentImpulse1', Float64Array, p); grow('tangentImpulse2', Float64Array, p);
     grow('maxNormalImpulse', Float64Array, p); grow('relativeVelocity', Float64Array, p);
+    // The slip a point carries in from earlier steps, along t1 and t2, and
+    // whether friction was at its limit there in the last pass (see store).
+    grow('drift1', Float64Array, p); grow('drift2', Float64Array, p);
+    grow('sliding', Uint8Array, p);
     this.capacity = capacity;
   }
 
@@ -499,6 +503,7 @@ function emit(world, next, p, a, b, mf, sign, tolerance, sub, partA, partB, key)
     for (let c = 0; c < 3; c++) next.point[3 * i + c] = mf.points[3 * k + c];
     for (let c = 0; c < 3; c++) next.shift[3 * i + c] = shifted ? SHIFT[3 * k + c] : 0;
     next.normalImpulse[i] = 0; next.tangentImpulse1[i] = 0; next.tangentImpulse2[i] = 0;
+    next.drift1[i] = 0; next.drift2[i] = 0;
   }
   basis(next, m);
   return m;
@@ -529,17 +534,46 @@ function carry(from, p, next, m) {
       const fx = from.friction[3 * o], fy = from.friction[3 * o + 1], fz = from.friction[3 * o + 2];
       next.tangentImpulse1[i] = fx * next.t1[3 * m] + fy * next.t1[3 * m + 1] + fz * next.t1[3 * m + 2];
       next.tangentImpulse2[i] = fx * next.t2[3 * m] + fy * next.t2[3 * m + 1] + fz * next.t2[3 * m + 2];
+      const sx = from.slip[3 * o], sy = from.slip[3 * o + 1], sz = from.slip[3 * o + 2];
+      next.drift1[i] = sx * next.t1[3 * m] + sy * next.t1[3 * m + 1] + sz * next.t1[3 * m + 2];
+      next.drift2[i] = sx * next.t2[3 * m] + sy * next.t2[3 * m + 1] + sz * next.t2[3 * m + 2];
       break;
     }
   }
 }
 
 /**
- * After the solve: each pair remembers its points' ids and impulses, for the
- * next step; a mesh pair, each of its manifolds, with its normal, in its Memory.
+ * After the solve: each pair remembers its points' ids, impulses and slip,
+ * for the next step; a mesh pair, each of its manifolds, with its normal, in
+ * its Memory.
+ *
+ * Slip is how far the two surfaces have slid against each other at a point
+ * while friction held it, and friction's solving pass pulls it back, as the
+ * normal's pulls back an overlap. Friction alone works on speeds: it stops a
+ * slide, but can't undo one, and a solver that visits each contact once a
+ * pass leaves a little error, which in a heap leans the same way step after
+ * step. Measured on the benchmark's 1,000 boxes: settled, their contacts held
+ * at a third to a half of friction's limit, yet slid 0.5 to 1.5 mm/s, and a
+ * box crept 4 cm in 10 s, so the heap never slept. PhysX's friction anchors
+ * do this job; this measures the slip itself rather than fixing a spot on
+ * each body, so a rolling ball, whose surfaces don't slide, has none.
+ *
+ * Measured on the benchmark's pile, five starts, sleeping off from 30 s to
+ * 40 s: the fastest box crept 1 to 1.5 mm/s with this, up to 8.9 without.
+ * Gentler versions were tried and measured worse on that pile: pulling back at
+ * half the rate, and letting go of a whole contact when any point slid (a
+ * rocking box's points take turns sliding). See also the sleep rule in
+ * world.js, which this works with.
+ *
+ * It is let go where friction was at its limit in the last pass, since the
+ * point is truly sliding and pulling it back would be friction it doesn't
+ * have, or where nothing presses, since there's no friction there to hold.
+ * A point found at the moment of impact (shift) starts afresh.
  */
-export function store(pairs, c) {
+export function store(world, c) {
+  const pairs = world._pairs;
   for (let m = 0; m < c.count; m++) {
+    slipped(world, c, m);
     const p = c.pair[m], sub = c.sub[m];
     if (sub < 0) {
       keep(pairs, p, c, m);
@@ -571,7 +605,70 @@ function keep(to, p, c, m) {
     to.friction[3 * o] = c.t1[m3] * l1 + c.t2[m3] * l2;
     to.friction[3 * o + 1] = c.t1[m3 + 1] * l1 + c.t2[m3 + 1] * l2;
     to.friction[3 * o + 2] = c.t1[m3 + 2] * l1 + c.t2[m3 + 2] * l2;
+    const d1 = c.drift1[i], d2 = c.drift2[i];
+    to.slip[3 * o] = c.t1[m3] * d1 + c.t2[m3] * d2;
+    to.slip[3 * o + 1] = c.t1[m3 + 1] * d1 + c.t2[m3 + 1] * d2;
+    to.slip[3 * o + 2] = c.t1[m3 + 2] * d1 + c.t2[m3 + 2] * d2;
   }
+}
+
+/**
+ * Manifold m's slip after the step, into drift1 and drift2: what it carried
+ * in, plus how far b's surface moved against a's at each point along the
+ * tangents, from where each body started the step to where it ends it.
+ */
+function slipped(world, c, m) {
+  const a = c.a[m], b = c.b[m], m3 = 3 * m, awake = world._awake;
+  const t1x = c.t1[m3], t1y = c.t1[m3 + 1], t1z = c.t1[m3 + 2];
+  const t2x = c.t2[m3], t2y = c.t2[m3 + 1], t2z = c.t2[m3 + 2];
+  for (let k = 0; k < c.points[m]; k++) {
+    const i = m * P + k, i3 = 3 * i;
+    if (c.sliding[i] !== 0 || c.normalImpulse[i] === 0
+      || c.shift[i3] !== 0 || c.shift[i3 + 1] !== 0 || c.shift[i3 + 2] !== 0) {
+      c.drift1[i] = 0; c.drift2[i] = 0;
+      continue;
+    }
+    // Only an awake body moves in a step; a static one's start rotation was never kept.
+    let dx = 0, dy = 0, dz = 0;
+    if (awake[b] !== 0) {
+      moved(world, b, c.rb, i3);
+      dx = v3[0]; dy = v3[1]; dz = v3[2];
+    }
+    if (awake[a] !== 0) {
+      moved(world, a, c.ra, i3);
+      dx -= v3[0]; dy -= v3[1]; dz -= v3[2];
+    }
+    c.drift1[i] += dx * t1x + dy * t1y + dz * t1z;
+    c.drift2[i] += dx * t2x + dy * t2y + dz * t2z;
+  }
+}
+
+/**
+ * How far slot s's surface at offset r[i3..] from its centre moved in the
+ * step, into v3: its centre's move, plus its turn as an angle times the
+ * lever, θ × r. Not where that bit of surface ended up: a 1 cm marble rolling
+ * at 1 m/s turns 1.7 radians in a step, and the bit that touched at the start
+ * swings forward 0.7 of its radius over that turn, which would read as slip
+ * where a rolling ball has none. Measured, it took 3% off how far the marble
+ * rolled. θ × r is exactly the rolling ball's centre's move, so it reads 0.
+ */
+function moved(world, s, r, i3) {
+  const p = world._position, st = world._start, q = world._rotation, q0 = world._startQ, s3 = s * 3, s4 = s * 4;
+  // The step's turn, q q0⁻¹: its vector part is sin(θ/2) along the axis.
+  const ax = q[s4], ay = q[s4 + 1], az = q[s4 + 2], aw = q[s4 + 3];
+  const bx = -q0[s4], by = -q0[s4 + 1], bz = -q0[s4 + 2], bw = q0[s4 + 3];
+  let ux = aw * bx + ax * bw + ay * bz - az * by;
+  let uy = aw * by + ay * bw + az * bx - ax * bz;
+  let uz = aw * bz + az * bw + ax * by - ay * bx;
+  let uw = aw * bw - ax * bx - ay * by - az * bz;
+  if (uw < 0) { ux = -ux; uy = -uy; uz = -uz; uw = -uw; }
+  const sine = Math.sqrt(ux * ux + uy * uy + uz * uz);
+  const k = sine === 0 ? 0 : 2 * atan2(sine, uw) / sine;
+  const tx = ux * k, ty = uy * k, tz = uz * k;
+  const rx = r[i3], ry = r[i3 + 1], rz = r[i3 + 2];
+  v3[0] = p[s3] - st[s3] + ty * rz - tz * ry;
+  v3[1] = p[s3 + 1] - st[s3 + 1] + tz * rx - tx * rz;
+  v3[2] = p[s3 + 2] - st[s3 + 2] + tx * ry - ty * rx;
 }
 
 /**
@@ -993,12 +1090,29 @@ export function solve(world, c, h, bias) {
       const v1 = closing(v, w, a3, b3, c.ra, c.rb, i3, t1x, t1y, t1z);
       const v2 = closing(v, w, a3, b3, c.ra, c.rb, i3, t2x, t2y, t2z);
       const o1 = c.tangentImpulse1[i], o2 = c.tangentImpulse2[i];
-      let n1 = o1 - c.tangentMass1[i] * v1, n2 = o2 - c.tangentMass2[i] * v2;
+      let n1, n2;
+      // The solving pass also pulls back the slip carried in (see store), as
+      // fast as an overlap is pushed out, and no faster than a pixel a substep.
+      const s1 = c.drift1[i], s2 = c.drift2[i];
+      if (bias && (s1 !== 0 || s2 !== 0)) {
+        let b1 = soft.biasRate * s1, b2 = soft.biasRate * s2;
+        const bb = b1 * b1 + b2 * b2;
+        if (bb > maxBias * maxBias) {
+          const scale = maxBias / Math.sqrt(bb);
+          b1 *= scale; b2 *= scale;
+        }
+        n1 = o1 - c.tangentMass1[i] * (v1 + b1); n2 = o2 - c.tangentMass2[i] * (v2 + b2);
+      } else {
+        n1 = o1 - c.tangentMass1[i] * v1; n2 = o2 - c.tangentMass2[i] * v2;
+      }
       const limit = mu * c.normalImpulse[i];
       const l2 = n1 * n1 + n2 * n2;
       if (l2 > limit * limit) {
         const scale = limit / Math.sqrt(l2);
         n1 *= scale; n2 *= scale;
+        c.sliding[i] = 1;
+      } else {
+        c.sliding[i] = 0;
       }
       c.tangentImpulse1[i] = n1; c.tangentImpulse2[i] = n2;
       const d1 = n1 - o1, d2 = n2 - o2;

@@ -51,6 +51,7 @@ export class Pairs {
     this.pid = new Uint32Array(0);
     this.normalImpulse = new Float64Array(0);
     this.friction = new Float64Array(0);   // the friction impulse at each point, as a world vector
+    this.slip = new Float64Array(0);       // how far each point has slipped while friction held it, a world vector (contact.js, store)
     this.twist = new Float64Array(0);      // the pair's rolling and spinning friction, an angular impulse, world vector
     this.touching = new Uint8Array(0);     // 1 while its bodies touch, as of the last step that looked
     /** A mesh pair's Memory, by pair; null for any other pair. */
@@ -77,6 +78,7 @@ export class Pairs {
     this.pid = resized(this.pid, c * P);
     this.normalImpulse = resized(this.normalImpulse, c * P);
     this.friction = resized(this.friction, c * P * 3);
+    this.slip = resized(this.slip, c * P * 3);
     this.twist = resized(this.twist, c * 3);
     this.capacity = c;
   }
@@ -236,6 +238,7 @@ export class Pairs {
     this.pid.copyWithin(to * P, from * P, from * P + P);
     this.normalImpulse.copyWithin(to * P, from * P, from * P + P);
     this.friction.copyWithin(to * P * 3, from * P * 3, from * P * 3 + P * 3);
+    this.slip.copyWithin(to * P * 3, from * P * 3, from * P * 3 + P * 3);
     this.twist.copyWithin(to * 3, from * 3, from * 3 + 3);
     this.memory[to] = this.memory[from];
     this.index[this._find(this.a[to], this.b[to])] = to;
@@ -246,7 +249,7 @@ export class Pairs {
     swap(this.a, i, j, 1); swap(this.b, i, j, 1);
     swap(this.idA, i, j, 1); swap(this.idB, i, j, 1);
     swap(this.points, i, j, 1); swap(this.touching, i, j, 1);
-    swap(this.pid, i, j, P); swap(this.normalImpulse, i, j, P); swap(this.friction, i, j, 3 * P); swap(this.twist, i, j, 3);
+    swap(this.pid, i, j, P); swap(this.normalImpulse, i, j, P); swap(this.friction, i, j, 3 * P); swap(this.slip, i, j, 3 * P); swap(this.twist, i, j, 3);
     const kept = this.memory[i];
     this.memory[i] = this.memory[j];
     this.memory[j] = kept;
@@ -297,6 +300,7 @@ export class Memory {
     this.pid = new Uint32Array(0);
     this.normalImpulse = new Float64Array(0);
     this.friction = new Float64Array(0);
+    this.slip = new Float64Array(0);
     this.twist = new Float64Array(0);
     this.ensure(1);
   }
@@ -312,6 +316,7 @@ export class Memory {
     this.pid = resized(this.pid, c * P);
     this.normalImpulse = resized(this.normalImpulse, c * P);
     this.friction = resized(this.friction, c * P * 3);
+    this.slip = resized(this.slip, c * P * 3);
     this.twist = resized(this.twist, c * 3);
     this.capacity = c;
   }

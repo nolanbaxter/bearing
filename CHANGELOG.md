@@ -40,7 +40,9 @@ All notable changes to Bearing are recorded here. The format follows
   passes its friction and then slides at exactly g (sin θ − μ cos θ); balls with restitution 1 keep
   their momentum and energy. Kinematic bodies push dynamic ones and carry what stands on them.
 - Body options `friction` (0.5), `restitution` (0), `damping`, `angularDamping` and `gravityScale`.
-  Friction mixes as a geometric mean, restitution as the larger.
+  Friction mixes as a geometric mean, restitution as the larger. Friction that holds also pulls
+  back any slip the solver let through, so a settled heap stays where it settled and goes to
+  sleep: the benchmark's 1,000 boxes were 883 awake for good, at 45 ms a step, and now all sleep.
 - `world.substeps` (8), the one solver setting, measured rather than chosen: the fewest that keep
   the pyramid within half a box's tolerance.
 - Every contact tolerance comes from the size of the bodies touching (a two-hundredth of the
@@ -51,8 +53,8 @@ All notable changes to Bearing are recorded here. The format follows
   a pile at rest costs almost nothing to keep. No world bounds and nothing to size.
 - Body options `layers` and `mask`: 32 collision layers as bits. Two bodies collide when each one's
   layers are in the other's mask; by default everything collides with everything.
-- Sleeping. Touching bodies form islands, and an island whose bodies have all stayed within a pixel
-  of where they came to rest for a second goes to sleep: left out of every step, at no cost, until
+- Sleeping. Touching bodies form islands, and an island whose bodies have all strayed less than a
+  pixel in every second for a second goes to sleep: left out of every step, at no cost, until
   something disturbs it. Anything that does wakes it, with nothing to call: a touch, any setter,
   force or impulse, `setBody`, removing or moving what it rests on, or changing `world.gravity`.
   10,000 boxes asleep step in a few microseconds. `world.sleeping` (on by default) switches it off,

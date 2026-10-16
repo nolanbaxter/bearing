@@ -527,6 +527,28 @@ on one thread *(proposal for any setting this needs)*.
 *Done when:* the speed goals are met, or the gap is stated plainly with the reason. With workers,
 a large world steps faster on both machines than on one thread, to the same bits, and a small one
 costs no more than before.
+*Approved (2026-10-16), in this order:* (1) settled piles go to sleep, cause first; (2) the solver:
+bodies gathered into solver arrays, each point's turning terms worked out once a step, a pair's
+velocities in locals; (3) the substep count measured again (it must hold the stack, the pyramid
+and a heap's drift); (4) no allocation in the step; (5) the tree refitted instead of re-filed, `FAT`
+and `AHEAD` measured again; (6) raycasts profiled, cheap fixes only; (7) graph colouring; (8)
+workers. Decisions: results may change once at rounding level from reordered arithmetic (every
+machine still identical, every physics test holding its figures); stopping a creep the solver
+made is accepted within a measured threshold; a `workers` option on `new World()` (automatic by
+default, `0` for off, a number to cap them); part A as 0.12.x patches, workers as 0.13.0; the
+Rapier goal reset only after measuring, with Nolan's OK; the desktop numbers run by Nolan.
+*So far:* (1) done. The benchmark pile's 883 awake bodies were creeping, not buzzing: settled
+contacts held at a third to a half of friction's limit yet slid 0.5 to 1.5 mm/s, the solver's
+leftover error leaning the same way every step. Friction now carries a contact's slip from step to
+step and pulls it back (`store()` in `src/contact.js`), which held the pile's fastest creeper to
+1 to 1.5 mm/s where it had reached 8.9. That alone wasn't enough: a body counted as still only
+while within a pixel of where it first came to rest, so a box creeping at 2 mm/s was still only
+60% of the time, and a few dozen out of step kept the one island of 900 awake. Now its rest pose
+is taken again every second it stays still, so "still" is what the docs always said: under a pixel
+in any second. Five starts of the pile all sleep, at 13 to 35 s, and cost nothing from then, where
+they cost 45 ms a step for good; 18 smaller piles all sleep, the slowest at 17 s. Either fix alone
+left a pile awake at 60 s. Measured on the way: 4 substeps let the settled pile drift ten times as
+far as 8, so (3) must test a heap's drift too.
 
 **17. Documentation ⬜**
 *Concepts:* writing reference documentation people can learn from.

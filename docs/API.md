@@ -1392,6 +1392,10 @@ into each other, slide no more than friction allows, and bounce as much as their
   anything.
 - **Friction is a cone.** A contact resists sliding in every direction alike, up to its friction
   times how hard it is pressed, so a box pushed diagonally slows exactly as one pushed straight.
+- **Friction holds where it holds.** While a contact isn't sliding, friction also pulls back any
+  slip, the way an overlap is pushed out, so a heap that has settled stays put instead of creeping
+  a few millimetres a second and staying awake. A contact sliding anywhere, or no longer pressed,
+  lets go of its slip and starts afresh. A rolling ball doesn't slip, so it rolls as before.
 - **Tolerances scale with what touches.** A contact's tolerance is a two-hundredth of the smaller
   body's thinnest size: about a pixel, for a body you can see whole on screen. That is 5 mm for a
   1 m box, 0.05 mm for a 1 cm marble and 10 cm for a 20 m-wide building. It sets how fast an overlap
@@ -1703,9 +1707,10 @@ tune; [`world.sleeping`](#world-sleeping) switches it off.
   one island. A character never sleeps, so whatever it stands on can always carry it; a
   kinematic body sleeps once it is told no speed at all.
 - **Stopped means gone nowhere you could see.** A body counts as stopped while no point of it
-  strays more than its contact tolerance, about a pixel, from where it came to rest. Moving
-  steadily, that is under 5 mm/s for a 1 m box and 0.05 mm/s for a 1 cm marble; buzzing in place,
-  as a body deep in a pile can, it is stopped however fast it buzzes. An island sleeps once all
+  strays more than its contact tolerance, about a pixel, in any second. Moving steadily, that is
+  under 5 mm/s for a 1 m box and 0.05 mm/s for a 1 cm marble, however long it keeps it up, so a
+  heap whose boxes creep slower than that still sleeps; buzzing in place, as a body deep in a pile
+  can, it is stopped however fast it buzzes. An island sleeps once all
   its bodies have been stopped for a second, and its velocities are then set to exactly zero. A
   second is measured, the shortest that put nothing to sleep that was about to move: a box
   creeping on a slope a quarter of a degree past where friction holds it, and a cube a tenth of a
@@ -1721,8 +1726,8 @@ tune; [`world.sleeping`](#world-sleeping) switches it off.
 Notes: a body starting from rest that would only speed up very slowly, slower than twice its
 tolerance over a second squared (0.01 m/s² for a 1 m box), can fall asleep before it moves: a
 box on a slope within a twentieth of a degree of where friction holds it stays put. Nudge it, or
-switch sleeping off. A heap sleeps only when all of it has stopped, so one slowly settling corner
-keeps the whole heap awake until it, too, comes to rest.
+switch sleeping off. A heap sleeps only when all of it has stopped, so one corner still settling
+faster than a pixel a second keeps the whole heap awake until it, too, comes to rest.
 
 <a id="queries"></a>
 ## Queries

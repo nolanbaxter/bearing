@@ -70,7 +70,8 @@ These were made with Nolan and override the rules below where they differ.
   Layers and masks are 32 bits, and negative numbers (`~MASK`, `1 << 31`) are accepted as the same
   bits (Nolan, 2026-10-13). Re-run the bench's default after any change to the broadphase.
 - **Sleeping** (2026-10-13, milestone 6). An island sleeps when every body in it has stayed within
-  its tolerance of where it came to rest for `SLEEP_TIME`, 1 s, measured (see its comment in
+  its tolerance of where it rested for `SLEEP_TIME`, 1 s, measured, the rest pose taken again each
+  whole `SLEEP_TIME` (milestone 16) (see its comment in
   `src/world.js`). Distance, not speed: a speed rule kept a buzzing heap awake for good. Islands
   are rebuilt by union-find over the contacts, only once something has been still long enough.
   Per-body loops walk the awake list; asleep pairs sit past `pairs.active`; `moved(since)` reads
@@ -179,6 +180,17 @@ These were made with Nolan and override the rules below where they differ.
   fills it. `FORMAT` (1) must change whenever a stored field does: `test/save.test.js` holds the
   World's field names. `_lines` (the debug buffer) isn't saved. `src/debug.js`: nine floats a
   segment, colours fixed and documented, rings of 16 chords from Bearing's own sin/cos.
+- **Friction pulls back slip** (2026-10-16, milestone 16 step 1, under the approved "fix the
+  cause"): Contacts `drift1`/`drift2` (slip carried in, along the tangents) and `sliding` (friction
+  at its limit in the last pass); pairs and Memory keep `slip` as a world vector. `store(world, c)`
+  measures each point's slip over the step (`slipped()`/`moved()`: centre move plus θ × r, θ the
+  step's turn from `_startQ` by Bearing's `atan2`, so rolling reads 0), dropped at any
+  point where friction was at its limit in the last pass, unpressed, or an impact contact. The
+  solving pass only adds biasRate × slip to friction's target, capped at a pixel a substep. Half
+  rate and whole-manifold release were measured worse on the 1,000-box pile. With it, the sleep
+  rule's rest pose is taken again every whole `SLEEP_TIME` still (`_sleep`), so a body is still
+  while it strays under a pixel in any second: without that, out-of-step creepers under 5 mm/s
+  kept one big island awake. No API change.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks
