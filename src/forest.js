@@ -89,6 +89,12 @@ export class Forest {
     grow('side', Int32Array, 2);       // its body nodes, a's and b's; -1 for one that doesn't move
     grow('jointInverse', Float64Array, 36);  // its block's inverse, m x m
     grow('jac', Float64Array, 72);     // its Jacobian at a, then at b: m rows of 6 each (see shape())
+    // The factor's products the forward solve needs again, kept as they are
+    // made: D⁻¹ J toward its parent body (m x 6), and J D_k⁻¹ from each child
+    // body k (m x 6 a side). The forward pass then multiplies once where it
+    // multiplied twice: measured, see ROADMAP.md, milestone 16.
+    grow('up', Float64Array, 36);
+    grow('down', Float64Array, 72);
     grow('inTree', Uint8Array, 1);     // by joint slot: 1 while the joint is in the forest this step
     // Per body node k, at most two per joint:
     grow('body', Int32Array, 2);       // its slot
@@ -240,11 +246,13 @@ export function factorForest(world) {
         any = true;
         // S += Jᵀ D⁻¹ J, J this joint's rows at this body.
         const m = F.rows[t], jo = 72 * t + 36 * (e & 1), D = F.jointInverse, d = 36 * t, jac = F.jac;
+        const up = F.up, u = 36 * t;
         for (let r = 0; r < m; r++) {
           for (let c = 0; c < 6; c++) {
             let sum = 0;
             for (let q = 0; q < m; q++) sum += D[d + r * m + q] * jac[jo + q * 6 + c];
             X[r * 6 + c] = sum;
+            up[u + r * 6 + c] = sum;
           }
         }
         for (let r = 0; r < 6; r++) {
@@ -283,12 +291,13 @@ export function factorForest(world) {
       for (let side = 0; side < 2; side++) {
         const k = F.side[2 * t + side];
         if (k < 0 || parent[T + k] !== t) continue;
-        const jo = 72 * t + 36 * side, inv = F.inverse, io = 36 * k;
+        const jo = 72 * t + 36 * side, inv = F.inverse, io = 36 * k, down = F.down, dn = 72 * t + 36 * side;
         for (let r = 0; r < m; r++) {
           for (let c = 0; c < 6; c++) {
             let sum = 0;
             for (let q = 0; q < 6; q++) sum += jac[jo + r * 6 + q] * inv[io + q * 6 + c];
             X[r * 6 + c] = sum;
+            down[dn + r * 6 + c] = sum;
           }
         }
         for (let r = 0; r < m; r++) {
@@ -392,16 +401,11 @@ export function solveForest(world) {
       for (let e = F.first[k] - 1; e >= 0; e = F.next[e] - 1) {
         const t = e >> 1;
         if (parent[t] !== x) continue;
-        // w_k += Jᵀ (D_t⁻¹ w_t)
-        const m = F.rows[t], jo = 72 * t + 36 * (e & 1), d = 36 * t, w = NODE * t;
-        for (let r = 0; r < m; r++) {
-          let sum = 0;
-          for (let q = 0; q < m; q++) sum += D[d + r * m + q] * vec[w + q];
-          Y[r] = sum;
-        }
+        // w_k += Jᵀ (D_t⁻¹ w_t), which is (D_t⁻¹ J)ᵀ w_t, D_t being symmetric
+        const m = F.rows[t], u = 36 * t, w = NODE * t, up = F.up;
         for (let c = 0; c < 6; c++) {
           let sum = 0;
-          for (let r = 0; r < m; r++) sum += jac[jo + r * 6 + c] * Y[r];
+          for (let r = 0; r < m; r++) sum += up[u + r * 6 + c] * vec[w + r];
           vec[v + c] += sum;
         }
       }
@@ -411,16 +415,11 @@ export function solveForest(world) {
       for (let side = 0; side < 2; side++) {
         const k = F.side[2 * t + side];
         if (k < 0 || parent[T + k] !== t) continue;
-        // w_t += J (D_k⁻¹ w_k)
-        const jo = 72 * t + 36 * side, io = 36 * k, w = NODE * (T + k);
-        for (let r = 0; r < 6; r++) {
-          let sum = 0;
-          for (let q = 0; q < 6; q++) sum += inv[io + r * 6 + q] * vec[w + q];
-          Y[r] = sum;
-        }
+        // w_t += J (D_k⁻¹ w_k), which is (J D_k⁻¹) w_k
+        const dn = 72 * t + 36 * side, w = NODE * (T + k), down = F.down;
         for (let r = 0; r < m; r++) {
           let sum = 0;
-          for (let c = 0; c < 6; c++) sum += jac[jo + r * 6 + c] * Y[c];
+          for (let c = 0; c < 6; c++) sum += down[dn + r * 6 + c] * vec[w + c];
           vec[v + r] += sum;
         }
       }
