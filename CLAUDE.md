@@ -191,6 +191,14 @@ These were made with Nolan and override the rules below where they differ.
   rule's rest pose is taken again every whole `SLEEP_TIME` still (`_sleep`), so a body is still
   while it strays under a pixel in any second: without that, out-of-step creepers under 5 mm/s
   kept one big island awake. No API change.
+- **Solver turning terms and locals** (2026-10-22, milestone 16 step 2): Contacts `jac`, `J` = 36
+  numbers a point (for n, t1, t2: ra x d, rb x d, Ia⁻¹(ra x d), Ib⁻¹(rb x d)), filled by `lever()` in
+  `prepare()`, which also gives the effective masses. `closing()`/`push()` read it; `solve()` and
+  `warmStart()` keep the pair's 12 velocity numbers in locals per manifold and write back once.
+  `jac` is scratch to `save()` (`SCRATCH`, by class: Forest has its own `jac`), remade empty on
+  load. Timing method that works on the i7-1260P: one process, both copies loaded, alternating
+  blocks, pinned to CPU 0 at high priority (PowerShell `ProcessorAffinity = 1`), median of pair
+  ratios over three processes; the same code reads up to 5-7% apart between module copies.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

@@ -549,6 +549,20 @@ in any second. Five starts of the pile all sleep, at 13 to 35 s, and cost nothin
 they cost 45 ms a step for good; 18 smaller piles all sleep, the slowest at 17 s. Either fix alone
 left a pile awake at 60 s. Measured on the way: 4 substeps let the settled pile drift ten times as
 far as 8, so (3) must test a heap's drift too.
+(2) done. Each contact point's turning terms (lever x direction, and that through the inverse
+inertia, for the normal and both tangents) are worked out once a step in `prepare()` (`J` in
+`src/contact.js`); the solve and the warm start hold a pair's velocities in locals for the whole
+manifold and write them back once. Measured in one process, pinned to one P-core of the i7-1260P,
+three runs: the turning terms 6 to 9% on the landing pile and 9 to 12% on the pyramid; the locals
+a further 33% and 41%; the warm start's locals 4 to 5% more. Together: the pile 44 to 25 ms a
+step (43% faster), the pyramid 25 to 12 (51%). Every stack, pyramid and drop figure in
+`bench/solver.js` is unchanged at every substep count. Measured and left out: turning the normal
+into each body's frame once a manifold for the separation, rather than each point's anchors out
+(0.5 to 4%, within the 5% the same code reads apart in two module copies). Not done: gathering
+the bodies into compact solver arrays. A contact point costs 33% more at 8,000 boxes than at
+1,000, so memory does start to tell, but the gather means moving the whole substep (positions,
+the separation, the moves) onto those arrays, which graph colouring (7) restructures anyway; it
+is done there, once.
 
 **17. Documentation ⬜**
 *Concepts:* writing reference documentation people can learn from.
@@ -732,6 +746,9 @@ Winding's way, copied before the first one:
   - Tumbling's energy can rise: a body spun mostly about its longest or shortest axis gains 2e-4
     to 4e-4 of its energy in 120 s. Momentum stays exact, which bounds it; "energy only falls" is
     true only near the middle axis, where `test/motion.test.js` spins its bodies.
+- **2026-10-22.** Milestone 15's save size corrected: the 3.5 MB quoted for 1,000 boxes didn't
+  hold for the benchmark's turned pile, which was 9.5 MB before milestone 16 and is now about
+  7 MB settled and 10 to 11 MB while landing. The API reference now names the scene.
 - **2026-10-16.** Milestone 15 done, as approved. The save is larger than proposed (3.5 MB of JSON
   for 1,000 boxes, not about 1): every number a step reads is in it, a body's axes, rest pose,
   bounds and both transforms among them, and each is needed for the loaded world to step to the

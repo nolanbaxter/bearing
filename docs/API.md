@@ -745,8 +745,9 @@ Notes: everything, not only the bodies as [`bodyOf`](#world-bodyof) gives them: 
 the step's own frame, the impulses contacts carry from one step to the next, sleep timers and
 islands, the broadphase's trees and its pairs in order, joints, characters, and the last step's
 events. With less, a loaded pile would start without the impulses holding it and twitch, and
-drift from the saved one. So it is large: a world of 1,000 boxes is 3.5 MB of JSON, and takes
-36 ms to save (i7-1260P). Numbers JSON can't hold, NaN, ±Infinity and -0, are written as strings,
+drift from the saved one. So it is large: a heap of 1,000 boxes dropped turned is about 7 MB of
+JSON once it has settled and 10 to 11 MB while it lands, and takes a tenth of a second or so to
+save or to load (i7-1260P, Node 22). Numbers JSON can't hold, NaN, ±Infinity and -0, are written as strings,
 so JSON carries every bit. The data's layout follows Bearing's own, and says which in its
 `format`: data saved by another version of Bearing may not load (see
 [`World.load`](#world-load)).

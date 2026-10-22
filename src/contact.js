@@ -88,6 +88,17 @@ export const PIXEL = 1 / 200;
 // Points per manifold, and per-point numbers kept.
 const P = 4;
 
+// J: the numbers a point keeps for each of its three directions, the normal
+// and the two tangents, 12 each: a's lever crossed with the direction, b's,
+// then each of those turned by its body's inverse inertia. How fast the pair
+// closes along a direction is then three dot products, and a push along it
+// three multiply-adds per body, where working them out from the levers and
+// the inverse inertias at every push cost 15 multiplies a body. Levers and
+// inverse inertias hold for the whole step, so these do too. Measured in the
+// solver, which a box face sweeps four points four times a pass: see
+// ROADMAP.md, milestone 16.
+const J = 36;
+
 /**
  * The torque friction can exert across a uniformly pressed disc of radius R,
  * as a fraction of mu N R: the integral of mu p r over the disc, with
@@ -133,6 +144,7 @@ export class Contacts {
     grow('adjusted', Float64Array, p);
     grow('gap', Float64Array, m);   // its points' least separation as the last pass saw it: at the step's end
     grow('normalMass', Float64Array, p); grow('tangentMass1', Float64Array, p); grow('tangentMass2', Float64Array, p);
+    grow('jac', Float64Array, J * p);   // each point's turning terms, worked out once a step (see J)
     grow('normalImpulse', Float64Array, p); grow('tangentImpulse1', Float64Array, p); grow('tangentImpulse2', Float64Array, p);
     grow('maxNormalImpulse', Float64Array, p); grow('relativeVelocity', Float64Array, p);
     // The slip a point carries in from earlier steps, along t1 and t2, and
@@ -816,9 +828,10 @@ export function prepare(world, c) {
       const cax = v3[0], cay = v3[1], caz = v3[2];
       core(world, b, partB, rbx, rby, rbz, c.lb, i3);
       c.adjusted[i] = c.separation[i] - ((v3[0] - cax) * nx + (v3[1] - cay) * ny + (v3[2] - caz) * nz);
-      c.normalMass[i] = mass(invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, nx, ny, nz);
-      c.tangentMass1[i] = mass(invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, c.t1[3 * m], c.t1[3 * m + 1], c.t1[3 * m + 2]);
-      c.tangentMass2[i] = mass(invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, c.t2[3 * m], c.t2[3 * m + 1], c.t2[3 * m + 2]);
+      const j = J * i, m3 = 3 * m;
+      c.normalMass[i] = lever(c.jac, j, invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, nx, ny, nz);
+      c.tangentMass1[i] = lever(c.jac, j + 12, invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, c.t1[m3], c.t1[m3 + 1], c.t1[m3 + 2]);
+      c.tangentMass2[i] = lever(c.jac, j + 24, invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, c.t2[m3], c.t2[m3 + 1], c.t2[m3 + 2]);
       c.maxNormalImpulse[i] = 0;
       // Closing speed along the normal, before anything this step: what a bounce is measured from.
       const dvx = v[b3] + w[b3 + 1] * rbz - w[b3 + 2] * rby - v[a3] - w[a3 + 1] * raz + w[a3 + 2] * ray;
@@ -898,18 +911,27 @@ const SYM = new Int8Array([0, 1, 2, 1, 3, 4, 2, 4, 5]);
  * (ra × d)·Ia⁻¹(ra × d) + (rb × d)·Ib⁻¹(rb × d)). How much impulse it takes to
  * change the bodies' relative speed there by 1 m/s, turning included.
  */
-function mass(invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, dx, dy, dz) {
+/**
+ * One direction's turning terms into jac[j..j+11] (see J): ra x d, rb x d,
+ * and each turned by its body's inverse inertia. Returns the pair's effective
+ * mass along d, 1 / (1/ma + 1/mb + (ra x d)·Ia⁻¹(ra x d) + (rb x d)·Ib⁻¹(rb x d)).
+ */
+function lever(jac, j, invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, dx, dy, dz) {
   const cax = ray * dz - raz * dy, cay = raz * dx - rax * dz, caz = rax * dy - ray * dx;
   const cbx = rby * dz - rbz * dy, cby = rbz * dx - rbx * dz, cbz = rbx * dy - rby * dx;
-  const k = ima + imb + quadratic(invI, a * 6, cax, cay, caz) + quadratic(invI, b * 6, cbx, cby, cbz);
+  const oa = a * 6, ob = b * 6;
+  const iax = invI[oa] * cax + invI[oa + 1] * cay + invI[oa + 2] * caz;
+  const iay = invI[oa + 1] * cax + invI[oa + 3] * cay + invI[oa + 4] * caz;
+  const iaz = invI[oa + 2] * cax + invI[oa + 4] * cay + invI[oa + 5] * caz;
+  const ibx = invI[ob] * cbx + invI[ob + 1] * cby + invI[ob + 2] * cbz;
+  const iby = invI[ob + 1] * cbx + invI[ob + 3] * cby + invI[ob + 4] * cbz;
+  const ibz = invI[ob + 2] * cbx + invI[ob + 4] * cby + invI[ob + 5] * cbz;
+  jac[j] = cax; jac[j + 1] = cay; jac[j + 2] = caz;
+  jac[j + 3] = cbx; jac[j + 4] = cby; jac[j + 5] = cbz;
+  jac[j + 6] = iax; jac[j + 7] = iay; jac[j + 8] = iaz;
+  jac[j + 9] = ibx; jac[j + 10] = iby; jac[j + 11] = ibz;
+  const k = ima + imb + cax * iax + cay * iay + caz * iaz + cbx * ibx + cby * iby + cbz * ibz;
   return k > 0 ? 1 / k : 0;
-}
-
-/** x·M x for the symmetric M at m[o..o+5]. */
-function quadratic(m, o, x, y, z) {
-  return x * (m[o] * x + m[o + 1] * y + m[o + 2] * z)
-    + y * (m[o + 1] * x + m[o + 3] * y + m[o + 4] * z)
-    + z * (m[o + 2] * x + m[o + 4] * y + m[o + 5] * z);
 }
 
 // ---- solve ----
@@ -933,30 +955,44 @@ export function makeSoft(hertz, zeta, h, out = soft) {
  * the warm start, which begins each substep at last time's answer.
  */
 export function warmStart(world, c) {
-  const v = world._velocity, w = world._angular, invI = world._invI, invMass = world._invMass;
+  const v = world._velocity, w = world._angular, invI = world._invI, invMass = world._invMass, jac = c.jac;
   for (let m = 0; m < c.count; m++) {
-    const a = c.a[m], b = c.b[m];
+    const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3, m3 = 3 * m;
+    const ima = invMass[a], imb = invMass[b];
+    const nx = c.normal[m3], ny = c.normal[m3 + 1], nz = c.normal[m3 + 2];
+    const t1x = c.t1[m3], t1y = c.t1[m3 + 1], t1z = c.t1[m3 + 2];
+    const t2x = c.t2[m3], t2y = c.t2[m3 + 1], t2z = c.t2[m3 + 2];
+    // The pair's velocities in locals for the manifold, as in solve().
+    let vax = v[a3], vay = v[a3 + 1], vaz = v[a3 + 2], wax = w[a3], way = w[a3 + 1], waz = w[a3 + 2];
+    let vbx = v[b3], vby = v[b3 + 1], vbz = v[b3 + 2], wbx = w[b3], wby = w[b3 + 1], wbz = w[b3 + 2];
     for (let k = 0; k < c.points[m]; k++) {
-      const i = m * P + k, i3 = 3 * i, m3 = 3 * m;
+      const i = m * P + k, j = J * i;
       const ln = c.normalImpulse[i], l1 = c.tangentImpulse1[i], l2 = c.tangentImpulse2[i];
-      const px = c.normal[m3] * ln + c.t1[m3] * l1 + c.t2[m3] * l2;
-      const py = c.normal[m3 + 1] * ln + c.t1[m3 + 1] * l1 + c.t2[m3 + 1] * l2;
-      const pz = c.normal[m3 + 2] * ln + c.t1[m3 + 2] * l1 + c.t2[m3 + 2] * l2;
-      push(v, w, invI, invMass, a, b, c.ra, c.rb, i3, px, py, pz);
+      const px = nx * ln + t1x * l1 + t2x * l2;
+      const py = ny * ln + t1y * l1 + t2y * l2;
+      const pz = nz * ln + t1z * l1 + t2z * l2;
+      vax -= ima * px; vay -= ima * py; vaz -= ima * pz;
+      vbx += imb * px; vby += imb * py; vbz += imb * pz;
+      wax -= jac[j + 6] * ln + jac[j + 18] * l1 + jac[j + 30] * l2;
+      way -= jac[j + 7] * ln + jac[j + 19] * l1 + jac[j + 31] * l2;
+      waz -= jac[j + 8] * ln + jac[j + 20] * l1 + jac[j + 32] * l2;
+      wbx += jac[j + 9] * ln + jac[j + 21] * l1 + jac[j + 33] * l2;
+      wby += jac[j + 10] * ln + jac[j + 22] * l1 + jac[j + 34] * l2;
+      wbz += jac[j + 11] * ln + jac[j + 23] * l1 + jac[j + 35] * l2;
     }
     if (c.points[m] <= 2) {
-      const m3 = 3 * m, r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m], sp = c.spinImpulse[m];
-      twist(w, invI, a, b, c.t1[m3] * r1 + c.t2[m3] * r2 + c.normal[m3] * sp,
-        c.t1[m3 + 1] * r1 + c.t2[m3 + 1] * r2 + c.normal[m3 + 1] * sp,
-        c.t1[m3 + 2] * r1 + c.t2[m3 + 2] * r2 + c.normal[m3 + 2] * sp);
+      const r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m], sp = c.spinImpulse[m], oa = a * 6, ob = b * 6;
+      const lx = t1x * r1 + t2x * r2 + nx * sp, ly = t1y * r1 + t2y * r2 + ny * sp, lz = t1z * r1 + t2z * r2 + nz * sp;
+      wax -= invI[oa] * lx + invI[oa + 1] * ly + invI[oa + 2] * lz;
+      way -= invI[oa + 1] * lx + invI[oa + 3] * ly + invI[oa + 4] * lz;
+      waz -= invI[oa + 2] * lx + invI[oa + 4] * ly + invI[oa + 5] * lz;
+      wbx += invI[ob] * lx + invI[ob + 1] * ly + invI[ob + 2] * lz;
+      wby += invI[ob + 1] * lx + invI[ob + 3] * ly + invI[ob + 4] * lz;
+      wbz += invI[ob + 2] * lx + invI[ob + 4] * ly + invI[ob + 5] * lz;
     }
+    v[a3] = vax; v[a3 + 1] = vay; v[a3 + 2] = vaz; w[a3] = wax; w[a3 + 1] = way; w[a3 + 2] = waz;
+    v[b3] = vbx; v[b3 + 1] = vby; v[b3 + 2] = vbz; w[b3] = wbx; w[b3 + 1] = wby; w[b3 + 2] = wbz;
   }
-}
-
-/** Equal and opposite angular impulse (lx, ly, lz): -L on a, +L on b. */
-function twist(w, invI, a, b, lx, ly, lz) {
-  turn(w, invI, a, -lx, -ly, -lz);
-  turn(w, invI, b, lx, ly, lz);
 }
 
 /** 1 / (axis · (Ia⁻¹ + Ib⁻¹) axis): how hard the pair is to turn against each other about a unit axis. */
@@ -971,22 +1007,16 @@ function along(invI, o, x, y, z) {
     + 2 * (invI[o + 1] * x * y + invI[o + 2] * x * z + invI[o + 4] * y * z);
 }
 
-/** Equal and opposite impulse (px, py, pz) at point i3: -P on a, +P on b. */
-function push(v, w, invI, invMass, a, b, ra, rb, i3, px, py, pz) {
-  const ima = invMass[a], imb = invMass[b], a3 = a * 3, b3 = b * 3;
+/**
+ * Equal and opposite impulse l along the unit direction d, whose turning
+ * terms are at jac[j..] (see J): -l d on a, +l d on b.
+ */
+function push(v, w, ima, imb, a3, b3, jac, j, dx, dy, dz, l) {
+  const px = dx * l, py = dy * l, pz = dz * l;
   v[a3] -= ima * px; v[a3 + 1] -= ima * py; v[a3 + 2] -= ima * pz;
   v[b3] += imb * px; v[b3 + 1] += imb * py; v[b3 + 2] += imb * pz;
-  const rax = ra[i3], ray = ra[i3 + 1], raz = ra[i3 + 2], rbx = rb[i3], rby = rb[i3 + 1], rbz = rb[i3 + 2];
-  turn(w, invI, a, -(ray * pz - raz * py), -(raz * px - rax * pz), -(rax * py - ray * px));
-  turn(w, invI, b, rby * pz - rbz * py, rbz * px - rbx * pz, rbx * py - rby * px);
-}
-
-/** ω += I⁻¹ L for slot s. */
-function turn(w, invI, s, lx, ly, lz) {
-  const o = s * 6, s3 = s * 3;
-  w[s3] += invI[o] * lx + invI[o + 1] * ly + invI[o + 2] * lz;
-  w[s3 + 1] += invI[o + 1] * lx + invI[o + 3] * ly + invI[o + 4] * lz;
-  w[s3 + 2] += invI[o + 2] * lx + invI[o + 4] * ly + invI[o + 5] * lz;
+  w[a3] -= jac[j + 6] * l; w[a3 + 1] -= jac[j + 7] * l; w[a3 + 2] -= jac[j + 8] * l;
+  w[b3] += jac[j + 9] * l; w[b3 + 1] += jac[j + 10] * l; w[b3 + 2] += jac[j + 11] * l;
 }
 
 /**
@@ -1052,6 +1082,13 @@ export function solve(world, c, h, bias) {
     }
     // The last relaxing pass comes after the last move, so this is where the step leaves them.
     c.gap[m] = least;
+    // The pair's velocities, held here for the whole manifold and written back
+    // once at its end: every sweep and friction reads and writes them, and
+    // reading and writing the shared columns at each push cost more than the
+    // arithmetic. Measured: see ROADMAP.md, milestone 16.
+    const jac = c.jac, ima = invMass[a], imb = invMass[b];
+    let vax = v[a3], vay = v[a3 + 1], vaz = v[a3 + 2], wax = w[a3], way = w[a3 + 1], waz = w[a3 + 2];
+    let vbx = v[b3], vby = v[b3 + 1], vbz = v[b3 + 2], wbx = w[b3], wby = w[b3 + 1], wbz = w[b3 + 2];
     // One sweep per point. The points of a face contact are coupled: four
     // points on a box's face hold only three things (its height and its two
     // tilts), and a single sweep visits them in an order, so the first stops
@@ -1063,8 +1100,9 @@ export function solve(world, c, h, bias) {
     // gets one sweep, which already solves it exactly.
     for (let sweep = 0; sweep < count; sweep++) {
       for (let k = 0; k < count; k++) {
-        const i = m * P + k, i3 = 3 * i;
-        const vn = closing(v, w, a3, b3, c.ra, c.rb, i3, nx, ny, nz);
+        const i = m * P + k, j = J * i;
+        const vn = (vbx - vax) * nx + (vby - vay) * ny + (vbz - vaz) * nz
+          + wbx * jac[j + 3] + wby * jac[j + 4] + wbz * jac[j + 5] - wax * jac[j] - way * jac[j + 1] - waz * jac[j + 2];
         const old = c.normalImpulse[i];
         let next = old - c.normalMass[i] * massScale[k] * (vn + target[k]) - impulseScale[k] * old;
         if (next < 0) next = 0;
@@ -1076,7 +1114,11 @@ export function solve(world, c, h, bias) {
         // the bodies met, a twentieth of a slow bounce at 60 Hz.
         if (d > 0 && c.maxNormalImpulse[i] === 0) c.relativeVelocity[i] = vn;
         if (d > c.maxNormalImpulse[i]) c.maxNormalImpulse[i] = d;
-        push(v, w, invI, invMass, a, b, c.ra, c.rb, i3, nx * d, ny * d, nz * d);
+        const px = nx * d, py = ny * d, pz = nz * d;
+        vax -= ima * px; vay -= ima * py; vaz -= ima * pz;
+        vbx += imb * px; vby += imb * py; vbz += imb * pz;
+        wax -= jac[j + 6] * d; way -= jac[j + 7] * d; waz -= jac[j + 8] * d;
+        wbx += jac[j + 9] * d; wby += jac[j + 10] * d; wbz += jac[j + 11] * d;
       }
     }
     // Friction: each point resists sliding along both tangents, and the two
@@ -1086,9 +1128,12 @@ export function solve(world, c, h, bias) {
     const t1x = c.t1[m3], t1y = c.t1[m3 + 1], t1z = c.t1[m3 + 2];
     const t2x = c.t2[m3], t2y = c.t2[m3 + 1], t2z = c.t2[m3 + 2];
     for (let k = 0; k < count; k++) {
-      const i = m * P + k, i3 = 3 * i;
-      const v1 = closing(v, w, a3, b3, c.ra, c.rb, i3, t1x, t1y, t1z);
-      const v2 = closing(v, w, a3, b3, c.ra, c.rb, i3, t2x, t2y, t2z);
+      const i = m * P + k, j = J * i + 12, l = j + 12;
+      const dvx = vbx - vax, dvy = vby - vay, dvz = vbz - vaz;
+      const v1 = dvx * t1x + dvy * t1y + dvz * t1z
+        + wbx * jac[j + 3] + wby * jac[j + 4] + wbz * jac[j + 5] - wax * jac[j] - way * jac[j + 1] - waz * jac[j + 2];
+      const v2 = dvx * t2x + dvy * t2y + dvz * t2z
+        + wbx * jac[l + 3] + wby * jac[l + 4] + wbz * jac[l + 5] - wax * jac[l] - way * jac[l + 1] - waz * jac[l + 2];
       const o1 = c.tangentImpulse1[i], o2 = c.tangentImpulse2[i];
       let n1, n2;
       // The solving pass also pulls back the slip carried in (see store), as
@@ -1116,36 +1161,58 @@ export function solve(world, c, h, bias) {
       }
       c.tangentImpulse1[i] = n1; c.tangentImpulse2[i] = n2;
       const d1 = n1 - o1, d2 = n2 - o2;
-      push(v, w, invI, invMass, a, b, c.ra, c.rb, i3, t1x * d1 + t2x * d2, t1y * d1 + t2y * d2, t1z * d1 + t2z * d2);
+      const px = t1x * d1 + t2x * d2, py = t1y * d1 + t2y * d2, pz = t1z * d1 + t2z * d2;
+      vax -= ima * px; vay -= ima * py; vaz -= ima * pz;
+      vbx += imb * px; vby += imb * py; vbz += imb * pz;
+      wax -= jac[j + 6] * d1 + jac[l + 6] * d2; way -= jac[j + 7] * d1 + jac[l + 7] * d2; waz -= jac[j + 8] * d1 + jac[l + 8] * d2;
+      wbx += jac[j + 9] * d1 + jac[l + 9] * d2; wby += jac[j + 10] * d1 + jac[l + 10] * d2; wbz += jac[j + 11] * d1 + jac[l + 11] * d2;
     }
-    if (count > 2) continue;
-    // Rolling and spinning (see PATCHES): the turning of b against a about
-    // the two tangents, held within the patch's push leaning to its edge, a
-    // disc as friction's cone is; then about the normal, within friction
-    // across the patch, for one point (two already resist it with their spread).
-    let pressed = 0;
-    for (let k = 0; k < count; k++) pressed += c.normalImpulse[m * P + k];
-    const most = c.patch[m] * pressed;
-    let ux = w[b3] - w[a3], uy = w[b3 + 1] - w[a3 + 1], uz = w[b3 + 2] - w[a3 + 2];
-    const r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m];
-    let n1 = r1 - c.rollMass1[m] * (ux * t1x + uy * t1y + uz * t1z);
-    let n2 = r2 - c.rollMass2[m] * (ux * t2x + uy * t2y + uz * t2z);
-    const l2 = n1 * n1 + n2 * n2;
-    if (l2 > most * most) {
-      const scale = most / Math.sqrt(l2);
-      n1 *= scale; n2 *= scale;
+    if (count <= 2) {
+      // Rolling and spinning (see PATCHES): the turning of b against a about
+      // the two tangents, held within the patch's push leaning to its edge, a
+      // disc as friction's cone is; then about the normal, within friction
+      // across the patch, for one point (two already resist it with their spread).
+      let pressed = 0;
+      for (let k = 0; k < count; k++) pressed += c.normalImpulse[m * P + k];
+      const most = c.patch[m] * pressed;
+      const oa = a * 6, ob = b * 6;
+      let ux = wbx - wax, uy = wby - way, uz = wbz - waz;
+      const r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m];
+      let n1 = r1 - c.rollMass1[m] * (ux * t1x + uy * t1y + uz * t1z);
+      let n2 = r2 - c.rollMass2[m] * (ux * t2x + uy * t2y + uz * t2z);
+      const l2 = n1 * n1 + n2 * n2;
+      if (l2 > most * most) {
+        const scale = most / Math.sqrt(l2);
+        n1 *= scale; n2 *= scale;
+      }
+      c.rollImpulse1[m] = n1; c.rollImpulse2[m] = n2;
+      const d1 = n1 - r1, d2 = n2 - r2;
+      // An angular impulse L: -L on a, +L on b, each through its inverse inertia.
+      let lx = t1x * d1 + t2x * d2, ly = t1y * d1 + t2y * d2, lz = t1z * d1 + t2z * d2;
+      wax -= invI[oa] * lx + invI[oa + 1] * ly + invI[oa + 2] * lz;
+      way -= invI[oa + 1] * lx + invI[oa + 3] * ly + invI[oa + 4] * lz;
+      waz -= invI[oa + 2] * lx + invI[oa + 4] * ly + invI[oa + 5] * lz;
+      wbx += invI[ob] * lx + invI[ob + 1] * ly + invI[ob + 2] * lz;
+      wby += invI[ob + 1] * lx + invI[ob + 3] * ly + invI[ob + 4] * lz;
+      wbz += invI[ob + 2] * lx + invI[ob + 4] * ly + invI[ob + 5] * lz;
+      if (count === 1) {
+        ux = wbx - wax; uy = wby - way; uz = wbz - waz;
+        const s0 = c.spinImpulse[m], limit = SPIN * mu * most;
+        let s1 = s0 - c.spinMass[m] * (ux * nx + uy * ny + uz * nz);
+        if (s1 > limit) s1 = limit; else if (s1 < -limit) s1 = -limit;
+        c.spinImpulse[m] = s1;
+        const ds = s1 - s0;
+        lx = nx * ds; ly = ny * ds; lz = nz * ds;
+        wax -= invI[oa] * lx + invI[oa + 1] * ly + invI[oa + 2] * lz;
+        way -= invI[oa + 1] * lx + invI[oa + 3] * ly + invI[oa + 4] * lz;
+        waz -= invI[oa + 2] * lx + invI[oa + 4] * ly + invI[oa + 5] * lz;
+        wbx += invI[ob] * lx + invI[ob + 1] * ly + invI[ob + 2] * lz;
+        wby += invI[ob + 1] * lx + invI[ob + 3] * ly + invI[ob + 4] * lz;
+        wbz += invI[ob + 2] * lx + invI[ob + 4] * ly + invI[ob + 5] * lz;
+      }
     }
-    c.rollImpulse1[m] = n1; c.rollImpulse2[m] = n2;
-    const d1 = n1 - r1, d2 = n2 - r2;
-    twist(w, invI, a, b, t1x * d1 + t2x * d2, t1y * d1 + t2y * d2, t1z * d1 + t2z * d2);
-    if (count > 1) continue;
-    ux = w[b3] - w[a3]; uy = w[b3 + 1] - w[a3 + 1]; uz = w[b3 + 2] - w[a3 + 2];
-    const s0 = c.spinImpulse[m], limit = SPIN * mu * most;
-    let s1 = s0 - c.spinMass[m] * (ux * nx + uy * ny + uz * nz);
-    if (s1 > limit) s1 = limit; else if (s1 < -limit) s1 = -limit;
-    c.spinImpulse[m] = s1;
-    const ds = s1 - s0;
-    twist(w, invI, a, b, nx * ds, ny * ds, nz * ds);
+    v[a3] = vax; v[a3 + 1] = vay; v[a3 + 2] = vaz; w[a3] = wax; w[a3 + 1] = way; w[a3 + 2] = waz;
+    v[b3] = vbx; v[b3 + 1] = vby; v[b3 + 2] = vbz; w[b3] = wbx; w[b3 + 1] = wby; w[b3 + 2] = wbz;
   }
 }
 
@@ -1193,13 +1260,11 @@ export function touched(world, pairs, c) {
   }
 }
 
-/** Relative velocity of b against a at point i3, along unit (dx, dy, dz). */
-function closing(v, w, a3, b3, ra, rb, i3, dx, dy, dz) {
-  const rax = ra[i3], ray = ra[i3 + 1], raz = ra[i3 + 2], rbx = rb[i3], rby = rb[i3 + 1], rbz = rb[i3 + 2];
-  const x = v[b3] + w[b3 + 1] * rbz - w[b3 + 2] * rby - v[a3] - w[a3 + 1] * raz + w[a3 + 2] * ray;
-  const y = v[b3 + 1] + w[b3 + 2] * rbx - w[b3] * rbz - v[a3 + 1] - w[a3 + 2] * rax + w[a3] * raz;
-  const z = v[b3 + 2] + w[b3] * rby - w[b3 + 1] * rbx - v[a3 + 2] - w[a3] * ray + w[a3 + 1] * rax;
-  return x * dx + y * dy + z * dz;
+/** How fast b moves against a at a point, along the unit d whose turning terms are at jac[j..] (see J). */
+function closing(v, w, a3, b3, jac, j, dx, dy, dz) {
+  return (v[b3] - v[a3]) * dx + (v[b3 + 1] - v[a3 + 1]) * dy + (v[b3 + 2] - v[a3 + 2]) * dz
+    + w[b3] * jac[j + 3] + w[b3 + 1] * jac[j + 4] + w[b3 + 2] * jac[j + 5]
+    - w[a3] * jac[j] - w[a3 + 1] * jac[j + 1] - w[a3 + 2] * jac[j + 2];
 }
 
 /**
@@ -1220,13 +1285,13 @@ export function restitution(world, c, gravity) {
     for (let k = 0; k < c.points[m]; k++) {
       const i = m * P + k, i3 = 3 * i;
       if (c.relativeVelocity[i] > -threshold || c.maxNormalImpulse[i] === 0) continue;
-      const vn = closing(v, w, a3, b3, c.ra, c.rb, i3, nx, ny, nz);
+      const vn = closing(v, w, a3, b3, c.jac, J * i, nx, ny, nz);
       const old = c.normalImpulse[i];
       let next = old - c.normalMass[i] * (vn + e * c.relativeVelocity[i]);
       if (next < 0) next = 0;
       const d = next - old;
       c.normalImpulse[i] = next;
-      push(v, w, invI, invMass, a, b, c.ra, c.rb, i3, nx * d, ny * d, nz * d);
+      push(v, w, invMass[a], invMass[b], a3, b3, c.jac, J * i, nx, ny, nz, d);
     }
   }
 }

@@ -51,8 +51,13 @@ const TYPED = {
   i8: Int8Array, u8: Uint8Array,
 };
 const TYPED_NAME = new Map(Object.entries(TYPED).map(([k, v]) => [v, k]));
-/** Fields that are scratch, not state: the debug lines' buffer, made afresh by the next call. */
-const SCRATCH = new Set(['_lines']);
+/**
+ * Fields that are scratch, not state: the debug lines' buffer, made afresh by
+ * the next call, and the contacts' turning terms (contact.js, J), worked out
+ * afresh before each step reads them, 36 numbers a point, which would nearly
+ * double a pile's save.
+ */
+const SCRATCH = { World: new Set(['_lines']), Contacts: new Set(['jac']) };
 
 /** The world as plain, JSON-safe data. */
 export function save(world, World) {
@@ -64,9 +69,9 @@ export function save(world, World) {
     index.set(o, i);
     objects.push(null);
     const name = o instanceof World ? 'World' : o.constructor === Object ? 'Object' : className(o);
-    const fields = {};
+    const fields = {}, scratch = SCRATCH[name];
     for (const key of Object.keys(o)) {
-      if (SCRATCH.has(key) || typeof o[key] === 'function') continue;
+      if (scratch?.has(key) || typeof o[key] === 'function') continue;
       fields[key] = value(o[key]);
     }
     objects[i] = { c: name, f: fields };
@@ -133,6 +138,7 @@ export function load(data, World) {
     });
     if (!(made[0] instanceof World)) throw new Error('no world first');
     made[0]._lines = new Float32Array(0);
+    for (const o of made) if (o instanceof Contacts) o.jac = new Float64Array(o.normalMass.length * 36);
     return made[0];
   } catch (e) {
     return fail('load', `data is damaged: ${e.message}`);
