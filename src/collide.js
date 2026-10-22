@@ -674,6 +674,8 @@ const featA = new Int32Array(8), featB = new Int32Array(8);
 const lineA = new Int32Array(8), lineB = new Int32Array(8);
 const kept = new Float64Array(3 * 8), keptSep = new Float64Array(8);
 const keptId = new Uint32Array(8);
+// boxBox()'s |A_i . B_j|, at 3i + j.
+const cosines = new Float64Array(9);
 // A face's corners going round, as signs along its two in-plane axes.
 const CORNER_P = [-1, 1, 1, -1], CORNER_Q = [-1, -1, 1, 1];
 
@@ -689,11 +691,20 @@ function boxBox(a, b, margin, tolerance, out) {
   const A = a.axes, B = b.axes, ha = a.half, hb = b.half;
   const dx = b.center[0] - a.center[0], dy = b.center[1] - a.center[1], dz = b.center[2] - a.center[2];
 
-  // a's faces.
+  // a's faces. Both boxes' face tests reach the other box through the same
+  // nine |A_i . B_j|, the same products summed in the same order (x, y, z), so
+  // a's loop works them out a row at a time, as support() would, and b's
+  // reads them back: the same bits for half the multiplies. Measured: see
+  // ROADMAP.md, milestone 16.
+  const R = cosines;
   let faceA = -Infinity, axisA = 0;
   for (let i = 0; i < 3; i++) {
     const nx = A[3 * i], ny = A[3 * i + 1], nz = A[3 * i + 2];
-    const s = Math.abs(dx * nx + dy * ny + dz * nz) - ha[i] - support(B, hb, nx, ny, nz);
+    const r0 = Math.abs(B[0] * nx + B[1] * ny + B[2] * nz);
+    const r1 = Math.abs(B[3] * nx + B[4] * ny + B[5] * nz);
+    const r2 = Math.abs(B[6] * nx + B[7] * ny + B[8] * nz);
+    R[3 * i] = r0; R[3 * i + 1] = r1; R[3 * i + 2] = r2;
+    const s = Math.abs(dx * nx + dy * ny + dz * nz) - ha[i] - (hb[0] * r0 + hb[1] * r1 + hb[2] * r2);
     if (s > margin) return;
     if (s > faceA) { faceA = s; axisA = i; }
   }
@@ -701,7 +712,7 @@ function boxBox(a, b, margin, tolerance, out) {
   let faceB = -Infinity, axisB = 0;
   for (let j = 0; j < 3; j++) {
     const nx = B[3 * j], ny = B[3 * j + 1], nz = B[3 * j + 2];
-    const s = Math.abs(dx * nx + dy * ny + dz * nz) - hb[j] - support(A, ha, nx, ny, nz);
+    const s = Math.abs(dx * nx + dy * ny + dz * nz) - hb[j] - (ha[0] * R[j] + ha[1] * R[3 + j] + ha[2] * R[6 + j]);
     if (s > margin) return;
     if (s > faceB) { faceB = s; axisB = j; }
   }

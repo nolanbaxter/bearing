@@ -269,11 +269,40 @@ function reach(b, x, y, z) {
     + Math.abs(A[6] * x + A[7] * y + A[8] * z) * h[2];
 }
 
-/** The triangle's least reach past the box's centre along unit (x, y, z): its nearest corner that way. */
-function lowest(c, x, y, z) {
-  let m = Infinity;
-  for (let v = 0; v < 3; v++) m = Math.min(m, (P[3 * v] - c[0]) * x + (P[3 * v + 1] - c[1]) * y + (P[3 * v + 2] - c[2]) * z);
-  return m;
+/**
+ * The least and the most of something's reach along an axis, into lo and hi
+ * (span() and hullSpan()): one pass for both ways along the axis. The reach
+ * along -u is -(the reach along u) exactly, since rounding is the same either
+ * side of zero, except that an exact cancellation is +0 both ways round; so
+ * -hi stands for the least along -u to the bit, but for the sign of a zero,
+ * and every such value here reaches only comparisons. Measured: see
+ * ROADMAP.md, milestone 16.
+ */
+let lo = 0, hi = 0;
+
+/** The triangle's least and most reach past the box's centre along unit (x, y, z), into lo and hi. */
+function span(c, x, y, z) {
+  let m = Infinity, M = -Infinity;
+  for (let v = 0; v < 3; v++) {
+    const d = (P[3 * v] - c[0]) * x + (P[3 * v + 1] - c[1]) * y + (P[3 * v + 2] - c[2]) * z;
+    m = Math.min(m, d); M = Math.max(M, d);
+  }
+  lo = m; hi = M;
+}
+
+// The triangle's edges and their lengths, for the edge axes of box() and
+// hull(): each edge meets every edge of the other shape, so it is worked out
+// once, not once for each of them.
+const EV = new Float64Array(9), EL = new Float64Array(3);
+
+/** The triangle's edges, corner e to corner e + 1, into EV, and their lengths into EL. */
+function edges() {
+  for (let e = 0; e < 3; e++) {
+    const a = 3 * e, q = 3 * ((e + 1) % 3);
+    const vx = P[q] - P[a], vy = P[q + 1] - P[a + 1], vz = P[q + 2] - P[a + 2];
+    EV[a] = vx; EV[a + 1] = vy; EV[a + 2] = vz;
+    EL[e] = Math.sqrt(vx * vx + vy * vy + vz * vz);
+  }
 }
 
 /** 2^-27: cross products shorter than this are parallel edges, and give no axis. As collide.js's PARALLEL. */
@@ -290,23 +319,25 @@ function box(b, t, margin, tolerance, out) {
   let faceB = -Infinity, axisB = 0, signB = 1;
   for (let k = 0; k < 3; k++) {
     const ux = A[3 * k], uy = A[3 * k + 1], uz = A[3 * k + 2];
-    const plus = lowest(c, ux, uy, uz) - h[k], minus = lowest(c, -ux, -uy, -uz) - h[k];
+    span(c, ux, uy, uz);
+    const plus = lo - h[k], minus = -hi - h[k];
     const sk = Math.max(plus, minus);
     if (sk > margin) return;
     if (sk > faceB) { faceB = sk; axisB = k; signB = plus >= minus ? 1 : -1; }
   }
   // Each box edge against each triangle edge.
+  edges();
   let edgeSep = -Infinity, ex = 0, ey = 0, ez = 0, edgeK = -1, edgeE = -1;
   for (let k = 0; k < 3; k++) {
     const ux = A[3 * k], uy = A[3 * k + 1], uz = A[3 * k + 2];
     for (let e = 0; e < 3; e++) {
-      const a = 3 * e, q = 3 * ((e + 1) % 3);
-      const vx = P[q] - P[a], vy = P[q + 1] - P[a + 1], vz = P[q + 2] - P[a + 2];
+      const vx = EV[3 * e], vy = EV[3 * e + 1], vz = EV[3 * e + 2];
       let mx = uy * vz - uz * vy, my = uz * vx - ux * vz, mz = ux * vy - uy * vx;
-      const l = Math.sqrt(mx * mx + my * my + mz * mz), lv = Math.sqrt(vx * vx + vy * vy + vz * vz);
-      if (!(l > PARALLEL * lv)) continue;
+      const l = Math.sqrt(mx * mx + my * my + mz * mz);
+      if (!(l > PARALLEL * EL[e])) continue;
       mx /= l; my /= l; mz /= l;
-      const r = reach(b, mx, my, mz), plus = lowest(c, mx, my, mz) - r, minus = lowest(c, -mx, -my, -mz) - r;
+      span(c, mx, my, mz);
+      const r = reach(b, mx, my, mz), plus = lo - r, minus = -hi - r;
       if (minus > plus) { mx = -mx; my = -my; mz = -mz; }
       const se = Math.max(plus, minus);
       if (se > margin) return;
@@ -486,6 +517,18 @@ let H = HS;
 let hullP = new Float64Array(3 * 16), hullQ = new Float64Array(3 * 16);
 let hullPi = new Uint32Array(16), hullQi = new Uint32Array(16);
 
+/** The hull's least and most n·x over its corners, into lo and hi, as Placed.lowest finds the least. */
+function hullSpan(nx, ny, nz) {
+  const v = H.v, V = H.hull.vertices.length / 3;
+  let m = Infinity, M = -Infinity;
+  for (let i = 0; i < V; i++) {
+    const d = v[3 * i] * nx + v[3 * i + 1] * ny + v[3 * i + 2] * nz;
+    if (d < m) m = d;
+    if (d > M) M = d;
+  }
+  lo = m; hi = M;
+}
+
 /** The triangle's least reach along unit (x, y, z), from the origin: its nearest corner that way. */
 function low(x, y, z) {
   return Math.min(P[0] * x + P[1] * y + P[2] * z, P[3] * x + P[4] * y + P[5] * z, P[6] * x + P[7] * y + P[8] * z);
@@ -513,24 +556,27 @@ function hull(b, t, margin, tolerance, out) {
     if (sb > faceB) { faceB = sb; fb = f; }
   }
   const e = h.edges, E = e.length / 2;
+  edges();
   let edgeSep = -Infinity, ex = 0, ey = 0, ez = 0, edgeK = -1, edgeE = -1;
   for (let k = 0; k < E; k++) {
     const i = 3 * e[2 * k], j = 3 * e[2 * k + 1];
     const ux = v[j] - v[i], uy = v[j + 1] - v[i + 1], uz = v[j + 2] - v[i + 2];
     const lu = Math.sqrt(ux * ux + uy * uy + uz * uz);
     for (let te = 0; te < 3; te++) {
-      const a = 3 * te, q = 3 * ((te + 1) % 3);
-      const wx = P[q] - P[a], wy = P[q + 1] - P[a + 1], wz = P[q + 2] - P[a + 2];
+      const wx = EV[3 * te], wy = EV[3 * te + 1], wz = EV[3 * te + 2];
       let mx = uy * wz - uz * wy, my = uz * wx - ux * wz, mz = ux * wy - uy * wx;
       const l = Math.sqrt(mx * mx + my * my + mz * mz);
-      if (!(l > PARALLEL * lu * Math.sqrt(wx * wx + wy * wy + wz * wz))) continue;
+      if (!(l > PARALLEL * lu * EL[te])) continue;
       mx /= l; my /= l; mz /= l;
       // The triangle past the hull along m, or along -m: whichever is apart more, and that way round.
-      const plus = low(mx, my, mz) + H.lowest(-mx, -my, -mz), minus = low(-mx, -my, -mz) + H.lowest(mx, my, mz);
-      if (minus > plus) { mx = -mx; my = -my; mz = -mz; }
+      hullSpan(mx, my, mz);
+      const plus = low(mx, my, mz) - hi, minus = low(-mx, -my, -mz) + lo;
+      // The hull's farthest along m, after it is turned: hi along m, -lo along -m.
+      let top = hi;
+      if (minus > plus) { mx = -mx; my = -my; mz = -mz; top = -lo; }
       // Only the edge that reaches farthest towards the triangle: a box has
       // four edges along each axis, and three are behind along it.
-      if (-H.lowest(-mx, -my, -mz) - (mx * v[i] + my * v[i + 1] + mz * v[i + 2]) > tolerance) continue;
+      if (top - (mx * v[i] + my * v[i + 1] + mz * v[i + 2]) > tolerance) continue;
       const sep = Math.max(plus, minus);
       if (sep > margin) return;
       if (sep > edgeSep) { edgeSep = sep; ex = mx; ey = my; ez = mz; edgeK = k; edgeE = te; }

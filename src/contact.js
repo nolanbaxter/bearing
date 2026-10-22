@@ -530,25 +530,35 @@ function emit(world, next, p, a, b, mf, sign, tolerance, sub, partA, partB, key)
 function carry(from, p, next, m) {
   const remembered = from.points[p];
   if (remembered === 0) return;
-  if (next.points[m] <= 2) {
-    const p3 = 3 * p, m3 = 3 * m;
+  // The manifold's axes are read once: the stores below go to other arrays,
+  // which the compiler can't be sure don't alias them. The id search stays a
+  // plain one from the first point: ids can repeat within a manifold (a mesh
+  // manifold's ids are mixed from triangles' features), and the first match
+  // is the one taken.
+  const m3 = 3 * m;
+  const t1x = next.t1[m3], t1y = next.t1[m3 + 1], t1z = next.t1[m3 + 2];
+  const t2x = next.t2[m3], t2y = next.t2[m3 + 1], t2z = next.t2[m3 + 2];
+  const count = next.points[m];
+  if (count <= 2) {
+    const p3 = 3 * p;
     const lx = from.twist[p3], ly = from.twist[p3 + 1], lz = from.twist[p3 + 2];
-    next.rollImpulse1[m] = lx * next.t1[m3] + ly * next.t1[m3 + 1] + lz * next.t1[m3 + 2];
-    next.rollImpulse2[m] = lx * next.t2[m3] + ly * next.t2[m3 + 1] + lz * next.t2[m3 + 2];
+    next.rollImpulse1[m] = lx * t1x + ly * t1y + lz * t1z;
+    next.rollImpulse2[m] = lx * t2x + ly * t2y + lz * t2z;
     next.spinImpulse[m] = lx * next.normal[m3] + ly * next.normal[m3 + 1] + lz * next.normal[m3 + 2];
   }
-  for (let k = 0; k < next.points[m]; k++) {
+  for (let k = 0; k < count; k++) {
     const i = m * P + k, id = next.pid[i];
     for (let j = 0; j < remembered; j++) {
       const o = p * P + j;
       if (from.pid[o] !== id) continue;
       next.normalImpulse[i] = from.normalImpulse[o];
-      const fx = from.friction[3 * o], fy = from.friction[3 * o + 1], fz = from.friction[3 * o + 2];
-      next.tangentImpulse1[i] = fx * next.t1[3 * m] + fy * next.t1[3 * m + 1] + fz * next.t1[3 * m + 2];
-      next.tangentImpulse2[i] = fx * next.t2[3 * m] + fy * next.t2[3 * m + 1] + fz * next.t2[3 * m + 2];
-      const sx = from.slip[3 * o], sy = from.slip[3 * o + 1], sz = from.slip[3 * o + 2];
-      next.drift1[i] = sx * next.t1[3 * m] + sy * next.t1[3 * m + 1] + sz * next.t1[3 * m + 2];
-      next.drift2[i] = sx * next.t2[3 * m] + sy * next.t2[3 * m + 1] + sz * next.t2[3 * m + 2];
+      const o3 = 3 * o;
+      const fx = from.friction[o3], fy = from.friction[o3 + 1], fz = from.friction[o3 + 2];
+      next.tangentImpulse1[i] = fx * t1x + fy * t1y + fz * t1z;
+      next.tangentImpulse2[i] = fx * t2x + fy * t2y + fz * t2z;
+      const sx = from.slip[o3], sy = from.slip[o3 + 1], sz = from.slip[o3 + 2];
+      next.drift1[i] = sx * t1x + sy * t1y + sz * t1z;
+      next.drift2[i] = sx * t2x + sy * t2y + sz * t2z;
       break;
     }
   }
@@ -605,22 +615,26 @@ export function store(world, c) {
 function keep(to, p, c, m) {
   const count = c.points[m], m3 = 3 * m, p3 = 3 * p;
   to.points[p] = count;
+  // The manifold's axes are read once: the stores below go to other arrays,
+  // which the compiler can't be sure don't alias them.
+  const t1x = c.t1[m3], t1y = c.t1[m3 + 1], t1z = c.t1[m3 + 2];
+  const t2x = c.t2[m3], t2y = c.t2[m3 + 1], t2z = c.t2[m3 + 2];
   const r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m], sp = c.spinImpulse[m];
-  to.twist[p3] = c.t1[m3] * r1 + c.t2[m3] * r2 + c.normal[m3] * sp;
-  to.twist[p3 + 1] = c.t1[m3 + 1] * r1 + c.t2[m3 + 1] * r2 + c.normal[m3 + 1] * sp;
-  to.twist[p3 + 2] = c.t1[m3 + 2] * r1 + c.t2[m3 + 2] * r2 + c.normal[m3 + 2] * sp;
+  to.twist[p3] = t1x * r1 + t2x * r2 + c.normal[m3] * sp;
+  to.twist[p3 + 1] = t1y * r1 + t2y * r2 + c.normal[m3 + 1] * sp;
+  to.twist[p3 + 2] = t1z * r1 + t2z * r2 + c.normal[m3 + 2] * sp;
   for (let k = 0; k < count; k++) {
-    const i = m * P + k, o = p * P + k;
+    const i = m * P + k, o = p * P + k, o3 = 3 * o;
     to.pid[o] = c.pid[i];
     to.normalImpulse[o] = c.normalImpulse[i];
     const l1 = c.tangentImpulse1[i], l2 = c.tangentImpulse2[i];
-    to.friction[3 * o] = c.t1[m3] * l1 + c.t2[m3] * l2;
-    to.friction[3 * o + 1] = c.t1[m3 + 1] * l1 + c.t2[m3 + 1] * l2;
-    to.friction[3 * o + 2] = c.t1[m3 + 2] * l1 + c.t2[m3 + 2] * l2;
+    to.friction[o3] = t1x * l1 + t2x * l2;
+    to.friction[o3 + 1] = t1y * l1 + t2y * l2;
+    to.friction[o3 + 2] = t1z * l1 + t2z * l2;
     const d1 = c.drift1[i], d2 = c.drift2[i];
-    to.slip[3 * o] = c.t1[m3] * d1 + c.t2[m3] * d2;
-    to.slip[3 * o + 1] = c.t1[m3 + 1] * d1 + c.t2[m3 + 1] * d2;
-    to.slip[3 * o + 2] = c.t1[m3 + 2] * d1 + c.t2[m3 + 2] * d2;
+    to.slip[o3] = t1x * d1 + t2x * d2;
+    to.slip[o3 + 1] = t1y * d1 + t2y * d2;
+    to.slip[o3 + 2] = t1z * d1 + t2z * d2;
   }
 }
 
@@ -633,6 +647,13 @@ function slipped(world, c, m) {
   const a = c.a[m], b = c.b[m], m3 = 3 * m, awake = world._awake;
   const t1x = c.t1[m3], t1y = c.t1[m3 + 1], t1z = c.t1[m3 + 2];
   const t2x = c.t2[m3], t2y = c.t2[m3 + 1], t2z = c.t2[m3 + 2];
+  // Each body's move and turn depend on the body alone, and the turn costs a
+  // square root and an atan2, so they are worked out once a manifold, at its
+  // first point that slips (none, for a manifold whose points all let go),
+  // and only the lever is per point. Measured: see ROADMAP.md, milestone 16.
+  // Only an awake body moves in a step; a static one's start rotation was never kept.
+  let doneB = awake[b] === 0, doneA = awake[a] === 0;
+  const T = turns, ra = c.ra, rb = c.rb;
   for (let k = 0; k < c.points[m]; k++) {
     const i = m * P + k, i3 = 3 * i;
     if (c.sliding[i] !== 0 || c.normalImpulse[i] === 0
@@ -640,31 +661,40 @@ function slipped(world, c, m) {
       c.drift1[i] = 0; c.drift2[i] = 0;
       continue;
     }
-    // Only an awake body moves in a step; a static one's start rotation was never kept.
     let dx = 0, dy = 0, dz = 0;
     if (awake[b] !== 0) {
-      moved(world, b, c.rb, i3);
-      dx = v3[0]; dy = v3[1]; dz = v3[2];
+      if (!doneB) { turned(world, b, T, 0); doneB = true; }
+      const rx = rb[i3], ry = rb[i3 + 1], rz = rb[i3 + 2];
+      dx = T[0] + T[4] * rz - T[5] * ry;
+      dy = T[1] + T[5] * rx - T[3] * rz;
+      dz = T[2] + T[3] * ry - T[4] * rx;
     }
     if (awake[a] !== 0) {
-      moved(world, a, c.ra, i3);
-      dx -= v3[0]; dy -= v3[1]; dz -= v3[2];
+      if (!doneA) { turned(world, a, T, 6); doneA = true; }
+      const rx = ra[i3], ry = ra[i3 + 1], rz = ra[i3 + 2];
+      dx -= T[6] + T[10] * rz - T[11] * ry;
+      dy -= T[7] + T[11] * rx - T[9] * rz;
+      dz -= T[8] + T[9] * ry - T[10] * rx;
     }
     c.drift1[i] += dx * t1x + dy * t1y + dz * t1z;
     c.drift2[i] += dx * t2x + dy * t2y + dz * t2z;
   }
 }
 
+// slipped()'s two bodies, each as (centre's move, turn vector): b at 0, a at 6.
+const turns = new Float64Array(12);
+
 /**
- * How far slot s's surface at offset r[i3..] from its centre moved in the
- * step, into v3: its centre's move, plus its turn as an angle times the
- * lever, θ × r. Not where that bit of surface ended up: a 1 cm marble rolling
- * at 1 m/s turns 1.7 radians in a step, and the bit that touched at the start
- * swings forward 0.7 of its radius over that turn, which would read as slip
- * where a rolling ball has none. Measured, it took 3% off how far the marble
- * rolled. θ × r is exactly the rolling ball's centre's move, so it reads 0.
+ * How slot s moved in the step, into T[o..o+5]: its centre's move, then its
+ * turn as an angle along the axis, θ; a point at offset r from its centre
+ * moved by the first plus θ × r. Not where that bit of surface ended up: a
+ * 1 cm marble rolling at 1 m/s turns 1.7 radians in a step, and the bit that
+ * touched at the start swings forward 0.7 of its radius over that turn, which
+ * would read as slip where a rolling ball has none. Measured, it took 3% off
+ * how far the marble rolled. θ × r is exactly the rolling ball's centre's
+ * move, so it reads 0.
  */
-function moved(world, s, r, i3) {
+function turned(world, s, T, o) {
   const p = world._position, st = world._start, q = world._rotation, q0 = world._startQ, s3 = s * 3, s4 = s * 4;
   // The step's turn, q q0⁻¹: its vector part is sin(θ/2) along the axis.
   const ax = q[s4], ay = q[s4 + 1], az = q[s4 + 2], aw = q[s4 + 3];
@@ -676,11 +706,8 @@ function moved(world, s, r, i3) {
   if (uw < 0) { ux = -ux; uy = -uy; uz = -uz; uw = -uw; }
   const sine = Math.sqrt(ux * ux + uy * uy + uz * uz);
   const k = sine === 0 ? 0 : 2 * atan2(sine, uw) / sine;
-  const tx = ux * k, ty = uy * k, tz = uz * k;
-  const rx = r[i3], ry = r[i3 + 1], rz = r[i3 + 2];
-  v3[0] = p[s3] - st[s3] + ty * rz - tz * ry;
-  v3[1] = p[s3 + 1] - st[s3 + 1] + tz * rx - tx * rz;
-  v3[2] = p[s3 + 2] - st[s3 + 2] + tx * ry - ty * rx;
+  T[o] = p[s3] - st[s3]; T[o + 1] = p[s3 + 1] - st[s3 + 1]; T[o + 2] = p[s3 + 2] - st[s3 + 2];
+  T[o + 3] = ux * k; T[o + 4] = uy * k; T[o + 5] = uz * k;
 }
 
 /**

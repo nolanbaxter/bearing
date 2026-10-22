@@ -233,84 +233,89 @@ const L = new Float64Array(36), Y = new Float64Array(6), PIVOT = new Uint8Array(
 export function factorForest(world) {
   const F = world._joints.forest, T = F.count, n = F.nodes, order = F.order, parent = F.parent;
   const invMass = world._invMass, invI = world._invI, lock = world._lock;
+  const first = F.first, next = F.next, rows = F.rows, side = F.side, jac = F.jac;
+  const D = F.jointInverse, inv = F.inverse, up = F.up, down = F.down;
   for (let t = 0; t < T; t++) shape(F, t);
+  // The loops below take every sum's terms in the order a plain loop over
+  // q would (from 0, and from a 0 start, which keeps a -0 term's sign as
+  // the loop did), so the factor is the same to the bit; only the index
+  // arithmetic is hoisted, and sums over 6 unrolled. Measured: see
+  // ROADMAP.md, milestone 16.
   for (let i = n - 1; i >= 0; i--) {
     const x = order[i];
     if (x >= T) {
-      const k = x - T, s = F.body[k], out = F.inverse, o = 36 * k;
+      const k = x - T, s = F.body[k], o = 36 * k;
       S.fill(0);
       let any = false;
-      for (let e = F.first[k] - 1; e >= 0; e = F.next[e] - 1) {
+      for (let e = first[k] - 1; e >= 0; e = next[e] - 1) {
         const t = e >> 1;
         if (parent[t] !== x) continue;
         any = true;
-        // S += Jᵀ D⁻¹ J, J this joint's rows at this body.
-        const m = F.rows[t], jo = 72 * t + 36 * (e & 1), D = F.jointInverse, d = 36 * t, jac = F.jac;
-        const up = F.up, u = 36 * t;
+        // S += Jᵀ D⁻¹ J, J this joint's rows at this body, with D⁻¹ J made
+        // straight into F.up (kept for the forward solve) and read from there.
+        const m = rows[t], jo = 72 * t + 36 * (e & 1), d = 36 * t, u = 36 * t;
         for (let r = 0; r < m; r++) {
+          const dr = d + r * m, ur = u + 6 * r;
           for (let c = 0; c < 6; c++) {
             let sum = 0;
-            for (let q = 0; q < m; q++) sum += D[d + r * m + q] * jac[jo + q * 6 + c];
-            X[r * 6 + c] = sum;
-            up[u + r * 6 + c] = sum;
+            for (let q = 0, jq = jo + c; q < m; q++, jq += 6) sum += D[dr + q] * jac[jq];
+            up[ur + c] = sum;
           }
         }
         for (let r = 0; r < 6; r++) {
           for (let c = r; c < 6; c++) {
             let sum = 0;
-            for (let q = 0; q < m; q++) sum += jac[jo + q * 6 + r] * X[q * 6 + c];
-            S[r * 6 + c] += sum;
+            for (let q = 0, jq = jo + r, uq = u + c; q < m; q++, jq += 6, uq += 6) sum += jac[jq] * up[uq];
+            S[6 * r + c] += sum;
           }
         }
       }
-      for (let r = 1; r < 6; r++) for (let c = 0; c < r; c++) S[r * 6 + c] = S[c * 6 + r];
       if (!any) {
-        inverseMass(invMass[s], invI, 6 * s, W);
-        out.set(W, o);
+        inverseMass(invMass[s], invI, 6 * s, inv, o);
         continue;
       }
+      for (let r = 1; r < 6; r++) for (let c = 0; c < r; c++) S[6 * r + c] = S[6 * c + r];
       if (lock[s] === 0) {
         mass(world, s, E);
         for (let q = 0; q < 36; q++) E[q] -= S[q];
-        if (inverseSPD(E, 6, X)) {
-          out.set(X, o);
-          continue;
-        }
+        if (inverse6(E, inv, o)) continue;
       }
-      inverseMass(invMass[s], invI, 6 * s, W);
+      inverseMass(invMass[s], invI, 6 * s, W, 0);
       product(W, 0, 6, 6, S, 0, 6, X);
       for (let q = 0; q < 36; q++) E[q] = (q % 7 === 0 ? 1 : 0) - X[q];
       invert(E, 6, X);
       product(X, 0, 6, 6, W, 0, 6, S);
-      out.set(S, o);
+      inv.set(S, o);
     } else {
       // A joint's block: D = -(give + Σ J D⁻¹ Jᵀ) over its child bodies.
-      const t = x, m = F.rows[t], give = COMPLIANCE * F.scale[t] / m, jac = F.jac;
+      const t = x, m = rows[t], give = COMPLIANCE * F.scale[t] / m;
       E.fill(0, 0, m * m);
       for (let r = 0; r < m; r++) E[r * m + r] = give;
-      for (let side = 0; side < 2; side++) {
-        const k = F.side[2 * t + side];
+      for (let sd = 0; sd < 2; sd++) {
+        const k = side[2 * t + sd];
         if (k < 0 || parent[T + k] !== t) continue;
-        const jo = 72 * t + 36 * side, inv = F.inverse, io = 36 * k, down = F.down, dn = 72 * t + 36 * side;
+        // J D_k⁻¹, made straight into F.down (kept for the forward solve),
+        // then E += (J D_k⁻¹) Jᵀ, each from a row held in locals.
+        const jo = 72 * t + 36 * sd, io = 36 * k, dn = jo;
         for (let r = 0; r < m; r++) {
+          const jr = jo + 6 * r, dr = dn + 6 * r;
+          const j0 = jac[jr], j1 = jac[jr + 1], j2 = jac[jr + 2], j3 = jac[jr + 3], j4 = jac[jr + 4], j5 = jac[jr + 5];
           for (let c = 0; c < 6; c++) {
-            let sum = 0;
-            for (let q = 0; q < 6; q++) sum += jac[jo + r * 6 + q] * inv[io + q * 6 + c];
-            X[r * 6 + c] = sum;
-            down[dn + r * 6 + c] = sum;
+            const ic = io + c;
+            down[dr + c] = 0 + j0 * inv[ic] + j1 * inv[ic + 6] + j2 * inv[ic + 12] + j3 * inv[ic + 18] + j4 * inv[ic + 24] + j5 * inv[ic + 30];
           }
         }
         for (let r = 0; r < m; r++) {
-          for (let c = r; c < m; c++) {
-            let sum = 0;
-            for (let q = 0; q < 6; q++) sum += X[r * 6 + q] * jac[jo + c * 6 + q];
-            E[r * m + c] += sum;
+          const dr = dn + 6 * r, rm = r * m;
+          const x0 = down[dr], x1 = down[dr + 1], x2 = down[dr + 2], x3 = down[dr + 3], x4 = down[dr + 4], x5 = down[dr + 5];
+          for (let c = r, jc = jo + 6 * r; c < m; c++, jc += 6) {
+            E[rm + c] += 0 + x0 * jac[jc] + x1 * jac[jc + 1] + x2 * jac[jc + 2] + x3 * jac[jc + 3] + x4 * jac[jc + 4] + x5 * jac[jc + 5];
           }
         }
       }
       for (let r = 1; r < m; r++) for (let c = 0; c < r; c++) E[r * m + c] = E[c * m + r];
       if (!inverseSPD(E, m, X)) invert(E, m, X);
-      const D = F.jointInverse, d = 36 * t;
+      const d = 36 * t;
       for (let q = 0; q < m * m; q++) D[d + q] = -X[q];
     }
   }
@@ -350,36 +355,124 @@ function mass(world, s, out) {
  * back on general elimination.
  */
 export function inverseSPD(A, n, out) {
+  if (n === 6) return inverse6(A, out, 0);
   for (let c = 0; c < n; c++) {
-    let d = A[c * n + c];
-    for (let q = 0; q < c; q++) d -= L[c * n + q] * L[c * n + q];
+    const cn = c * n;
+    let d = A[cn + c];
+    for (let q = 0; q < c; q++) d -= L[cn + q] * L[cn + q];
     if (!(d > 0)) return false;
     const l = Math.sqrt(d);
-    L[c * n + c] = l;
-    for (let r = c + 1; r < n; r++) {
-      let sum = A[r * n + c];
-      for (let q = 0; q < c; q++) sum -= L[r * n + q] * L[c * n + q];
-      L[r * n + c] = sum / l;
+    L[cn + c] = l;
+    for (let r = c + 1, rn = r * n; r < n; r++, rn += n) {
+      let sum = A[rn + c];
+      for (let q = 0; q < c; q++) sum -= L[rn + q] * L[cn + q];
+      L[rn + c] = sum / l;
     }
   }
   // L⁻¹, lower triangular, into A's lower half.
   for (let c = 0; c < n; c++) {
     A[c * n + c] = 1 / L[c * n + c];
-    for (let r = c + 1; r < n; r++) {
+    for (let r = c + 1, rn = r * n; r < n; r++, rn += n) {
       let sum = 0;
-      for (let q = c; q < r; q++) sum -= L[r * n + q] * A[q * n + c];
-      A[r * n + c] = sum / L[r * n + r];
+      for (let q = c, qc = c * n + c; q < r; q++, qc += n) sum -= L[rn + q] * A[qc];
+      A[rn + c] = sum / L[rn + r];
     }
   }
   // A⁻¹ = (L⁻¹)ᵀ L⁻¹: entry (r, c) = Σ_{q ≥ max(r, c)} L⁻¹[q][r] L⁻¹[q][c].
   for (let r = 0; r < n; r++) {
     for (let c = r; c < n; c++) {
       let sum = 0;
-      for (let q = c; q < n; q++) sum += A[q * n + r] * A[q * n + c];
+      for (let q = c, qn = c * n; q < n; q++, qn += n) sum += A[qn + r] * A[qn + c];
       out[r * n + c] = sum;
       out[c * n + r] = sum;
     }
   }
+  return true;
+}
+
+/**
+ * inverseSPD for n = 6, every body's block, into out at p: the same
+ * operations in the same order, unrolled, with the factor and its inverse in
+ * locals rather than in L and A. A is only read, so it may be out, and is
+ * left as it was when this returns false. Measured: see ROADMAP.md,
+ * milestone 16.
+ */
+function inverse6(A, out, p) {
+  const d0 = A[0];
+  if (!(d0 > 0)) return false;
+  const l00 = Math.sqrt(d0);
+  const l10 = (A[6]) / l00;
+  const l20 = (A[12]) / l00;
+  const l30 = (A[18]) / l00;
+  const l40 = (A[24]) / l00;
+  const l50 = (A[30]) / l00;
+  const d1 = A[7] - l10 * l10;
+  if (!(d1 > 0)) return false;
+  const l11 = Math.sqrt(d1);
+  const l21 = (A[13] - l20 * l10) / l11;
+  const l31 = (A[19] - l30 * l10) / l11;
+  const l41 = (A[25] - l40 * l10) / l11;
+  const l51 = (A[31] - l50 * l10) / l11;
+  const d2 = A[14] - l20 * l20 - l21 * l21;
+  if (!(d2 > 0)) return false;
+  const l22 = Math.sqrt(d2);
+  const l32 = (A[20] - l30 * l20 - l31 * l21) / l22;
+  const l42 = (A[26] - l40 * l20 - l41 * l21) / l22;
+  const l52 = (A[32] - l50 * l20 - l51 * l21) / l22;
+  const d3 = A[21] - l30 * l30 - l31 * l31 - l32 * l32;
+  if (!(d3 > 0)) return false;
+  const l33 = Math.sqrt(d3);
+  const l43 = (A[27] - l40 * l30 - l41 * l31 - l42 * l32) / l33;
+  const l53 = (A[33] - l50 * l30 - l51 * l31 - l52 * l32) / l33;
+  const d4 = A[28] - l40 * l40 - l41 * l41 - l42 * l42 - l43 * l43;
+  if (!(d4 > 0)) return false;
+  const l44 = Math.sqrt(d4);
+  const l54 = (A[34] - l50 * l40 - l51 * l41 - l52 * l42 - l53 * l43) / l44;
+  const d5 = A[35] - l50 * l50 - l51 * l51 - l52 * l52 - l53 * l53 - l54 * l54;
+  if (!(d5 > 0)) return false;
+  const l55 = Math.sqrt(d5);
+  const i00 = 1 / l00;
+  const i10 = (0 - l10 * i00) / l11;
+  const i20 = (0 - l20 * i00 - l21 * i10) / l22;
+  const i30 = (0 - l30 * i00 - l31 * i10 - l32 * i20) / l33;
+  const i40 = (0 - l40 * i00 - l41 * i10 - l42 * i20 - l43 * i30) / l44;
+  const i50 = (0 - l50 * i00 - l51 * i10 - l52 * i20 - l53 * i30 - l54 * i40) / l55;
+  const i11 = 1 / l11;
+  const i21 = (0 - l21 * i11) / l22;
+  const i31 = (0 - l31 * i11 - l32 * i21) / l33;
+  const i41 = (0 - l41 * i11 - l42 * i21 - l43 * i31) / l44;
+  const i51 = (0 - l51 * i11 - l52 * i21 - l53 * i31 - l54 * i41) / l55;
+  const i22 = 1 / l22;
+  const i32 = (0 - l32 * i22) / l33;
+  const i42 = (0 - l42 * i22 - l43 * i32) / l44;
+  const i52 = (0 - l52 * i22 - l53 * i32 - l54 * i42) / l55;
+  const i33 = 1 / l33;
+  const i43 = (0 - l43 * i33) / l44;
+  const i53 = (0 - l53 * i33 - l54 * i43) / l55;
+  const i44 = 1 / l44;
+  const i54 = (0 - l54 * i44) / l55;
+  const i55 = 1 / l55;
+  out[p + 0] = 0 + i00 * i00 + i10 * i10 + i20 * i20 + i30 * i30 + i40 * i40 + i50 * i50;
+  out[p + 1] = out[p + 6] = 0 + i10 * i11 + i20 * i21 + i30 * i31 + i40 * i41 + i50 * i51;
+  out[p + 2] = out[p + 12] = 0 + i20 * i22 + i30 * i32 + i40 * i42 + i50 * i52;
+  out[p + 3] = out[p + 18] = 0 + i30 * i33 + i40 * i43 + i50 * i53;
+  out[p + 4] = out[p + 24] = 0 + i40 * i44 + i50 * i54;
+  out[p + 5] = out[p + 30] = 0 + i50 * i55;
+  out[p + 7] = 0 + i11 * i11 + i21 * i21 + i31 * i31 + i41 * i41 + i51 * i51;
+  out[p + 8] = out[p + 13] = 0 + i21 * i22 + i31 * i32 + i41 * i42 + i51 * i52;
+  out[p + 9] = out[p + 19] = 0 + i31 * i33 + i41 * i43 + i51 * i53;
+  out[p + 10] = out[p + 25] = 0 + i41 * i44 + i51 * i54;
+  out[p + 11] = out[p + 31] = 0 + i51 * i55;
+  out[p + 14] = 0 + i22 * i22 + i32 * i32 + i42 * i42 + i52 * i52;
+  out[p + 15] = out[p + 20] = 0 + i32 * i33 + i42 * i43 + i52 * i53;
+  out[p + 16] = out[p + 26] = 0 + i42 * i44 + i52 * i54;
+  out[p + 17] = out[p + 32] = 0 + i52 * i55;
+  out[p + 21] = 0 + i33 * i33 + i43 * i43 + i53 * i53;
+  out[p + 22] = out[p + 27] = 0 + i43 * i44 + i53 * i54;
+  out[p + 23] = out[p + 33] = 0 + i53 * i55;
+  out[p + 28] = 0 + i44 * i44 + i54 * i54;
+  out[p + 29] = out[p + 34] = 0 + i54 * i55;
+  out[p + 35] = 0 + i55 * i55;
   return true;
 }
 
@@ -390,7 +483,10 @@ export function inverseSPD(A, n, out) {
  */
 export function solveForest(world) {
   const F = world._joints.forest, T = F.count, n = F.nodes, order = F.order, parent = F.parent, vec = F.vector;
-  const jac = F.jac, inv = F.inverse, D = F.jointInverse;
+  const jac = F.jac, inv = F.inverse, D = F.jointInverse, up = F.up, down = F.down, rhs = F.rhs;
+  const first = F.first, next = F.next, rows = F.rows, side = F.side;
+  // As in factorForest, every sum keeps the plain loop's order and 0 start;
+  // only the index arithmetic is hoisted, and sums over 6 unrolled.
   // Forward, children first: w = b - Σ H D⁻¹ w over the children. A body's
   // b is 0, a joint's -rhs, and H between them -J (or -Jᵀ).
   for (let i = n - 1; i >= 0; i--) {
@@ -398,29 +494,28 @@ export function solveForest(world) {
     if (x >= T) {
       const k = x - T;
       vec.fill(0, v, v + 6);
-      for (let e = F.first[k] - 1; e >= 0; e = F.next[e] - 1) {
+      for (let e = first[k] - 1; e >= 0; e = next[e] - 1) {
         const t = e >> 1;
         if (parent[t] !== x) continue;
         // w_k += Jᵀ (D_t⁻¹ w_t), which is (D_t⁻¹ J)ᵀ w_t, D_t being symmetric
-        const m = F.rows[t], u = 36 * t, w = NODE * t, up = F.up;
+        const m = rows[t], u = 36 * t, w = NODE * t;
         for (let c = 0; c < 6; c++) {
           let sum = 0;
-          for (let r = 0; r < m; r++) sum += up[u + r * 6 + c] * vec[w + r];
+          for (let r = 0, ur = u + c; r < m; r++, ur += 6) sum += up[ur] * vec[w + r];
           vec[v + c] += sum;
         }
       }
     } else {
-      const t = x, m = F.rows[t];
-      for (let r = 0; r < m; r++) vec[v + r] = -F.rhs[6 * t + r];
-      for (let side = 0; side < 2; side++) {
-        const k = F.side[2 * t + side];
+      const t = x, m = rows[t];
+      for (let r = 0; r < m; r++) vec[v + r] = -rhs[6 * t + r];
+      for (let sd = 0; sd < 2; sd++) {
+        const k = side[2 * t + sd];
         if (k < 0 || parent[T + k] !== t) continue;
         // w_t += J (D_k⁻¹ w_k), which is (J D_k⁻¹) w_k
-        const dn = 72 * t + 36 * side, w = NODE * (T + k), down = F.down;
-        for (let r = 0; r < m; r++) {
-          let sum = 0;
-          for (let c = 0; c < 6; c++) sum += down[dn + r * 6 + c] * vec[w + c];
-          vec[v + r] += sum;
+        const w = NODE * (T + k);
+        const w0 = vec[w], w1 = vec[w + 1], w2 = vec[w + 2], w3 = vec[w + 3], w4 = vec[w + 4], w5 = vec[w + 5];
+        for (let r = 0, dr = 72 * t + 36 * sd; r < m; r++, dr += 6) {
+          vec[v + r] += 0 + down[dr] * w0 + down[dr + 1] * w1 + down[dr + 2] * w2 + down[dr + 3] * w3 + down[dr + 4] * w4 + down[dr + 5] * w5;
         }
       }
     }
@@ -429,36 +524,33 @@ export function solveForest(world) {
   for (let i = 0; i < n; i++) {
     const x = order[i], v = NODE * x, p = parent[x];
     if (x >= T) {
-      const k = x - T, io = 36 * k;
+      const k = x - T;
       if (p >= 0) {
         // + Jᵀ z_p, from its parent joint
-        const m = F.rows[p], jo = 72 * p + 36 * (F.side[2 * p] === k ? 0 : 1), z = NODE * p;
+        const m = rows[p], jo = 72 * p + 36 * (side[2 * p] === k ? 0 : 1), z = NODE * p;
         for (let c = 0; c < 6; c++) {
           let sum = 0;
-          for (let r = 0; r < m; r++) sum += jac[jo + r * 6 + c] * vec[z + r];
+          for (let r = 0, jr = jo + c; r < m; r++, jr += 6) sum += jac[jr] * vec[z + r];
           vec[v + c] += sum;
         }
       }
-      for (let r = 0; r < 6; r++) {
-        let sum = 0;
-        for (let q = 0; q < 6; q++) sum += inv[io + r * 6 + q] * vec[v + q];
-        Y[r] = sum;
+      // Its block's inverse times it, read whole first, so written in place.
+      const v0 = vec[v], v1 = vec[v + 1], v2 = vec[v + 2], v3 = vec[v + 3], v4 = vec[v + 4], v5 = vec[v + 5];
+      for (let r = 0, a = 36 * k; r < 6; r++, a += 6) {
+        vec[v + r] = 0 + inv[a] * v0 + inv[a + 1] * v1 + inv[a + 2] * v2 + inv[a + 3] * v3 + inv[a + 4] * v4 + inv[a + 5] * v5;
       }
-      for (let r = 0; r < 6; r++) vec[v + r] = Y[r];
     } else {
       // + J z_p, from its parent body
-      const t = x, m = F.rows[t], k = p - T, jo = 72 * t + 36 * (F.side[2 * t] === k ? 0 : 1), z = NODE * p, d = 36 * t;
-      for (let r = 0; r < m; r++) {
-        let sum = 0;
-        for (let c = 0; c < 6; c++) sum += jac[jo + r * 6 + c] * vec[z + c];
-        vec[v + r] += sum;
+      const t = x, m = rows[t], k = p - T, z = NODE * p;
+      const z0 = vec[z], z1 = vec[z + 1], z2 = vec[z + 2], z3 = vec[z + 3], z4 = vec[z + 4], z5 = vec[z + 5];
+      for (let r = 0, jr = 72 * t + 36 * (side[2 * t] === k ? 0 : 1); r < m; r++, jr += 6) {
+        Y[r] = vec[v + r] + (0 + jac[jr] * z0 + jac[jr + 1] * z1 + jac[jr + 2] * z2 + jac[jr + 3] * z3 + jac[jr + 4] * z4 + jac[jr + 5] * z5);
       }
-      for (let r = 0; r < m; r++) {
+      for (let r = 0, dr = 36 * t; r < m; r++, dr += m) {
         let sum = 0;
-        for (let q = 0; q < m; q++) sum += D[d + r * m + q] * vec[v + q];
-        Y[r] = sum;
+        for (let q = 0; q < m; q++) sum += D[dr + q] * Y[q];
+        vec[v + r] = sum;
       }
-      for (let r = 0; r < m; r++) vec[v + r] = Y[r];
     }
   }
 }
@@ -466,21 +558,22 @@ export function solveForest(world) {
 /** out = A B, for A rows x inner at a[ao..] and B inner x cols at b[bo..], both row-major. */
 function product(a, ao, rows, inner, b, bo, cols, out) {
   for (let r = 0; r < rows; r++) {
+    const ar = ao + r * inner, or = r * cols;
     for (let c = 0; c < cols; c++) {
       let sum = 0;
-      for (let q = 0; q < inner; q++) sum += a[ao + r * inner + q] * b[bo + q * cols + c];
-      out[r * cols + c] = sum;
+      for (let q = 0, bq = bo + c; q < inner; q++, bq += cols) sum += a[ar + q] * b[bq];
+      out[or + c] = sum;
     }
   }
 }
 
-/** A body's inverse mass matrix: 1/m on the diagonal for moving, its world inverse inertia for turning. */
-function inverseMass(im, invI, o, out) {
-  out.fill(0);
-  out[0] = im; out[7] = im; out[14] = im;
-  out[21] = invI[o]; out[22] = invI[o + 1]; out[23] = invI[o + 2];
-  out[27] = invI[o + 1]; out[28] = invI[o + 3]; out[29] = invI[o + 4];
-  out[33] = invI[o + 2]; out[34] = invI[o + 4]; out[35] = invI[o + 5];
+/** A body's inverse mass matrix, into out at p: 1/m on the diagonal for moving, its world inverse inertia for turning. */
+function inverseMass(im, invI, o, out, p) {
+  out.fill(0, p, p + 36);
+  out[p] = im; out[p + 7] = im; out[p + 14] = im;
+  out[p + 21] = invI[o]; out[p + 22] = invI[o + 1]; out[p + 23] = invI[o + 2];
+  out[p + 27] = invI[o + 1]; out[p + 28] = invI[o + 3]; out[p + 29] = invI[o + 4];
+  out[p + 33] = invI[o + 2]; out[p + 34] = invI[o + 4]; out[p + 35] = invI[o + 5];
 }
 
 /**
