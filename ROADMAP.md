@@ -789,6 +789,12 @@ Winding's way, copied before the first one:
   - Tumbling's energy can rise: a body spun mostly about its longest or shortest axis gains 2e-4
     to 4e-4 of its energy in 120 s. Momentum stays exact, which bounds it; "energy only falls" is
     true only near the middle axis, where `test/motion.test.js` spins its bodies.
+- **2026-10-22.** `bench/compare.html` run again on the laptop after part A and the audit, results in
+  `bench/RESULTS.md`: Bearing now faster than cannon-es on every scene but the ragdolls (1.7 times
+  slower there), the box pile 2.2 to 2.3 times faster than on 2026-10-14; against Rapier 1.6x on
+  rays to 11x on the pyramid, so the 2x goal is not met. Run one scene per page load: the browser
+  pane ran out of memory with all of them in one, and lost the 10,000-box pile for Jolt and
+  cannon-es. Still to do: the desktop's run.
 - **2026-10-22.** Speed audit, at Nolan's request, between milestone 16's parts A and B: every
   file read for speed by five reviewers, each finding timed against the code before it (one
   process, alternating blocks, pinned to one P-core), kept only if faster and only if bit-identical
