@@ -273,6 +273,29 @@ test('off means off: nothing moving fast against anything asks for a time of imp
   assert.ok(fast._impacts > 0);
 });
 
+test('the catch looks for bodies out of their tree boxes where the solve left them, character or not', () => {
+  // A character's casts list such bodies as the step begins, under the same
+  // step and epoch the catch would look them up by; before the speed audit
+  // (milestone 16) the catch took that list, from before anything moved,
+  // whenever a character was in the world. Checked where the catch starts.
+  for (const character of [false, true]) {
+    const world = new World();
+    world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
+    if (character) world.addBody({ type: 'character', shape: 'capsule', radius: 0.3, height: 1.6, position: [-8, 0.8, -8] });
+    world.addBody({ size: [0.1, 0.02, 0.02], position: [0, 2, 0], velocity: [200, 0, 0] });
+    let stale = 0, caught = 0;
+    const own = world._catch;
+    world._catch = function (next) {
+      if (this._straysAt === this._stepCount) stale++;
+      caught++;
+      return own.call(this, next);
+    };
+    for (let n = 0; n < 5; n++) world.step(1 / 60);
+    assert.equal(caught, 5);
+    assert.equal(stale, 0, `with${character ? '' : 'out'} a character, ${stale} of 5 catches read a stale list`);
+  }
+});
+
 test('fast bodies give the same result twice, to the bit', () => {
   const run = () => {
     const world = new World();

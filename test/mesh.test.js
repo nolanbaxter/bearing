@@ -369,6 +369,20 @@ test('bodyOf gives back a mesh and a heightfield that addBody copies, and setBod
   assert.deepEqual(world.bodyOf(world.addBody({ shape: 'heightfield' })).heights, [0, 0, 0, 0]);
 });
 
+test('seams are found however high a mesh numbers its vertices', () => {
+  // Edges were once keyed a * 2^32 + b, exact only below 2^21 vertices:
+  // past that, (a, a + 1) and (a, a + 2) took one key, and two lone edges
+  // read as one shared seam. Two triangles numbered past 2^21 get exactly
+  // the flags of the same two numbered from 0. The filler vertices all sit
+  // at one point, so they cost one table entry.
+  const tri = [1, 2, 0, 2, 2, 0, 1, 3, 0, 1, 2, 1, 2, 2.5, 0.3];   // corners a, a + 1, a + 2, c, d
+  const small = new Mesh(tri, [0, 1, 3, 0, 2, 4]);
+  const high = 2 ** 21, vertices = new Float64Array(3 * (high + 5));
+  vertices.set(tri, 3 * high);
+  const big = new Mesh(vertices, [high, high + 1, high + 3, high, high + 2, high + 4]);
+  assert.deepEqual([...big.edges], [...small.edges]);
+});
+
 // ---- .glb ----
 
 /** A .glb, built byte by byte: the header, a JSON chunk padded with spaces, and a binary chunk. */

@@ -148,19 +148,42 @@ export class Mesh {
    * the two triangles either side of such a seam still meet.
    */
   seams() {
-    const v = this.vertices, ix = this.indices, at = new Map(), same = new Uint32Array(v.length / 3);
-    for (let i = 0; i < same.length; i++) {
-      const key = `${v[3 * i]},${v[3 * i + 1]},${v[3 * i + 2]}`;
-      if (!at.has(key)) at.set(key, i);
-      same[i] = at.get(key);
+    const v = this.vertices, ix = this.indices, V = v.length / 3, same = new Uint32Array(V);
+    // Vertices with the same position: an open-addressed table of first
+    // indices, keyed by the coordinates' bits (with -0 as 0, as equal numbers
+    // must be). Each vertex is mapped to the first one found at its place,
+    // which depends only on the order, not on the hash. A table of strings and
+    // a Map of edge lists did this before, 15% of adding a mesh of 131,072
+    // triangles and most of its garbage, and the edge key a * 2^32 + b
+    // stopped being exact past 2^21 vertices. Measured: see ROADMAP.md,
+    // milestone 16.
+    const head = new Int32Array(power(2 * V)).fill(-1), vmask = head.length - 1;
+    for (let i = 0; i < V; i++) {
+      const x = v[3 * i] + 0, y = v[3 * i + 1] + 0, z = v[3 * i + 2] + 0;
+      let h = hash3(x, y, z) & vmask;
+      for (;;) {
+        const k = head[h];
+        if (k < 0) { head[h] = i; same[i] = i; break; }
+        if (v[3 * k] === x && v[3 * k + 1] === y && v[3 * k + 2] === z) { same[i] = k; break; }
+        h = (h + 1) & vmask;
+      }
     }
-    const shared = new Map();
-    const key = (a, b) => (a < b ? a * 4294967296 + b : b * 4294967296 + a);
+    // Each edge, by its two vertices, lowest first: how many triangles have
+    // it (up to 3, which is "more than 2") and the first two. Where each
+    // triangle's edges landed is kept, so the next pass needn't look again.
+    const E = power(6 * this.count), emask = E - 1;
+    const ka = new Int32Array(E).fill(-1), kb = new Int32Array(E), first = new Int32Array(E), second = new Int32Array(E);
+    const n = new Uint8Array(E), slot = new Int32Array(3 * this.count);
     for (let t = 0; t < this.count; t++) {
       for (let e = 0; e < 3; e++) {
-        const k = key(same[ix[3 * t + e]], same[ix[3 * t + (e + 1) % 3]]);
-        if (!shared.has(k)) shared.set(k, []);
-        shared.get(k).push(t);
+        let a = same[ix[3 * t + e]], b = same[ix[3 * t + (e + 1) % 3]];
+        if (b < a) { const c = a; a = b; b = c; }
+        let h = (Math.imul(a, 0x9e3779b1) ^ Math.imul(b, 0x85ebca77)) & emask;
+        while (ka[h] >= 0 && (ka[h] !== a || kb[h] !== b)) h = (h + 1) & emask;
+        if (ka[h] < 0) { ka[h] = a; kb[h] = b; first[h] = t; n[h] = 1; }
+        else if (n[h] === 1) { second[h] = t; n[h] = 2; }
+        else n[h] = 3;
+        slot[3 * t + e] = h;
       }
     }
     const out = new Uint8Array(this.count);
@@ -168,12 +191,11 @@ export class Mesh {
       this.triangle(t, tri);
       normal(tri, n3);
       for (let e = 0; e < 3; e++) {
-        const a = same[ix[3 * t + e]], b = same[ix[3 * t + (e + 1) % 3]];
-        const list = shared.get(key(a, b));
+        const a = same[ix[3 * t + e]], b = same[ix[3 * t + (e + 1) % 3]], h = slot[3 * t + e];
         let bend = NaN;
         // Exactly one triangle across; more makes the edge no seam anyone can trust.
-        if (list.length === 2) {
-          const o = list[0] === t ? list[1] : list[0];
+        if (n[h] === 2) {
+          const o = first[h] === t ? second[h] : first[h];
           for (let c = 0; c < 3; c++) {
             const far = same[ix[3 * o + c]];
             if (far !== a && far !== b) {
@@ -189,6 +211,24 @@ export class Mesh {
     }
     return out;
   }
+}
+
+/** The least power of two at least n, and at least 16: a hash table's size. */
+function power(n) {
+  let c = 16;
+  while (c < n) c *= 2;
+  return c;
+}
+
+// A position's bits, for hash3.
+const BITS = new Float64Array(3), WORDS = new Uint32Array(BITS.buffer);
+
+/** A hash of three numbers' bits. Only where entries sit depends on it, never what is found. */
+function hash3(x, y, z) {
+  BITS[0] = x; BITS[1] = y; BITS[2] = z;
+  let h = 0x811c9dc5;
+  for (let k = 0; k < 6; k++) h = Math.imul(h ^ WORDS[k], 0x01000193);
+  return (h ^ (h >>> 15)) >>> 0;
 }
 
 export class Heightfield {

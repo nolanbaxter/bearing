@@ -688,9 +688,13 @@ function holds(J, j) {
 
 /** This step's trees, from the joints gather() listed: see forest.js. */
 export function plantJoints(world) {
-  const J = world._joints;
-  plant(world, J.list, J.active, (j) => holds(J, j));
+  PLANTING = world._joints;
+  plant(world, world._joints.list, world._joints.active, planted);
 }
+// plant()'s test, made once: a closure made in each step would be the
+// allocation in step() that rule 76 forbids. A step isn't re-entered.
+let PLANTING = null;
+const planted = (j) => holds(PLANTING, j);
 
 /**
  * Every tree joint's rows that must hold, solved exactly together

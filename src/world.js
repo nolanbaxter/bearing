@@ -888,6 +888,10 @@ export class World {
       restitution(this, next, Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]));
       store(this, next);
     }
+    // The catch's sweeps look for bodies out of their fat boxes where the
+    // solve left them: a character's casts listed them as the step began, and
+    // with the same step and epoch that list would be taken for this one.
+    this._straysAt = -1;
     this._catch(next);
     if (touching > 0) touched(this, pairs, next);
 
@@ -2175,10 +2179,27 @@ function resolve(caller, base, given) {
 
 /** The hull of a list of points, or a throw naming `name` if they don't span a solid. */
 function hullOf(caller, name, vertices) {
+  if (lastHull !== null && sameNumbers(lastVertices, vertices)) return lastHull;
   const hull = build(vertices);
   const n = vertices.length / 3;
   if (hull === null) fail(caller, `${name} must span a solid (4 points not in one plane), got ${n < 4 ? `${n} points` : `${n} points in one plane`}`);
+  lastVertices = Float64Array.from(vertices);
+  lastHull = hull;
   return hull;
+}
+
+// The last hull built, and a copy of the numbers it was built from: a game
+// adds the same rock or crate many times, and the same numbers build the same
+// hull, which nothing changes once built, so it is shared. Kept by value, so
+// a caller changing its array afterwards changes nothing. Measured: see
+// ROADMAP.md, milestone 16.
+let lastVertices = null, lastHull = null;
+
+/** Whether a and b hold the same numbers, -0 and 0 told apart. */
+function sameNumbers(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return false;
+  return true;
 }
 
 /**
