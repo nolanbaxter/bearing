@@ -36,17 +36,39 @@
 // uniformly pressed disc, 2/3 mu N times its radius. For a ball or a capsule
 // of radius r, the patch is 2r/200, so its rolling resistance coefficient,
 // patch over radius, is 0.01 at every size: rubber on concrete, a billiard
-// ball on cloth. Contacts of three or four points already resist both through
-// their spread, and get neither. Nothing here is tuned, and there is nothing
-// to set.
+// ball on cloth. Contacts of three or four points already resist rolling
+// through their spread, and get none. Nothing here is tuned, and there is
+// nothing to set.
 //
-// WARM STARTING. Each point starts the step with the impulse it ended the
-// last one with, matched by the narrowphase's feature ids. A resting stack
-// needs the same impulses step after step, so it starts at the answer. The
-// impulses are kept on the pair, which lasts as long as the two bodies' fat
-// boxes overlap, so nothing has to be looked up: store() writes them after
-// the solve, and the next step's carry() reads them back. A patch's rolling
-// and spinning impulse is kept the same way, as one angular impulse.
+// FRICTION, ONE ANCHOR A MANIFOLD. Friction isn't solved at each point, but
+// once for the whole manifold, as Box3D, Jolt and Rapier's default do: the
+// two tangents together, as a 2x2 block, at one anchor, held within a circle
+// of mu times the manifold's whole normal impulse; then a twist about the
+// normal, held within mu times each point's normal impulse times its distance
+// from the anchor (Box3D's rule), which is what the points' friction resisted
+// spinning with when each had its own. A box face's four corners resist to
+// the same limit as before, with three rows where there were eight. One point
+// has no spread, so its twist is the patch's spinning friction above.
+//
+// The anchor is the points' centre, each point weighed by how near it is to
+// touching: fully within the tolerance, fading to nothing at twice it, as
+// Box3D weighs by its speculative distance. A point further off only matters
+// if the bodies close on it, and an anchor pulled toward it, say a tipping
+// box's lifted edge, would put friction where nothing presses. Weighing by
+// normal impulse instead was Dirk Gregorius's suggestion, which Box3D turned
+// down: the impulses aren't known until the solve, and as points take turns
+// pressing, a rocking box's, the anchor would jump from step to step and could
+// feed the rocking. A manifold whose points are all further than twice the
+// tolerance is weighed evenly: it holds nothing until it closes anyway.
+//
+// WARM STARTING. Each point starts the step with the normal impulse it ended
+// the last one with, matched by the narrowphase's feature ids; each manifold
+// its friction and twist, which belong to no point. A resting stack needs the
+// same impulses step after step, so it starts at the answer. The impulses
+// are kept on the pair, which lasts as long as the two bodies' fat boxes
+// overlap, so nothing has to be looked up: store() writes them after the
+// solve, and the next step's carry() reads them back. Friction is kept as a
+// world vector, and rolling and twist as one angular impulse.
 //
 // MESHES. A body against a mesh or a heightfield is one pair, but may touch
 // it along several directions at once: a box in a valley is pushed by both
@@ -88,16 +110,16 @@ export const PIXEL = 1 / 200;
 // Points per manifold, and per-point numbers kept.
 const P = 4;
 
-// J: the numbers a point keeps for each of its three directions, the normal
-// and the two tangents, 12 each: a's lever crossed with the direction, b's,
-// then each of those turned by its body's inverse inertia. How fast the pair
-// closes along a direction is then three dot products, and a push along it
-// three multiply-adds per body, where working them out from the levers and
+// J: the numbers a point keeps for its normal, 12: a's lever crossed with the
+// normal, b's, then each of those turned by its body's inverse inertia. How
+// fast the pair closes along it is then three dot products, and a push along
+// it three multiply-adds per body, where working them out from the levers and
 // the inverse inertias at every push cost 15 multiplies a body. Levers and
 // inverse inertias hold for the whole step, so these do too. Measured in the
 // solver, which a box face sweeps four points four times a pass: see
-// ROADMAP.md, milestone 16.
-const J = 36;
+// ROADMAP.md, milestone 16. A manifold keeps the same 12 for each of its two
+// tangents at its friction anchor (FJ; see FRICTION).
+const J = 12, FJ = 24;
 
 /**
  * The torque friction can exert across a uniformly pressed disc of radius R,
@@ -129,6 +151,17 @@ export class Contacts {
     grow('patch', Float64Array, m);                       // the patch's radius, m
     grow('rollMass1', Float64Array, m); grow('rollMass2', Float64Array, m); grow('spinMass', Float64Array, m);
     grow('rollImpulse1', Float64Array, m); grow('rollImpulse2', Float64Array, m); grow('spinImpulse', Float64Array, m);
+    // Friction, one anchor a manifold (see FRICTION): the anchor's offset from
+    // each body's centre, its turning terms along t1 and t2 (FJ), the inverse of
+    // the 2x2 block's effective mass as xx xy yy, the impulse along each
+    // tangent, the slip carried in along each (see store), and whether friction
+    // was at its limit in the last pass.
+    grow('anchorA', Float64Array, 3 * m); grow('anchorB', Float64Array, 3 * m);
+    grow('fjac', Float64Array, FJ * m);
+    grow('tangentMass', Float64Array, 3 * m);
+    grow('tangentImpulse1', Float64Array, m); grow('tangentImpulse2', Float64Array, m);
+    grow('drift1', Float64Array, m); grow('drift2', Float64Array, m);
+    grow('sliding', Uint8Array, m);
     grow('pid', Uint32Array, p);
     grow('separation', Float64Array, p);
     grow('point', Float64Array, 3 * p);
@@ -143,14 +176,11 @@ export class Contacts {
     grow('la', Float64Array, 3 * p); grow('lb', Float64Array, 3 * p);
     grow('adjusted', Float64Array, p);
     grow('gap', Float64Array, m);   // its points' least separation as the last pass saw it: at the step's end
-    grow('normalMass', Float64Array, p); grow('tangentMass1', Float64Array, p); grow('tangentMass2', Float64Array, p);
+    grow('normalMass', Float64Array, p);
     grow('jac', Float64Array, J * p);   // each point's turning terms, worked out once a step (see J)
-    grow('normalImpulse', Float64Array, p); grow('tangentImpulse1', Float64Array, p); grow('tangentImpulse2', Float64Array, p);
+    grow('normalImpulse', Float64Array, p);
     grow('maxNormalImpulse', Float64Array, p); grow('relativeVelocity', Float64Array, p);
-    // The slip a point carries in from earlier steps, along t1 and t2, and
-    // whether friction was at its limit there in the last pass (see store).
-    grow('drift1', Float64Array, p); grow('drift2', Float64Array, p);
-    grow('sliding', Uint8Array, p);
+    grow('lever', Float64Array, p);   // the point's distance from the friction anchor, across the normal: its twist lever
     this.capacity = capacity;
   }
 
@@ -508,14 +538,14 @@ function emit(world, next, p, a, b, mf, sign, tolerance, sub, partA, partB, key)
   next.patch[m] = PIXEL * (type[a] !== DYNAMIC ? world._size[b] : type[b] !== DYNAMIC ? world._size[a]
     : Math.min(world._size[a], world._size[b]));
   next.rollImpulse1[m] = 0; next.rollImpulse2[m] = 0; next.spinImpulse[m] = 0;
+  next.tangentImpulse1[m] = 0; next.tangentImpulse2[m] = 0; next.drift1[m] = 0; next.drift2[m] = 0;
   for (let k = 0; k < mf.count; k++) {
     const i = m * P + k;
     next.pid[i] = mf.ids[k];
     next.separation[i] = mf.separations[k];
     for (let c = 0; c < 3; c++) next.point[3 * i + c] = mf.points[3 * k + c];
     for (let c = 0; c < 3; c++) next.shift[3 * i + c] = shifted ? SHIFT[3 * k + c] : 0;
-    next.normalImpulse[i] = 0; next.tangentImpulse1[i] = 0; next.tangentImpulse2[i] = 0;
-    next.drift1[i] = 0; next.drift2[i] = 0;
+    next.normalImpulse[i] = 0;
   }
   basis(next, m);
   return m;
@@ -523,9 +553,12 @@ function emit(world, next, p, a, b, mf, sign, tolerance, sub, partA, partB, key)
 
 /**
  * What "from" remembers at p (the pair list for pair p, or a mesh pair's
- * Memory for its manifold p) onto this step's points with the same feature
- * id. Friction is remembered as a vector in world space and laid onto this
- * step's tangents, since the tangents turn with the normal from step to step.
+ * Memory for its manifold p): normal impulses onto this step's points with
+ * the same feature id, friction and twist onto the manifold. Friction is
+ * remembered as a vector in world space and laid onto this step's tangents,
+ * since the tangents turn with the normal from step to step. Slip is carried
+ * only if some point is the same one: a box tipped onto another face has
+ * slipped nowhere on it yet.
  */
 function carry(from, p, next, m) {
   const remembered = from.points[p];
@@ -538,43 +571,46 @@ function carry(from, p, next, m) {
   const m3 = 3 * m;
   const t1x = next.t1[m3], t1y = next.t1[m3 + 1], t1z = next.t1[m3 + 2];
   const t2x = next.t2[m3], t2y = next.t2[m3 + 1], t2z = next.t2[m3 + 2];
-  const count = next.points[m];
+  const count = next.points[m], p3 = 3 * p;
+  const lx = from.twist[p3], ly = from.twist[p3 + 1], lz = from.twist[p3 + 2];
   if (count <= 2) {
-    const p3 = 3 * p;
-    const lx = from.twist[p3], ly = from.twist[p3 + 1], lz = from.twist[p3 + 2];
     next.rollImpulse1[m] = lx * t1x + ly * t1y + lz * t1z;
     next.rollImpulse2[m] = lx * t2x + ly * t2y + lz * t2z;
-    next.spinImpulse[m] = lx * next.normal[m3] + ly * next.normal[m3 + 1] + lz * next.normal[m3 + 2];
   }
+  next.spinImpulse[m] = lx * next.normal[m3] + ly * next.normal[m3 + 1] + lz * next.normal[m3 + 2];
+  const fx = from.friction[p3], fy = from.friction[p3 + 1], fz = from.friction[p3 + 2];
+  next.tangentImpulse1[m] = fx * t1x + fy * t1y + fz * t1z;
+  next.tangentImpulse2[m] = fx * t2x + fy * t2y + fz * t2z;
+  let same = false;
   for (let k = 0; k < count; k++) {
     const i = m * P + k, id = next.pid[i];
     for (let j = 0; j < remembered; j++) {
       const o = p * P + j;
       if (from.pid[o] !== id) continue;
       next.normalImpulse[i] = from.normalImpulse[o];
-      const o3 = 3 * o;
-      const fx = from.friction[o3], fy = from.friction[o3 + 1], fz = from.friction[o3 + 2];
-      next.tangentImpulse1[i] = fx * t1x + fy * t1y + fz * t1z;
-      next.tangentImpulse2[i] = fx * t2x + fy * t2y + fz * t2z;
-      const sx = from.slip[o3], sy = from.slip[o3 + 1], sz = from.slip[o3 + 2];
-      next.drift1[i] = sx * t1x + sy * t1y + sz * t1z;
-      next.drift2[i] = sx * t2x + sy * t2y + sz * t2z;
+      same = true;
       break;
     }
+  }
+  if (same) {
+    const sx = from.slip[p3], sy = from.slip[p3 + 1], sz = from.slip[p3 + 2];
+    next.drift1[m] = sx * t1x + sy * t1y + sz * t1z;
+    next.drift2[m] = sx * t2x + sy * t2y + sz * t2z;
   }
 }
 
 /**
- * After the solve: each pair remembers its points' ids, impulses and slip,
- * for the next step; a mesh pair, each of its manifolds, with its normal, in
- * its Memory.
+ * After the solve: each pair remembers its points' ids and impulses and its
+ * manifold's friction, twist and slip, for the next step; a mesh pair, each
+ * of its manifolds, with its normal, in its Memory.
  *
- * Slip is how far the two surfaces have slid against each other at a point
- * while friction held it, and friction's solving pass pulls it back, as the
- * normal's pulls back an overlap. Friction alone works on speeds: it stops a
- * slide, but can't undo one, and a solver that visits each contact once a
- * pass leaves a little error, which in a heap leans the same way step after
- * step. Measured on the benchmark's 1,000 boxes: settled, their contacts held
+ * Slip is how far the two surfaces have slid against each other at the
+ * friction anchor while friction held it, and friction's solving pass pulls
+ * it back, as the normal's pulls back an overlap. Friction alone works on
+ * speeds: it stops a slide, but can't undo one, and a solver that visits
+ * each contact once a pass leaves a little error, which in a heap leans
+ * the same way step after step. Measured on the benchmark's 1,000 boxes:
+ * settled, their contacts held
  * at a third to a half of friction's limit, yet slid 0.5 to 1.5 mm/s, and a
  * box crept 4 cm in 10 s, so the heap never slept. PhysX's friction anchors
  * do this job; this measures the slip itself rather than fixing a spot on
@@ -588,9 +624,9 @@ function carry(from, p, next, m) {
  * world.js, which this works with.
  *
  * It is let go where friction was at its limit in the last pass, since the
- * point is truly sliding and pulling it back would be friction it doesn't
+ * manifold is truly sliding and pulling it back would be friction it doesn't
  * have, or where nothing presses, since there's no friction there to hold.
- * A point found at the moment of impact (shift) starts afresh.
+ * A manifold with a point found at the moment of impact (shift) starts afresh.
  */
 export function store(world, c) {
   const pairs = world._pairs;
@@ -623,62 +659,57 @@ function keep(to, p, c, m) {
   to.twist[p3] = t1x * r1 + t2x * r2 + c.normal[m3] * sp;
   to.twist[p3 + 1] = t1y * r1 + t2y * r2 + c.normal[m3 + 1] * sp;
   to.twist[p3 + 2] = t1z * r1 + t2z * r2 + c.normal[m3 + 2] * sp;
+  const l1 = c.tangentImpulse1[m], l2 = c.tangentImpulse2[m];
+  to.friction[p3] = t1x * l1 + t2x * l2;
+  to.friction[p3 + 1] = t1y * l1 + t2y * l2;
+  to.friction[p3 + 2] = t1z * l1 + t2z * l2;
+  const d1 = c.drift1[m], d2 = c.drift2[m];
+  to.slip[p3] = t1x * d1 + t2x * d2;
+  to.slip[p3 + 1] = t1y * d1 + t2y * d2;
+  to.slip[p3 + 2] = t1z * d1 + t2z * d2;
   for (let k = 0; k < count; k++) {
-    const i = m * P + k, o = p * P + k, o3 = 3 * o;
+    const i = m * P + k, o = p * P + k;
     to.pid[o] = c.pid[i];
     to.normalImpulse[o] = c.normalImpulse[i];
-    const l1 = c.tangentImpulse1[i], l2 = c.tangentImpulse2[i];
-    to.friction[o3] = t1x * l1 + t2x * l2;
-    to.friction[o3 + 1] = t1y * l1 + t2y * l2;
-    to.friction[o3 + 2] = t1z * l1 + t2z * l2;
-    const d1 = c.drift1[i], d2 = c.drift2[i];
-    to.slip[o3] = t1x * d1 + t2x * d2;
-    to.slip[o3 + 1] = t1y * d1 + t2y * d2;
-    to.slip[o3 + 2] = t1z * d1 + t2z * d2;
   }
 }
 
 /**
  * Manifold m's slip after the step, into drift1 and drift2: what it carried
- * in, plus how far b's surface moved against a's at each point along the
- * tangents, from where each body started the step to where it ends it.
+ * in, plus how far b's surface moved against a's at the friction anchor along
+ * the tangents, from where each body started the step to where it ends it.
  */
 function slipped(world, c, m) {
   const a = c.a[m], b = c.b[m], m3 = 3 * m, awake = world._awake;
-  const t1x = c.t1[m3], t1y = c.t1[m3 + 1], t1z = c.t1[m3 + 2];
-  const t2x = c.t2[m3], t2y = c.t2[m3 + 1], t2z = c.t2[m3 + 2];
-  // Each body's move and turn depend on the body alone, and the turn costs a
-  // square root and an atan2, so they are worked out once a manifold, at its
-  // first point that slips (none, for a manifold whose points all let go),
-  // and only the lever is per point. Measured: see ROADMAP.md, milestone 16.
-  // Only an awake body moves in a step; a static one's start rotation was never kept.
-  let doneB = awake[b] === 0, doneA = awake[a] === 0;
-  const T = turns, ra = c.ra, rb = c.rb;
+  let pressed = 0, impact = false;
   for (let k = 0; k < c.points[m]; k++) {
     const i = m * P + k, i3 = 3 * i;
-    if (c.sliding[i] !== 0 || c.normalImpulse[i] === 0
-      || c.shift[i3] !== 0 || c.shift[i3 + 1] !== 0 || c.shift[i3 + 2] !== 0) {
-      c.drift1[i] = 0; c.drift2[i] = 0;
-      continue;
-    }
-    let dx = 0, dy = 0, dz = 0;
-    if (awake[b] !== 0) {
-      if (!doneB) { turned(world, b, T, 0); doneB = true; }
-      const rx = rb[i3], ry = rb[i3 + 1], rz = rb[i3 + 2];
-      dx = T[0] + T[4] * rz - T[5] * ry;
-      dy = T[1] + T[5] * rx - T[3] * rz;
-      dz = T[2] + T[3] * ry - T[4] * rx;
-    }
-    if (awake[a] !== 0) {
-      if (!doneA) { turned(world, a, T, 6); doneA = true; }
-      const rx = ra[i3], ry = ra[i3 + 1], rz = ra[i3 + 2];
-      dx -= T[6] + T[10] * rz - T[11] * ry;
-      dy -= T[7] + T[11] * rx - T[9] * rz;
-      dz -= T[8] + T[9] * ry - T[10] * rx;
-    }
-    c.drift1[i] += dx * t1x + dy * t1y + dz * t1z;
-    c.drift2[i] += dx * t2x + dy * t2y + dz * t2z;
+    pressed += c.normalImpulse[i];
+    if (c.shift[i3] !== 0 || c.shift[i3 + 1] !== 0 || c.shift[i3 + 2] !== 0) impact = true;
   }
+  if (c.sliding[m] !== 0 || pressed === 0 || impact) {
+    c.drift1[m] = 0; c.drift2[m] = 0;
+    return;
+  }
+  // Only an awake body moves in a step; a static one's start rotation was never kept.
+  const T = turns;
+  let dx = 0, dy = 0, dz = 0;
+  if (awake[b] !== 0) {
+    turned(world, b, T, 0);
+    const rx = c.anchorB[m3], ry = c.anchorB[m3 + 1], rz = c.anchorB[m3 + 2];
+    dx = T[0] + T[4] * rz - T[5] * ry;
+    dy = T[1] + T[5] * rx - T[3] * rz;
+    dz = T[2] + T[3] * ry - T[4] * rx;
+  }
+  if (awake[a] !== 0) {
+    turned(world, a, T, 6);
+    const rx = c.anchorA[m3], ry = c.anchorA[m3 + 1], rz = c.anchorA[m3 + 2];
+    dx -= T[6] + T[10] * rz - T[11] * ry;
+    dy -= T[7] + T[11] * rx - T[9] * rz;
+    dz -= T[8] + T[9] * ry - T[10] * rx;
+  }
+  c.drift1[m] += dx * c.t1[m3] + dy * c.t1[m3 + 1] + dz * c.t1[m3 + 2];
+  c.drift2[m] += dx * c.t2[m3] + dy * c.t2[m3 + 1] + dz * c.t2[m3 + 2];
 }
 
 // slipped()'s two bodies, each as (centre's move, turn vector): b at 0, a at 6.
@@ -844,12 +875,17 @@ export function prepare(world, c) {
     const nx = c.normal[3 * m], ny = c.normal[3 * m + 1], nz = c.normal[3 * m + 2];
     const partA = c.partA[m] < 0 ? null : world._inner[a].list[c.partA[m]];
     const partB = c.partB[m] < 0 ? null : world._inner[b].list[c.partB[m]];
+    const m3 = 3 * m;
     if (c.points[m] <= 2) {
-      const m3 = 3 * m;
       c.rollMass1[m] = turning(invI, a, b, c.t1[m3], c.t1[m3 + 1], c.t1[m3 + 2]);
       c.rollMass2[m] = turning(invI, a, b, c.t2[m3], c.t2[m3 + 1], c.t2[m3 + 2]);
-      c.spinMass[m] = turning(invI, a, b, nx, ny, nz);
     }
+    c.spinMass[m] = turning(invI, a, b, nx, ny, nz);
+    // The friction anchor's sums (see FRICTION): each point weighed 1 within
+    // the tolerance of touching, down to 0 at twice it; evenly if none is near.
+    const tol = c.tolerance[m];
+    let weight = 0, ax = 0, ay = 0, az = 0, bx = 0, by = 0, bz = 0;
+    let ex = 0, ey = 0, ez = 0, fx = 0, fy = 0, fz = 0;
     for (let k = 0; k < c.points[m]; k++) {
       const i = m * P + k, i3 = 3 * i;
       const px = c.point[i3], py = c.point[i3 + 1], pz = c.point[i3 + 2];
@@ -864,16 +900,46 @@ export function prepare(world, c) {
       const cax = v3[0], cay = v3[1], caz = v3[2];
       core(world, b, partB, rbx, rby, rbz, c.lb, i3);
       c.adjusted[i] = c.separation[i] - ((v3[0] - cax) * nx + (v3[1] - cay) * ny + (v3[2] - caz) * nz);
-      const j = J * i, m3 = 3 * m;
-      c.normalMass[i] = lever(c.jac, j, invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, nx, ny, nz);
-      c.tangentMass1[i] = lever(c.jac, j + 12, invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, c.t1[m3], c.t1[m3 + 1], c.t1[m3 + 2]);
-      c.tangentMass2[i] = lever(c.jac, j + 24, invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, c.t2[m3], c.t2[m3 + 1], c.t2[m3 + 2]);
+      c.normalMass[i] = lever(c.jac, J * i, invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, nx, ny, nz);
       c.maxNormalImpulse[i] = 0;
+      const s = c.separation[i] / tol, near = s <= 1 ? 1 : s >= 2 ? 0 : 2 - s;
+      weight += near;
+      ax += near * rax; ay += near * ray; az += near * raz; bx += near * rbx; by += near * rby; bz += near * rbz;
+      ex += rax; ey += ray; ez += raz; fx += rbx; fy += rby; fz += rbz;
       // Closing speed along the normal, before anything this step: what a bounce is measured from.
       const dvx = v[b3] + w[b3 + 1] * rbz - w[b3 + 2] * rby - v[a3] - w[a3 + 1] * raz + w[a3 + 2] * ray;
       const dvy = v[b3 + 1] + w[b3 + 2] * rbx - w[b3] * rbz - v[a3 + 1] - w[a3 + 2] * rax + w[a3] * raz;
       const dvz = v[b3 + 2] + w[b3] * rby - w[b3 + 1] * rbx - v[a3 + 2] - w[a3] * ray + w[a3 + 1] * rax;
       c.relativeVelocity[i] = dvx * nx + dvy * ny + dvz * nz;
+    }
+    if (weight === 0) { weight = c.points[m]; ax = ex; ay = ey; az = ez; bx = fx; by = fy; bz = fz; }
+    ax /= weight; ay /= weight; az /= weight; bx /= weight; by /= weight; bz /= weight;
+    c.anchorA[m3] = ax; c.anchorA[m3 + 1] = ay; c.anchorA[m3 + 2] = az;
+    c.anchorB[m3] = bx; c.anchorB[m3 + 1] = by; c.anchorB[m3 + 2] = bz;
+    // Each point's twist lever: its distance from the anchor across the normal.
+    for (let k = 0; k < c.points[m]; k++) {
+      const i3 = 3 * (m * P + k);
+      let dx = c.ra[i3] - ax, dy = c.ra[i3 + 1] - ay, dz = c.ra[i3 + 2] - az;
+      const along = dx * nx + dy * ny + dz * nz;
+      dx -= along * nx; dy -= along * ny; dz -= along * nz;
+      c.lever[m * P + k] = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    // The 2x2 block along t1 and t2 at the anchor, and its inverse. The
+    // tangents are at right angles, so the masses add nothing off the diagonal.
+    const f = FJ * m, jac = c.fjac;
+    lever(jac, f, invI, ima, imb, a, b, ax, ay, az, bx, by, bz, c.t1[m3], c.t1[m3 + 1], c.t1[m3 + 2]);
+    lever(jac, f + 12, invI, ima, imb, a, b, ax, ay, az, bx, by, bz, c.t2[m3], c.t2[m3 + 1], c.t2[m3 + 2]);
+    const k11 = ima + imb + jac[f] * jac[f + 6] + jac[f + 1] * jac[f + 7] + jac[f + 2] * jac[f + 8]
+      + jac[f + 3] * jac[f + 9] + jac[f + 4] * jac[f + 10] + jac[f + 5] * jac[f + 11];
+    const k22 = ima + imb + jac[f + 12] * jac[f + 18] + jac[f + 13] * jac[f + 19] + jac[f + 14] * jac[f + 20]
+      + jac[f + 15] * jac[f + 21] + jac[f + 16] * jac[f + 22] + jac[f + 17] * jac[f + 23];
+    const k12 = jac[f + 12] * jac[f + 6] + jac[f + 13] * jac[f + 7] + jac[f + 14] * jac[f + 8]
+      + jac[f + 15] * jac[f + 9] + jac[f + 16] * jac[f + 10] + jac[f + 17] * jac[f + 11];
+    const det = k11 * k22 - k12 * k12;
+    if (det > 0) {
+      c.tangentMass[m3] = k22 / det; c.tangentMass[m3 + 1] = -k12 / det; c.tangentMass[m3 + 2] = k11 / det;
+    } else {
+      c.tangentMass[m3] = 0; c.tangentMass[m3 + 1] = 0; c.tangentMass[m3 + 2] = 0;
     }
   }
 }
@@ -1003,20 +1069,24 @@ export function warmStart(world, c) {
     let vbx = v[b3], vby = v[b3 + 1], vbz = v[b3 + 2], wbx = w[b3], wby = w[b3 + 1], wbz = w[b3 + 2];
     for (let k = 0; k < c.points[m]; k++) {
       const i = m * P + k, j = J * i;
-      const ln = c.normalImpulse[i], l1 = c.tangentImpulse1[i], l2 = c.tangentImpulse2[i];
-      const px = nx * ln + t1x * l1 + t2x * l2;
-      const py = ny * ln + t1y * l1 + t2y * l2;
-      const pz = nz * ln + t1z * l1 + t2z * l2;
+      const ln = c.normalImpulse[i];
+      const px = nx * ln, py = ny * ln, pz = nz * ln;
       vax -= ima * px; vay -= ima * py; vaz -= ima * pz;
       vbx += imb * px; vby += imb * py; vbz += imb * pz;
-      wax -= jac[j + 6] * ln + jac[j + 18] * l1 + jac[j + 30] * l2;
-      way -= jac[j + 7] * ln + jac[j + 19] * l1 + jac[j + 31] * l2;
-      waz -= jac[j + 8] * ln + jac[j + 20] * l1 + jac[j + 32] * l2;
-      wbx += jac[j + 9] * ln + jac[j + 21] * l1 + jac[j + 33] * l2;
-      wby += jac[j + 10] * ln + jac[j + 22] * l1 + jac[j + 34] * l2;
-      wbz += jac[j + 11] * ln + jac[j + 23] * l1 + jac[j + 35] * l2;
+      wax -= jac[j + 6] * ln; way -= jac[j + 7] * ln; waz -= jac[j + 8] * ln;
+      wbx += jac[j + 9] * ln; wby += jac[j + 10] * ln; wbz += jac[j + 11] * ln;
     }
-    if (c.points[m] <= 2) {
+    {
+      // Friction at the anchor.
+      const f = FJ * m, fj = c.fjac, l1 = c.tangentImpulse1[m], l2 = c.tangentImpulse2[m];
+      const px = t1x * l1 + t2x * l2, py = t1y * l1 + t2y * l2, pz = t1z * l1 + t2z * l2;
+      vax -= ima * px; vay -= ima * py; vaz -= ima * pz;
+      vbx += imb * px; vby += imb * py; vbz += imb * pz;
+      wax -= fj[f + 6] * l1 + fj[f + 18] * l2; way -= fj[f + 7] * l1 + fj[f + 19] * l2; waz -= fj[f + 8] * l1 + fj[f + 20] * l2;
+      wbx += fj[f + 9] * l1 + fj[f + 21] * l2; wby += fj[f + 10] * l1 + fj[f + 22] * l2; wbz += fj[f + 11] * l1 + fj[f + 23] * l2;
+    }
+    {
+      // Rolling (none past two points: carry() and solve() leave it 0) and twist.
       const r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m], sp = c.spinImpulse[m], oa = a * 6, ob = b * 6;
       const lx = t1x * r1 + t2x * r2 + nx * sp, ly = t1y * r1 + t2y * r2 + ny * sp, lz = t1z * r1 + t2z * r2 + nz * sp;
       wax -= invI[oa] * lx + invI[oa + 1] * ly + invI[oa + 2] * lz;
@@ -1160,24 +1230,29 @@ export function solve(world, c, h, bias) {
         wbx += jac[j + 9] * d; wby += jac[j + 10] * d; wbz += jac[j + 11] * d;
       }
     }
-    // Friction: each point resists sliding along both tangents, and the two
-    // together may not exceed friction times the normal impulse: a cone, so a
-    // box sliding diagonally slows exactly as one sliding straight.
-    const mu = c.friction[m];
+    // Friction, once for the manifold at its anchor (see FRICTION): both
+    // tangents as one 2x2 block, held within a circle of mu times the whole
+    // normal impulse, so a box sliding diagonally slows exactly as one
+    // sliding straight.
+    const mu = c.friction[m], oa = a * 6, ob = b * 6;
     const t1x = c.t1[m3], t1y = c.t1[m3 + 1], t1z = c.t1[m3 + 2];
     const t2x = c.t2[m3], t2y = c.t2[m3 + 1], t2z = c.t2[m3 + 2];
+    let pressed = 0, twisted = 0;
     for (let k = 0; k < count; k++) {
-      const i = m * P + k, j = J * i + 12, l = j + 12;
+      const i = m * P + k;
+      pressed += c.normalImpulse[i];
+      twisted += c.lever[i] * c.normalImpulse[i];
+    }
+    {
+      const f = FJ * m, fj = c.fjac, g = f + 12;
       const dvx = vbx - vax, dvy = vby - vay, dvz = vbz - vaz;
-      const v1 = dvx * t1x + dvy * t1y + dvz * t1z
-        + wbx * jac[j + 3] + wby * jac[j + 4] + wbz * jac[j + 5] - wax * jac[j] - way * jac[j + 1] - waz * jac[j + 2];
-      const v2 = dvx * t2x + dvy * t2y + dvz * t2z
-        + wbx * jac[l + 3] + wby * jac[l + 4] + wbz * jac[l + 5] - wax * jac[l] - way * jac[l + 1] - waz * jac[l + 2];
-      const o1 = c.tangentImpulse1[i], o2 = c.tangentImpulse2[i];
-      let n1, n2;
+      let v1 = dvx * t1x + dvy * t1y + dvz * t1z
+        + wbx * fj[f + 3] + wby * fj[f + 4] + wbz * fj[f + 5] - wax * fj[f] - way * fj[f + 1] - waz * fj[f + 2];
+      let v2 = dvx * t2x + dvy * t2y + dvz * t2z
+        + wbx * fj[g + 3] + wby * fj[g + 4] + wbz * fj[g + 5] - wax * fj[g] - way * fj[g + 1] - waz * fj[g + 2];
       // The solving pass also pulls back the slip carried in (see store), as
       // fast as an overlap is pushed out, and no faster than a pixel a substep.
-      const s1 = c.drift1[i], s2 = c.drift2[i];
+      const s1 = c.drift1[m], s2 = c.drift2[m];
       if (bias && (s1 !== 0 || s2 !== 0)) {
         let b1 = soft.biasRate * s1, b2 = soft.biasRate * s2;
         const bb = b1 * b1 + b2 * b2;
@@ -1185,37 +1260,32 @@ export function solve(world, c, h, bias) {
           const scale = maxBias / Math.sqrt(bb);
           b1 *= scale; b2 *= scale;
         }
-        n1 = o1 - c.tangentMass1[i] * (v1 + b1); n2 = o2 - c.tangentMass2[i] * (v2 + b2);
-      } else {
-        n1 = o1 - c.tangentMass1[i] * v1; n2 = o2 - c.tangentMass2[i] * v2;
+        v1 += b1; v2 += b2;
       }
-      const limit = mu * c.normalImpulse[i];
-      const l2 = n1 * n1 + n2 * n2;
+      const tm = c.tangentMass, o1 = c.tangentImpulse1[m], o2 = c.tangentImpulse2[m];
+      let n1 = o1 - (tm[m3] * v1 + tm[m3 + 1] * v2), n2 = o2 - (tm[m3 + 1] * v1 + tm[m3 + 2] * v2);
+      const limit = mu * pressed, l2 = n1 * n1 + n2 * n2;
       if (l2 > limit * limit) {
         const scale = limit / Math.sqrt(l2);
         n1 *= scale; n2 *= scale;
-        c.sliding[i] = 1;
+        c.sliding[m] = 1;
       } else {
-        c.sliding[i] = 0;
+        c.sliding[m] = 0;
       }
-      c.tangentImpulse1[i] = n1; c.tangentImpulse2[i] = n2;
+      c.tangentImpulse1[m] = n1; c.tangentImpulse2[m] = n2;
       const d1 = n1 - o1, d2 = n2 - o2;
       const px = t1x * d1 + t2x * d2, py = t1y * d1 + t2y * d2, pz = t1z * d1 + t2z * d2;
       vax -= ima * px; vay -= ima * py; vaz -= ima * pz;
       vbx += imb * px; vby += imb * py; vbz += imb * pz;
-      wax -= jac[j + 6] * d1 + jac[l + 6] * d2; way -= jac[j + 7] * d1 + jac[l + 7] * d2; waz -= jac[j + 8] * d1 + jac[l + 8] * d2;
-      wbx += jac[j + 9] * d1 + jac[l + 9] * d2; wby += jac[j + 10] * d1 + jac[l + 10] * d2; wbz += jac[j + 11] * d1 + jac[l + 11] * d2;
+      wax -= fj[f + 6] * d1 + fj[g + 6] * d2; way -= fj[f + 7] * d1 + fj[g + 7] * d2; waz -= fj[f + 8] * d1 + fj[g + 8] * d2;
+      wbx += fj[f + 9] * d1 + fj[g + 9] * d2; wby += fj[f + 10] * d1 + fj[g + 10] * d2; wbz += fj[f + 11] * d1 + fj[g + 11] * d2;
     }
     if (count <= 2) {
-      // Rolling and spinning (see PATCHES): the turning of b against a about
-      // the two tangents, held within the patch's push leaning to its edge, a
-      // disc as friction's cone is; then about the normal, within friction
-      // across the patch, for one point (two already resist it with their spread).
-      let pressed = 0;
-      for (let k = 0; k < count; k++) pressed += c.normalImpulse[m * P + k];
+      // Rolling (see PATCHES): the turning of b against a about the two
+      // tangents, held within the patch's push leaning to its edge, a disc as
+      // friction's is.
       const most = c.patch[m] * pressed;
-      const oa = a * 6, ob = b * 6;
-      let ux = wbx - wax, uy = wby - way, uz = wbz - waz;
+      const ux = wbx - wax, uy = wby - way, uz = wbz - waz;
       const r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m];
       let n1 = r1 - c.rollMass1[m] * (ux * t1x + uy * t1y + uz * t1z);
       let n2 = r2 - c.rollMass2[m] * (ux * t2x + uy * t2y + uz * t2z);
@@ -1227,28 +1297,30 @@ export function solve(world, c, h, bias) {
       c.rollImpulse1[m] = n1; c.rollImpulse2[m] = n2;
       const d1 = n1 - r1, d2 = n2 - r2;
       // An angular impulse L: -L on a, +L on b, each through its inverse inertia.
-      let lx = t1x * d1 + t2x * d2, ly = t1y * d1 + t2y * d2, lz = t1z * d1 + t2z * d2;
+      const lx = t1x * d1 + t2x * d2, ly = t1y * d1 + t2y * d2, lz = t1z * d1 + t2z * d2;
       wax -= invI[oa] * lx + invI[oa + 1] * ly + invI[oa + 2] * lz;
       way -= invI[oa + 1] * lx + invI[oa + 3] * ly + invI[oa + 4] * lz;
       waz -= invI[oa + 2] * lx + invI[oa + 4] * ly + invI[oa + 5] * lz;
       wbx += invI[ob] * lx + invI[ob + 1] * ly + invI[ob + 2] * lz;
       wby += invI[ob + 1] * lx + invI[ob + 3] * ly + invI[ob + 4] * lz;
       wbz += invI[ob + 2] * lx + invI[ob + 4] * ly + invI[ob + 5] * lz;
-      if (count === 1) {
-        ux = wbx - wax; uy = wby - way; uz = wbz - waz;
-        const s0 = c.spinImpulse[m], limit = SPIN * mu * most;
-        let s1 = s0 - c.spinMass[m] * (ux * nx + uy * ny + uz * nz);
-        if (s1 > limit) s1 = limit; else if (s1 < -limit) s1 = -limit;
-        c.spinImpulse[m] = s1;
-        const ds = s1 - s0;
-        lx = nx * ds; ly = ny * ds; lz = nz * ds;
-        wax -= invI[oa] * lx + invI[oa + 1] * ly + invI[oa + 2] * lz;
-        way -= invI[oa + 1] * lx + invI[oa + 3] * ly + invI[oa + 4] * lz;
-        waz -= invI[oa + 2] * lx + invI[oa + 4] * ly + invI[oa + 5] * lz;
-        wbx += invI[ob] * lx + invI[ob + 1] * ly + invI[ob + 2] * lz;
-        wby += invI[ob + 1] * lx + invI[ob + 3] * ly + invI[ob + 4] * lz;
-        wbz += invI[ob + 2] * lx + invI[ob + 4] * ly + invI[ob + 5] * lz;
-      }
+    }
+    {
+      // Twist about the normal: within mu times each point's normal impulse
+      // times its lever from the anchor; one point has no lever, so its
+      // patch's spinning friction (see PATCHES).
+      const limit = count === 1 ? SPIN * mu * c.patch[m] * pressed : mu * twisted;
+      const s0 = c.spinImpulse[m];
+      let s1 = s0 - c.spinMass[m] * ((wbx - wax) * nx + (wby - way) * ny + (wbz - waz) * nz);
+      if (s1 > limit) s1 = limit; else if (s1 < -limit) s1 = -limit;
+      c.spinImpulse[m] = s1;
+      const ds = s1 - s0, lx = nx * ds, ly = ny * ds, lz = nz * ds;
+      wax -= invI[oa] * lx + invI[oa + 1] * ly + invI[oa + 2] * lz;
+      way -= invI[oa + 1] * lx + invI[oa + 3] * ly + invI[oa + 4] * lz;
+      waz -= invI[oa + 2] * lx + invI[oa + 4] * ly + invI[oa + 5] * lz;
+      wbx += invI[ob] * lx + invI[ob + 1] * ly + invI[ob + 2] * lz;
+      wby += invI[ob + 1] * lx + invI[ob + 3] * ly + invI[ob + 4] * lz;
+      wbz += invI[ob + 2] * lx + invI[ob + 4] * ly + invI[ob + 5] * lz;
     }
     v[a3] = vax; v[a3 + 1] = vay; v[a3 + 2] = vaz; w[a3] = wax; w[a3 + 1] = way; w[a3 + 2] = waz;
     v[b3] = vbx; v[b3 + 1] = vby; v[b3 + 2] = vbz; w[b3] = wbx; w[b3 + 1] = wby; w[b3 + 2] = wbz;

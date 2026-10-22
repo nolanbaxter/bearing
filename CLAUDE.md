@@ -180,8 +180,15 @@ These were made with Nolan and override the rules below where they differ.
   fills it. `FORMAT` (1) must change whenever a stored field does: `test/save.test.js` holds the
   World's field names. `_lines` (the debug buffer) isn't saved. `src/debug.js`: nine floats a
   segment, colours fixed and documented, rings of 16 chords from Bearing's own sin/cos.
+- **Friction once a manifold** (2026-10-22, Nolan approved after measuring; Box3D's, Jolt 5.6's,
+  Rapier's default): two tangent rows as a 2x2 block at one anchor per manifold (the points
+  weighed by how near they are to touching, clamp(2 - s/tolerance), Box3D's rule), clamped to a
+  circle at mu x the summed normal impulses, plus a twist row limited by mu x sum(lever x N); one
+  point keeps the patch's spin rule; rolling unchanged. `jac` is 12 a point (normal only), the
+  anchor's terms `fjac` (FJ 24) a manifold; pairs keep friction and slip per manifold (FORMAT 2).
+  Box pile 8% faster, pyramid 11-12%, the pyramid steadier (2.28 -> 0.81 mm with sleeping off).
 - **Friction pulls back slip** (2026-10-16, milestone 16 step 1, under the approved "fix the
-  cause"): Contacts `drift1`/`drift2` (slip carried in, along the tangents) and `sliding` (friction
+  cause"; per manifold at the friction anchor since 2026-10-22): Contacts `drift1`/`drift2` (slip carried in, along the tangents) and `sliding` (friction
   at its limit in the last pass); pairs and Memory keep `slip` as a world vector. `store(world, c)`
   measures each point's slip over the step (`slipped()`/`moved()`: centre move plus θ × r, θ the
   step's turn from `_startQ` by Bearing's `atan2`, so rolling reads 0), dropped at any

@@ -40,8 +40,13 @@ import { Mesh, Heightfield } from './mesh.js';
 import { Hull } from './hull.js';
 import { Parts, Part } from './collide.js';
 
-/** The layout of the data world.save() writes. */
-export const FORMAT = 1;
+/**
+ * The layout of the data world.save() writes. 2 since milestone 16, when a
+ * pair's remembered friction and slip went from one per point to one per
+ * contact (friction solved once a manifold); data of format 1 holds them per
+ * point, and is refused rather than misread.
+ */
+export const FORMAT = 2;
 
 /** The classes a world holds, by the name their objects are written under. */
 const CLASSES = { Slots, Broadphase, Tree, Pairs, Memory, Contacts, Joints, Forest, Events, Mesh, Heightfield, Hull, Parts, Part };
@@ -57,7 +62,7 @@ const TYPED_NAME = new Map(Object.entries(TYPED).map(([k, v]) => [v, k]));
  * afresh before each step reads them, 36 numbers a point, which would nearly
  * double a pile's save.
  */
-const SCRATCH = { World: new Set(['_lines', '_placed']), Contacts: new Set(['jac']) };
+const SCRATCH = { World: new Set(['_lines', '_placed']), Contacts: new Set(['jac', 'fjac']) };
 
 /** The world as plain, JSON-safe data. */
 export function save(world, World) {
@@ -139,7 +144,7 @@ export function load(data, World) {
     if (!(made[0] instanceof World)) throw new Error('no world first');
     made[0]._lines = new Float32Array(0);
     made[0]._placed = [];
-    for (const o of made) if (o instanceof Contacts) o.jac = new Float64Array(o.normalMass.length * 36);
+    for (const o of made) if (o instanceof Contacts) { o.jac = new Float64Array(o.normalMass.length * 12); o.fjac = new Float64Array(o.friction.length * 24); }
     return made[0];
   } catch (e) {
     return fail('load', `data is damaged: ${e.message}`);

@@ -762,7 +762,7 @@ stepping exactly as the saved world would have.
 Returns: a new [`World`](#world), its own: changing it changes nothing in the world it was saved
 from, or the data.
 
-Throws: `load: data must be what world.save() returned, got …`; `load: data is format …; this Bearing reads format 1`; `load: data is damaged: …`.
+Throws: `load: data must be what world.save() returned, got …`; `load: data is format …; this Bearing reads format 2`; `load: data is damaged: …`.
 
 ```js
 const checkpoint = world.save();
@@ -1393,6 +1393,10 @@ into each other, slide no more than friction allows, and bounce as much as their
   anything.
 - **Friction is a cone.** A contact resists sliding in every direction alike, up to its friction
   times how hard it is pressed, so a box pushed diagonally slows exactly as one pushed straight.
+  It is worked out once for the whole contact, at the centre of its points, and turning about the
+  normal is resisted up to friction times each point's push times its distance from that centre,
+  as Box3D and Jolt do: a box resting flat holds and slides as it would with friction at each
+  corner, for a third of the work.
 - **Friction holds where it holds.** While a contact isn't sliding, friction also pulls back any
   slip, the way an overlap is pushed out, so a heap that has settled stays put instead of creeping
   a few millimetres a second and staying awake. A contact sliding anywhere, or no longer pressed,

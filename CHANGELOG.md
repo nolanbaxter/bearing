@@ -40,7 +40,9 @@ All notable changes to Bearing are recorded here. The format follows
   passes its friction and then slides at exactly g (sin θ − μ cos θ); balls with restitution 1 keep
   their momentum and energy. Kinematic bodies push dynamic ones and carry what stands on them.
 - Body options `friction` (0.5), `restitution` (0), `damping`, `angularDamping` and `gravityScale`.
-  Friction mixes as a geometric mean, restitution as the larger. Friction that holds also pulls
+  Friction mixes as a geometric mean, restitution as the larger. Friction is worked out once for
+  each contact, at the centre of its points, with turning about the normal resisted by the
+  points' spread (Box3D's way). Friction that holds also pulls
   back any slip the solver let through, so a settled heap stays where it settled and goes to
   sleep: the benchmark's 1,000 boxes were 883 awake for good, at 45 ms a step, and now all sleep.
 - `world.substeps` (8), the one solver setting, measured rather than chosen: the fewest that keep

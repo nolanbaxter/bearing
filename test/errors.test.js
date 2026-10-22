@@ -182,8 +182,8 @@ const cases = [
 
   ['world-save', () => gone().world.save(), 'save: this world was destroyed'],
   ['world-load', () => World.load(5), 'load: data must be what world.save() returned, got 5'],
-  ['world-load', () => World.load({ ...new World().save(), format: 2 }), 'load: data is format 2; this Bearing reads format 1'],
-  ['world-load', () => World.load({ format: 1, objects: [{ c: 'Box', f: {} }] }), "load: data is damaged: an object of an unknown kind, 'Box'"],
+  ['world-load', () => World.load({ ...new World().save(), format: 3 }), 'load: data is format 3; this Bearing reads format 2'],
+  ['world-load', () => World.load({ format: 2, objects: [{ c: 'Box', f: {} }] }), "load: data is damaged: an object of an unknown kind, 'Box'"],
   ['world-debuglines', () => gone().world.debugLines(), 'debugLines: this world was destroyed'],
   ['world-debuglines', () => fresh().world.debugLines(true), 'debugLines: options must be an object, got true'],
   ['world-debuglines', () => fresh().world.debugLines({ shape: true }), "debugLines: unknown option 'shape' (did you mean 'shapes'?)"],
