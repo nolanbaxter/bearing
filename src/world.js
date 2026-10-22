@@ -1771,7 +1771,8 @@ export class World {
     this._torque.fill(0, s * 3, s * 3 + 3);
     this._geometry[s] = null;
     this._inner[s] = null;
-    this._placed[s] = null;
+    // Only where one was made: writing past the end would stretch the list to every slot.
+    if (s < this._placed.length) this._placed[s] = null;
     if (this._framed[s] === 1) { this._framed[s] = 0; this._framedCount--; }
     if (this._sensor[s] === 1) { this._sensor[s] = 0; this._sensorCount--; }
     // The next body in the slot starts its count afresh, whatever its type.
