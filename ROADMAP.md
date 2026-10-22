@@ -789,6 +789,28 @@ Winding's way, copied before the first one:
   - Tumbling's energy can rise: a body spun mostly about its longest or shortest axis gains 2e-4
     to 4e-4 of its energy in 120 s. Momentum stays exact, which bounds it; "energy only falls" is
     true only near the middle axis, where `test/motion.test.js` spins its bodies.
+- **2026-10-22.** Speed audit, at Nolan's request, between milestone 16's parts A and B: every
+  file read for speed by five reviewers, each finding timed against the code before it (one
+  process, alternating blocks, pinned to one P-core), kept only if faster and only if bit-identical
+  (one exception, the forest's reused products, at rounding level). The base math (`core/math.js`)
+  was found as fast as it can be and stay bit-identical: fdlibm's own formulas, operation for
+  operation, and under 1% of any scene. Kept, against the code before the audit: 1,000 hulls piling
+  12.9% faster (a hull placed once a step and shared by its pairs; the edge test's dot products
+  shared), 300 hulls on a heightfield 14.3% (also one pass over the hull's corners per axis, not
+  three), 30 swinging chains 15.9% (the forest's loops tightened, a 6x6 inverse written out, the
+  factor's products reused), 1,000 kinematic bodies moved by hand 9.8%, the landing pile 4.8% and the
+  pyramid 4.2% (pairs checked again only after something could change them; the slip measure's turn
+  once a manifold; box-box's face products shared), terrain 1.5%; adding 2,000 copies of one rock
+  68 -> 16 ms (the last hull built is shared when the same numbers come again), finding a
+  131,072-triangle mesh's seams 110 -> 31 ms (typed hash tables, not a Map of strings). Fixed on the
+  way: the catch read a stray list from before the step's motion whenever a character existed;
+  seam keys overlapped past 2^21 vertices; a closure per step in the joints; a removal stretched a
+  list to every slot. Measured and left out: `rotate`'s sign as a branch, merging the step's walks,
+  joint frames kept for the substep, a heightfield's edge flags kept, query internals' allocations.
+  Not tried, for later if a scene needs them: SAT caching for hulls, the forest keeping its Cholesky
+  factor rather than inverses, building a mesh's tree in bulk. Open, for Nolan: `events.js` hands
+  storage back by the quarter rule each step, so event counts swinging past 64 reallocate inside
+  the step.
 - **2026-10-22.** Milestone 15's save size corrected: the 3.5 MB quoted for 1,000 boxes didn't
   hold for the benchmark's turned pile, which was 9.5 MB before milestone 16 and is now about
   7 MB settled and 10 to 11 MB while landing. The API reference now names the scene.

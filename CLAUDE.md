@@ -209,6 +209,14 @@ These were made with Nolan and override the rules below where they differ.
   keeps each entry distance in `tree.at`, and skips a node entered beyond the current maxT; ties
   to child1. 10,000 rays into the benchmark pile 65 -> 29 ms. `ray()` in `query.js` makes its
   stray-telling `Set` only when `strays()` is non-empty.
+- **Speed audit** (2026-10-22, between milestone 16's parts A and B): a hull body's placement is
+  kept per slot in `World._placed` (`collide.js` `Placed.fresh`, keyed by step, `_epoch` and hull;
+  `Shape.place()` clears `Shape.placed`; scratch to `save()`; cleared on removal only if the list
+  reaches the slot). `World._pairEpoch` moves on with removal, `setBody` and any joint change;
+  `Pairs.checked` lets `holds()` skip the identity and pairability checks until it does. The last
+  hull built is shared for identical vertex numbers (`hullOf`, a copy kept by value). `seams()`
+  uses typed hash tables. `forest.js` has `inverse6` (written out, same operation order) and keeps
+  `up`/`down` products. Timing method for audits: `scratchpad/audit/ab.mjs` scenes.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks
