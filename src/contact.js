@@ -1097,7 +1097,10 @@ export function solve(world, c, h, bias) {
     // has points lets each one's correction reach every other. Measured, a 1 m
     // box dropped flat 2.5 m at 4 substeps: 7.6 mm of slide with one sweep,
     // 0.04 mm with two, none to a micrometre with four. A one-point contact
-    // gets one sweep, which already solves it exactly.
+    // gets one sweep, which already solves it exactly. Measured again at 8
+    // substeps (milestone 16): one sweep slid it 1.5 mm, two 0.01 mm and let
+    // the pyramid stray 2.4 mm where four keep it to 1.0, for 9 to 16% of a
+    // step saved; kept at four.
     for (let sweep = 0; sweep < count; sweep++) {
       for (let k = 0; k < count; k++) {
         const i = m * P + k, j = J * i;

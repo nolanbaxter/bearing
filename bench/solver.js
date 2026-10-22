@@ -4,6 +4,9 @@
 // The default (World's SUBSTEPS) is the fewest that keep a 210-box pyramid
 // within half a box's contact tolerance, 2.5 mm, after 10 s at 60 Hz. Run this
 // to check it still is, after any change to the solver or the narrowphase.
+// Since milestone 16 that alone isn't the test: 7 substeps now keeps the
+// pyramid within it too, but sinks the stack 9 mm (6.9 at 8) and left the
+// 1,000-box pile awake at 60 s. See SUBSTEPS in src/world.js.
 //
 // HOW THE SOLVER WAS CHOSEN (milestone 4, i7-1260P, Node 22). The solver runs
 // substeps of one solving pass and one relaxing pass. Before that was settled,

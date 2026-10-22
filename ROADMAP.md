@@ -563,6 +563,22 @@ the bodies into compact solver arrays. A contact point costs 33% more at 8,000 b
 1,000, so memory does start to tell, but the gather means moving the whole substep (positions,
 the separation, the moves) onto those arrays, which graph colouring (7) restructures anyway; it
 is done there, once.
+(3) done: 8 substeps and four sweeps a face stay. Measured with sleeping off for the stack and
+pyramid (10 s), the time three 288-box heaps and the 1,000-box pile take to sleep, and time a
+step pinned to one P-core:
+
+| substeps x sweeps | drop slide | stack sank | pyramid stray / sank | heaps asleep | pile asleep | cost |
+|---|---|---|---|---|---|---|
+| 8 x 4 (kept) | 0 | 6.9 mm | 2.3 / 9.0 mm | 15.0, 14.7, 10.7 s | 18.2 s | 100% |
+| 8 x 2 | 0.01 mm | 6.9 mm | 2.6 / 9.0 mm | 12.2, 12.4, 12.8 s | 13.6 s | 84-91% |
+| 8 x 1 | 1.5 mm | 6.9 mm | 3.5 / 9.3 mm | 8.6, 12.7, 10.0 s | 15.9 s | |
+| 7 x 4 | 0 | 9.0 mm | 4.6 / 12.4 mm | 12.0, 19.0, 16.3 s | awake at 60 s | |
+| 6 x 4 | 0 | 12.3 mm | 5.0 / 16.9 mm | 9.1, 10.9, 15.3 s | 25.4 s | 80-84% |
+| 4 x 4 | 0 | 27.6 mm | 19.7 / 37.4 mm | 14.0, 13.5, 13.1 s | 17.0 s | |
+
+Fewer substeps soften every contact (its spring is tuned to the substep rate), which shows as
+sinking; two sweeps let the pyramid stray 2.4 mm with sleeping on, against 1.0, past the 1.5 mm
+`test/contact.test.js` holds it to, and slide the flat drop 0.01 mm. Neither is worth 10 to 15%.
 
 **17. Documentation ⬜**
 *Concepts:* writing reference documentation people can learn from.

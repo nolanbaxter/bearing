@@ -92,6 +92,15 @@ const SHAPE_OPTIONS = ['shape', 'size', 'radius', 'height'];
 // shape held it. SUBSTEPS is the fewest that kept the pyramid within half a
 // box's contact tolerance (2.5 mm): 1.47 mm at 8, against 3.02 at 7 and 9.49
 // at 4, with the top sinking 8 mm over 20 rows.
+//
+// Measured again in milestone 16, after the solver's own speed-ups, against
+// more scenes (the 1,000-box benchmark pile and three 288-box heaps too).
+// Fewer substeps cost what can be seen: a contact's spring is tuned to the
+// substep rate (STIFFNESS), so the 10-box stack sank 6.9 mm at 8, 9.0 at 7,
+// 12 at 6 and 28 at 4; at 7 the pyramid strayed 4.6 mm with sleeping off
+// (2.3 at 8) and the pile was still awake at 60 s. 7 would have saved an
+// eighth of the solver's work. Fewer sweeps a manifold at 8 (see solve() in
+// contact.js) saved 9 to 16%, and cost the same way.
 const SUBSTEPS = 8;
 // How stiff a contact's spring is, as a fraction of the substep rate. A
 // quarter is the most the integrator can follow (ωh = π/2, inside semi-implicit
