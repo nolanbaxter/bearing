@@ -213,6 +213,7 @@ function bodySlot(world, caller, name, body) {
 export function addJoint(world, given) {
   const caller = 'addJoint';
   world._live(caller);
+  world._pairEpoch++;   // its bodies may stop colliding (pairs.js holds)
   const o = options(caller, given);
   known(caller, o, OPTIONS);
   const has = (k) => o[k] !== undefined;
@@ -254,6 +255,7 @@ export function addJoint(world, given) {
 export function setJoint(world, joint, changes) {
   const caller = 'setJoint';
   const j = jointSlot(world, caller, joint);
+  world._pairEpoch++;   // collide may change (pairs.js holds)
   const o = options(caller, changes, 'changes');
   known(caller, o, OPTIONS);
   const has = (k) => o[k] !== undefined;
@@ -320,6 +322,7 @@ export function jointOf(world, j) {
 
 /** Takes joint slot j out: unlinked from its bodies, which wake, and its slot freed. */
 export function dropJoint(world, j) {
+  world._pairEpoch++;   // its bodies may collide again (pairs.js holds)
   const J = world._joints, a = J.a[j], b = J.b[j];
   unlink(world, j, a, 0);
   if (b >= 0) unlink(world, j, b, 1);

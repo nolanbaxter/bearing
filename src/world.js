@@ -376,6 +376,10 @@ export class World {
     this._straysAt = -1;
     this._straysEpoch = -1;
     this._epoch = 0;
+    // Moved on by anything that can change whether two bodies are the same
+    // ones or may collide: removing a body, setBody, a joint added, changed or
+    // dropped. The pair list checks a pair again only when it has (pairs.js holds).
+    this._pairEpoch = 0;
   }
 
   // ---- settings and state ----
@@ -486,6 +490,7 @@ export class World {
     const o = options('setBody', changes, 'changes');
     const spec = resolve('setBody', this._spec(s), o);
     this._epoch++;
+    this._pairEpoch++;
     // Any change can change what holds it, so its island wakes first (rule 36).
     this._wake(s);
     // Moving or turning a body by hand is a teleport: `previous` moves with it,
@@ -1772,6 +1777,7 @@ export class World {
     // The next body in the slot starts its count afresh, whatever its type.
     if (this._type[s] === CHARACTER) { this._type[s] = DYNAMIC; this._characterCount--; }
     this._epoch++;
+    this._pairEpoch++;
     // What it was holding up, or resting on, wakes: its own island now, and
     // anything asleep against it at the next step, which finds it gone.
     this._wake(s);

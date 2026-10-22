@@ -82,7 +82,7 @@ test('the save holds every field of the world: a new one must change FORMAT and 
     '_inertia', '_inertiaGiven', '_inner', '_invI', '_invInertia', '_invMass', '_island', '_islandNext', '_islandSteps',
     '_jointHead', '_jointSteps', '_jointTally', '_joints', '_layers', '_least', '_lock', '_logAt', '_logCount', '_logFloor',
     '_logLast', '_logSlots', '_mask', '_mass', '_massGiven', '_maxSlope', '_motion', '_movedAt', '_movedOut', '_movedStatics',
-    '_node', '_offset', '_pairs', '_parent', '_position', '_previous', '_reach', '_rest', '_restitution', '_rotation', '_seen',
+    '_node', '_offset', '_pairEpoch', '_pairs', '_parent', '_position', '_previous', '_reach', '_rest', '_restitution', '_rotation', '_seen',
     '_seenMark', '_sensed', '_sensedCount', '_sensor', '_sensorCount', '_sensorPasses', '_shape', '_size', '_sleeping', '_slept',
     '_sleptCount', '_slopeCos', '_slots', '_solverSteps', '_start', '_startQ', '_staticMoved', '_stepCount', '_stepDt',
     '_stepGiven', '_stepHeight', '_still', '_strays', '_straysAt', '_straysEpoch', '_substeps', '_torque', '_transforms',

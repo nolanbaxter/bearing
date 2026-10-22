@@ -54,6 +54,7 @@ export class Pairs {
     this.slip = new Float64Array(0);       // how far each point has slipped while friction held it, a world vector (contact.js, store)
     this.twist = new Float64Array(0);      // the pair's rolling and spinning friction, an angular impulse, world vector
     this.touching = new Uint8Array(0);     // 1 while its bodies touch, as of the last step that looked
+    this.checked = new Float64Array(0);    // World._pairEpoch when it was last found pairable, its bodies the same (holds)
     /** A mesh pair's Memory, by pair; null for any other pair. */
     this.memory = [];
     this.spare = [];
@@ -75,6 +76,7 @@ export class Pairs {
     this.idA = resized(this.idA, c); this.idB = resized(this.idB, c);
     this.points = resized(this.points, c);
     this.touching = resized(this.touching, c);
+    this.checked = resized(this.checked, c);
     this.pid = resized(this.pid, c * P);
     this.normalImpulse = resized(this.normalImpulse, c * P);
     this.friction = resized(this.friction, c * P * 3);
@@ -170,12 +172,14 @@ export class Pairs {
       // and starts over, among the awake pairs, since a new body is awake.
       this.forget(p);
       this.idA[p] = ida; this.idB[p] = idb;
+      this.checked[p] = w._pairEpoch;
       if (p >= this.active) this.wake(p);
       return;
     }
     const p = this.count;
     this._grow(p + 1);
     this.a[p] = a; this.b[p] = b; this.idA[p] = ida; this.idB[p] = idb; this.points[p] = 0; this.touching[p] = 0;
+    this.checked[p] = w._pairEpoch;
     this.memory[p] = null;
     this._put(a, b, p);
     this.count++;
@@ -235,6 +239,7 @@ export class Pairs {
     this.idA[to] = this.idA[from]; this.idB[to] = this.idB[from];
     this.points[to] = this.points[from];
     this.touching[to] = this.touching[from];
+    this.checked[to] = this.checked[from];
     this.pid.copyWithin(to * P, from * P, from * P + P);
     this.normalImpulse.copyWithin(to * P, from * P, from * P + P);
     this.friction.copyWithin(to * P * 3, from * P * 3, from * P * 3 + P * 3);
@@ -248,7 +253,7 @@ export class Pairs {
     if (i === j) return;
     swap(this.a, i, j, 1); swap(this.b, i, j, 1);
     swap(this.idA, i, j, 1); swap(this.idB, i, j, 1);
-    swap(this.points, i, j, 1); swap(this.touching, i, j, 1);
+    swap(this.points, i, j, 1); swap(this.touching, i, j, 1); swap(this.checked, i, j, 1);
     swap(this.pid, i, j, P); swap(this.normalImpulse, i, j, P); swap(this.friction, i, j, 3 * P); swap(this.slip, i, j, 3 * P); swap(this.twist, i, j, 3);
     const kept = this.memory[i];
     this.memory[i] = this.memory[j];
@@ -263,8 +268,17 @@ export class Pairs {
    */
   holds(p, broadphase) {
     const w = this.world, a = this.a[p], b = this.b[p];
-    if (w._slots.slotOf(this.idA[p]) !== a || w._slots.slotOf(this.idB[p]) !== b) return false;
-    if (!pairable(w, a, b)) return false;
+    // Whether its bodies are the same and may still collide changes only when
+    // a body is removed (its slot can then be reused), changed with setBody,
+    // or joined or freed: each moves World._pairEpoch on. Until it does, a
+    // pair found pairable stays so, and only its fat boxes are looked at.
+    // Measured: see ROADMAP.md, milestone 16. A pair asleep through a change
+    // is checked when it is next looked at, its mark being older.
+    if (this.checked[p] !== w._pairEpoch) {
+      if (w._slots.slotOf(this.idA[p]) !== a || w._slots.slotOf(this.idB[p]) !== b) return false;
+      if (!pairable(w, a, b)) return false;
+      this.checked[p] = w._pairEpoch;
+    }
     return broadphase.overlap(a, b);
   }
 
