@@ -192,7 +192,14 @@ await test('stacks put to sleep, woken and cleared 30 times: the awake list, the
   }
   await collect();
   const grown = heap() - before;
-  assert.ok(grown < 256 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
+  // The storage this is about is checked exactly each round, above; the heap
+  // is a backstop. It grows with V8's compiling, not a leak: measured on
+  // Node 22 (milestone 16), 140 KB over 30 rounds and 410 to 440 over 60,
+  // and with --jitless 2 KB and 4; Node 20 in CI reached 299 KB, after the
+  // allocation test first stepped a world of every feature. A round of 60
+  // boxes holds 50 to 320 KB once storage has grown, so a round kept each
+  // time would pass a megabyte within a few rounds of 30.
+  assert.ok(grown < 1024 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
 });
 
 await test('hulls and compounds made, piled on a mesh and removed 30 times: their shapes and frames go', async () => {
