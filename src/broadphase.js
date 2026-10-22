@@ -38,8 +38,18 @@ export const FAT = 1 / 4;
  * what a moving tree costs: measured with bench/broadphase.js (i7-1260P,
  * 10,000 bodies), 16 against 8 cut the fliers' step from 6.9 to 4.3 ms and
  * the level's from 2.5 to 1.8 ms; with none, the level took 15.4 ms, behind a
- * one-axis sort and sweep's 5.9. More than 16 wasn't tried; the bench's
- * default run checks 32 next. Re-measure if re-filing gets cheaper (milestone 16).
+ * one-axis sort and sweep's 5.9. Measured again in milestone 16 with 32 too,
+ * timing whole steps pinned to one P-core: 32 was 8 to 12% faster with 10,000
+ * fliers or a level of 10,000, but 5% slower with a pile of 10,000 and 3 to 13%
+ * slower in all three at 1,000. A fat box reaching further only pays when
+ * bodies are many, sparse and fast, so 16 stays.
+ *
+ * Re-filing a body, which takes it out of the tree and puts it back where it
+ * fits, was also weighed against refitting it in place (growing its leaf and
+ * its ancestors' boxes, as Box2D 3 does): in bench/broadphase.js at 10,000
+ * bodies, insertion and refitting were 3% of the samples to the queries' 15%,
+ * and putting a body back where it fits is what keeps those queries short. On
+ * the 1,000-box pile the whole broadphase is 2% of a step. Not done.
  */
 export const AHEAD = 16;
 

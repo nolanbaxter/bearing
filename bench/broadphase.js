@@ -213,6 +213,10 @@ class Stage {
     this._size = new Float64Array(n);
     this._layers = new Uint32Array(n).fill(1);
     this._mask = new Uint32Array(n).fill(0xffffffff);
+    // What the pair list also asks of a world since milestones 10 and 12: no
+    // sensors here, and no joints (a 0 head is a body with none).
+    this._sensor = new Uint8Array(n);
+    this._jointHead = new Int32Array(n);
     this._box = new Float64Array(n * 6);
     this._velocity = new Float64Array(n * 3);
     this.offsets = [];

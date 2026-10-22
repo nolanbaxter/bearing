@@ -587,6 +587,15 @@ nothing to clear. So boxing stays, and the narrowphase isn't reshaped for it. Th
 real objects, a `subarray()` view each, one per body not still every step and two per joint row
 every pass; now copied one by one. `test/soak.test.js` steps a world of every feature (the save
 test's, now `test/scenes.js`) and fails if a step calls anything that makes an array or a view.
+(5) done, and nothing changed. On the landing 1,000-box pile the broadphase, its trees and the pair
+list are 2% of a step: the 7.5 pairs listed for each contact cost six comparisons each before the
+narrowphase drops them. Refitting a re-filed body in place, rather than re-inserting it, would
+speed up the part of the tree's time that re-filing is, 3% of `bench/broadphase.js`'s samples at
+10,000 bodies against the queries' 15%, and re-inserting is what keeps queries short; not done.
+`FAT` and `AHEAD` measured again (the bench had stopped running: its stand-in world lacked the
+sensor and joint columns milestones 10 and 12 added, now there): no other margin beat 1/4; reaching
+32 steps ahead instead of 16 made whole steps 8 to 12% faster for 10,000 fliers or a level of
+10,000, but 5% slower for a pile of 10,000 and 3 to 13% slower for all three at 1,000. Both stay.
 
 **17. Documentation ⬜**
 *Concepts:* writing reference documentation people can learn from.
