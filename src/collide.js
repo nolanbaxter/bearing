@@ -61,10 +61,20 @@ export class Shape {
     this.points = new Float64Array(9);
     /** Hull: its corners and faces in its own frame (hull.js), placed by center and axes. */
     this.hull = null;
+    /**
+     * A hull body's own Placed, when the shape is that body as the step's
+     * contacts load it (contact.js load()), with the step and the World's
+     * _epoch it was loaded at; null for any shape placed by hand.
+     */
+    this.placed = null;
+    this.step = 0;
+    this.epoch = 0;
   }
 
   /** Places the shape: `q` is a unit quaternion [x, y, z, w] at q[o..o+3]. */
   place(px, py, pz, q, o = 0) {
+    // Placed anywhere but where its body is in the step: not that body's.
+    this.placed = null;
     this.center[0] = px; this.center[1] = py; this.center[2] = pz;
     const x = q[o], y = q[o + 1], z = q[o + 2], w = q[o + 3];
     const a = this.axes;
@@ -1013,6 +1023,25 @@ export class Placed {
     /** Per edge, the normal of the face on its second side crossed with the first's: the arc's axis. */
     this.arcs = new Float64Array(36);
     this.center = new Float64Array(3);
+    // For a body's own (see fresh()): the step and epoch it was placed at.
+    this.step = -1;
+    this.epoch = -1;
+  }
+
+  /**
+   * Shape s placed as set() would, but kept: a hull body is placed once a
+   * step and shared by all its pairs, not placed again for each one, 6 to 10
+   * times a step in a pile. A body doesn't move while the step finds its
+   * contacts, and anything that moves it between steps changes the World's
+   * epoch, so the same step and epoch and hull mean the same placement, to
+   * the bit. Measured: see ROADMAP.md, milestone 16.
+   */
+  fresh(s) {
+    if (this.hull === s.hull && this.step === s.step && this.epoch === s.epoch) return this;
+    this.set(s);
+    this.step = s.step;
+    this.epoch = s.epoch;
+    return this;
   }
 
   /** Shape s, a hull or a box as CUBE scaled, placed in the world. */
@@ -1063,6 +1092,8 @@ export class Placed {
 }
 
 const placedA = new Placed(), placedB = new Placed();
+// For hullHull's edge loop: each of b's faces' normals against one of a's arcs.
+let sideB = new Float64Array(16);
 // GJK's answer, for the hulls' fallbacks: the shape gjk.js's Closest has,
 // made here so this module needs nothing of gjk.js while it loads.
 const near = { distance: 0, a: new Float64Array(3), b: new Float64Array(3) };
@@ -1074,7 +1105,8 @@ function mix(kind, i, j, k) {
 }
 
 function hullHull(a, b, margin, tolerance, out) {
-  const A = placedA.set(a), B = placedB.set(b);
+  const A = a.placed !== null ? a.placed.fresh(a) : placedA.set(a);
+  const B = b.placed !== null ? b.placed.fresh(b) : placedB.set(b);
   const ha = A.hull, hb = B.hull, pa = A.planes, pb = B.planes;
   const FA = ha.planes.length / 4, FB = hb.planes.length / 4;
   // a's faces: how far b's lowest corner is above each.
@@ -1094,6 +1126,8 @@ function hullHull(a, b, margin, tolerance, out) {
   // difference is a minus b; the test is Gregorius's with that folded in.
   const ea = ha.edges, sa = ha.sides, eb = hb.edges, sb = hb.sides, va = A.v, vb = B.v, arcA = A.arcs, arcB = B.arcs;
   const EA = ea.length / 2, EB = eb.length / 2;
+  if (sideB.length < FB) sideB = new Float64Array(grown(FB));
+  const side = sideB;
   let edgeSep = -Infinity, ei = -1, ej = -1, enx = 0, eny = 0, enz = 0;
   for (let i = 0; i < EA; i++) {
     const l = 4 * sa[2 * i], r = 4 * sa[2 * i + 1];
@@ -1101,9 +1135,12 @@ function hullHull(a, b, margin, tolerance, out) {
     const u = 3 * ea[2 * i], w = 3 * ea[2 * i + 1];
     const ux = va[w] - va[u], uy = va[w + 1] - va[u + 1], uz = va[w + 2] - va[u + 2];
     const ul = Math.sqrt(ux * ux + uy * uy + uz * uz);
+    // The first test reads only b's two faces at an edge against this arc, so
+    // each face's is worked out once here, not twice for every edge of b it
+    // borders: F dot products where it was 2E (12 corners: 20 against 60).
+    for (let g = 0; g < FB; g++) side[g] = pb[4 * g] * ax + pb[4 * g + 1] * ay + pb[4 * g + 2] * az;
     for (let j = 0; j < EB; j++) {
-      const c = 4 * sb[2 * j], d = 4 * sb[2 * j + 1];
-      const cba = pb[c] * ax + pb[c + 1] * ay + pb[c + 2] * az, dba = pb[d] * ax + pb[d + 1] * ay + pb[d + 2] * az;
+      const cba = side[sb[2 * j]], dba = side[sb[2 * j + 1]];
       if (!(cba * dba < 0)) continue;
       const bx = arcB[3 * j], by = arcB[3 * j + 1], bz = arcB[3 * j + 2];
       const adc = pa[l] * bx + pa[l + 1] * by + pa[l + 2] * bz, bdc = pa[r] * bx + pa[r + 1] * by + pa[r + 2] * bz;
@@ -1263,7 +1300,7 @@ function nearest(a, b, ra, margin, out) {
  * point inside a convex solid is always the nearest way out.
  */
 function sphereHull(a, b, margin, out) {
-  const B = placedB.set(b), p = B.planes, F = B.hull.planes.length / 4, c = a.center, r = a.half[0];
+  const B = b.placed !== null ? b.placed.fresh(b) : placedB.set(b), p = B.planes, F = B.hull.planes.length / 4, c = a.center, r = a.half[0];
   let most = -Infinity, f = 0;
   for (let k = 0; k < F; k++) {
     const s = p[4 * k] * c[0] + p[4 * k + 1] * c[1] + p[4 * k + 2] * c[2] - p[4 * k + 3];
@@ -1287,7 +1324,7 @@ function sphereHull(a, b, margin, out) {
  * and its edges crossed with the segment, as capsuleBoxDeep.
  */
 function capsuleHull(a, b, margin, tolerance, out) {
-  const B = placedB.set(b), p = B.planes, h = B.hull, F = h.planes.length / 4, r = a.half[0];
+  const B = b.placed !== null ? b.placed.fresh(b) : placedB.set(b), p = B.planes, h = B.hull, F = h.planes.length / 4, r = a.half[0];
   segment(a, segA);
   const d = closest(a, b, near);
   if (d > 0) {

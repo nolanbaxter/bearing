@@ -65,7 +65,7 @@
 // since a sensor pushes nothing; World asks about them after the step, where
 // the bodies end up.
 
-import { collide, Shape, Manifold, Parts, placePart, SPHERE, CAPSULE, BOX as BOX_KIND, HULL } from './collide.js';
+import { collide, Shape, Manifold, Parts, Placed, placePart, SPHERE, CAPSULE, BOX as BOX_KIND, HULL } from './collide.js';
 import { touchLevel, Touches } from './triangle.js';
 import { rotate, atan2 } from './core/math.js';
 import { resized } from './core/slots.js';
@@ -758,6 +758,15 @@ export function load(world, slot, s) {
     s.kind = CAPSULE;
     s.half[0] = d[s3];
     s.half[1] = (d[s3 + 1] - 2 * d[s3]) * 0.5;
+  }
+  // A hull keeps its placement for the step (Placed.fresh); made the first
+  // time it is loaded, and kept until the body goes (World._remove).
+  if (shape === HULL_SHAPE) {
+    s.placed = world._placed[slot] || (world._placed[slot] = new Placed());
+    s.step = world._stepCount;
+    s.epoch = world._epoch;
+  } else {
+    s.placed = null;
   }
   s.center[0] = world._position[s3]; s.center[1] = world._position[s3 + 1]; s.center[2] = world._position[s3 + 2];
   const ax = world._axes, a9 = slot * 9;

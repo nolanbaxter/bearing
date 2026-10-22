@@ -297,6 +297,8 @@ export class World {
      * box, ball or capsule given a centre of mass; else null.
      */
     this._inner = [];
+    /** By slot, a hull body's placement, kept for the step (collide.js Placed.fresh); scratch, not saved. */
+    this._placed = [];
     /**
      * Slots with a force or torque waiting for the next step. A list, so a step
      * with nothing applied checks nothing (rule 28), however many bodies there
@@ -1508,6 +1510,7 @@ export class World {
     for (const [name, Type] of COLUMNS) this[name] = new Type(0);
     this._geometry = [];
     this._inner = [];
+    this._placed = [];
     this._lines = new Float32Array(0);
     this._forcedSlots = [];
     this._broadphase = new Broadphase();
@@ -1759,6 +1762,7 @@ export class World {
     this._torque.fill(0, s * 3, s * 3 + 3);
     this._geometry[s] = null;
     this._inner[s] = null;
+    this._placed[s] = null;
     if (this._framed[s] === 1) { this._framed[s] = 0; this._framedCount--; }
     if (this._sensor[s] === 1) { this._sensor[s] = 0; this._sensorCount--; }
     // The next body in the slot starts its count afresh, whatever its type.

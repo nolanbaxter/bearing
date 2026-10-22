@@ -479,7 +479,10 @@ function closestPoints(b, t, margin, tolerance, out) {
 
 // ---- a hull ----
 
-const H = new Placed();
+// The hull being tested: the body's own placement for the step (collide.js
+// Placed.fresh), shared by every triangle it meets, or HS for one placed by hand.
+const HS = new Placed();
+let H = HS;
 let hullP = new Float64Array(3 * 16), hullQ = new Float64Array(3 * 16);
 let hullPi = new Uint32Array(16), hullQi = new Uint32Array(16);
 
@@ -497,7 +500,7 @@ function low(x, y, z) {
  * corners for each.
  */
 function hull(b, t, margin, tolerance, out) {
-  H.set(b);
+  H = b.placed !== null ? b.placed.fresh(b) : HS.set(b);
   const v = H.v, pl = H.planes, h = H.hull, F = h.planes.length / 4;
   // The triangle's face, turned to the hull: the hull's lowest corner above it.
   const faceT = H.lowest(up[0], up[1], up[2]) - (P[0] * up[0] + P[1] * up[1] + P[2] * up[2]);
