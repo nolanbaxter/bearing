@@ -808,7 +808,10 @@ function settleForest(world) {
 
 /** Copies row ROWS[o..] into tree joint t's row m, asking for the speed change that brings its speed to -rate c; returns m + 1. */
 function emit(F, t, m, o, c, rate) {
-  F.row.set(ROWS.subarray(o, o + 9), 54 * t + 9 * m);
+  // Copied one by one, as is everything the step copies: subarray() makes a
+  // view object a call, and this runs for every row of every pass.
+  const row = F.row, r = 54 * t + 9 * m;
+  for (let k = 0; k < 9; k++) row[r + k] = ROWS[o + k];
   F.rhs[6 * t + m] = -(speed(o) + rate * c);
   F.scale[t] += coupling(o, o);
   return m + 1;
@@ -870,7 +873,7 @@ function frames(world, j) {
   const J = world._joints, a = J.a[j], b = J.b[j], q = world._rotation;
   multiply(q, 4 * a, J.frameA, 4 * j, QA, 0);
   if (b >= 0) multiply(q, 4 * b, J.frameB, 4 * j, QB, 0);
-  else QB.set(J.frameB.subarray(4 * j, 4 * j + 4));
+  else for (let k = 0; k < 4; k++) QB[k] = J.frameB[4 * j + k];
   axes(QA, A1, P1, P2);
   const x = QB[0], y = QB[1], z = QB[2], w = QB[3];
   A2[0] = 1 - 2 * (y * y + z * z); A2[1] = 2 * (x * y + z * w); A2[2] = 2 * (x * z - y * w);

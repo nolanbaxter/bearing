@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import { World, Joint } from '../src/bearing.js';
 import { suite, testAsync as test } from './test.js';
+import { mixed } from './scenes.js';
 
 if (typeof globalThis.gc !== 'function') {
   throw new Error('run with node --expose-gc test/soak.test.js');
@@ -37,6 +38,32 @@ const held = (world) => {
     pairs: world._pairs.count, pairCapacity: world._pairs.capacity,
   };
 };
+
+await test('a step makes no new arrays or views, whatever the world holds', async () => {
+  // Rule 76. Memory can't tell this apart: V8 boxes decimals passed between
+  // functions it doesn't inline, short-lived heap numbers it clears almost
+  // for free (measured, milestone 16). So count the calls that make a new
+  // array or a view of one, in a world of every kind of body, joint, sensor
+  // and character. Before milestone 16, three copies made a subarray() view
+  // each: the sleep rule's, and two in the joint solver.
+  const { world } = mixed({ sleeping: false });
+  for (let n = 0; n < 60; n++) world.step(1 / 60);
+  const typed = Object.getPrototypeOf(Int8Array.prototype);
+  const watched = [[typed, 'subarray'], [typed, 'slice'], [typed, 'map'], [typed, 'filter'],
+    [Array.prototype, 'slice'], [Array.prototype, 'map'], [Array.prototype, 'filter'], [Array.prototype, 'concat']];
+  const calls = new Map();
+  const saved = watched.map(([o, k]) => {
+    const f = o[k];
+    o[k] = function (...args) { calls.set(k, (calls.get(k) || 0) + 1); return f.apply(this, args); };
+    return f;
+  });
+  try {
+    for (let n = 0; n < 300; n++) world.step(1 / 60);
+  } finally {
+    watched.forEach(([o, k], i) => { o[k] = saved[i]; });
+  }
+  assert.deepEqual([...calls], []);
+});
 
 await test('10,000 bodies added and removed 300 times: slots return, storage never drifts', async () => {
   const world = new World();

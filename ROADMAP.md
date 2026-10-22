@@ -579,6 +579,14 @@ step pinned to one P-core:
 Fewer substeps soften every contact (its spring is tuned to the substep rate), which shows as
 sinking; two sweeps let the pyramid stray 2.4 mm with sleeping on, against 1.0, past the 1.5 mm
 `test/contact.test.js` holds it to, and slide the flat drop 0.01 mm. Neither is worth 10 to 15%.
+(4) done. A step allocated about 2.3 MB on the landing pile, nearly all V8 boxing: a decimal
+passed to or returned from a function V8 doesn't inline becomes a 16-byte heap number. Taking
+the largest source out (`prepare()`'s helpers, a third of it) halved what a step allocated and
+measured no faster, within 1% either way in three pinned runs: young heap numbers cost V8 almost
+nothing to clear. So boxing stays, and the narrowphase isn't reshaped for it. Three copies did make
+real objects, a `subarray()` view each, one per body not still every step and two per joint row
+every pass; now copied one by one. `test/soak.test.js` steps a world of every feature (the save
+test's, now `test/scenes.js`) and fails if a step calls anything that makes an array or a view.
 
 **17. Documentation ⬜**
 *Concepts:* writing reference documentation people can learn from.

@@ -199,6 +199,11 @@ These were made with Nolan and override the rules below where they differ.
   load. Timing method that works on the i7-1260P: one process, both copies loaded, alternating
   blocks, pinned to CPU 0 at high priority (PowerShell `ProcessorAffinity = 1`), median of pair
   ratios over three processes; the same code reads up to 5-7% apart between module copies.
+- **No allocation in the step means no new arrays or views** (2026-10-22, milestone 16 step 4):
+  copy elements one by one, never `subarray()`/`slice()`/`map()` in step code;
+  `test/soak.test.js` counts those calls over a world of every feature (`test/scenes.js`,
+  `mixed()`). V8's boxing of decimals across non-inlined calls is allowed: halving it measured no
+  faster.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks

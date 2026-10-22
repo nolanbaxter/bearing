@@ -1033,8 +1033,11 @@ export class World {
   /** Slot s starts counting still time again, from where it is now. */
   _settle(s) {
     this._still[s] = 0;
-    this._rest.set(this._position.subarray(s * 3, s * 3 + 3), s * 7);
-    this._rest.set(this._rotation.subarray(s * 4, s * 4 + 4), s * 7 + 3);
+    // Copied one by one: subarray() makes a view object for each, and this
+    // runs for nearly every body every step while a pile lands.
+    const p = this._position, q = this._rotation, rest = this._rest, s3 = s * 3, s4 = s * 4, r7 = s * 7;
+    rest[r7] = p[s3]; rest[r7 + 1] = p[s3 + 1]; rest[r7 + 2] = p[s3 + 2];
+    rest[r7 + 3] = q[s4]; rest[r7 + 4] = q[s4 + 1]; rest[r7 + 5] = q[s4 + 2]; rest[r7 + 6] = q[s4 + 3];
   }
 
   /** Takes slot s off the awake list, if it is on it; the last body takes its place. */
