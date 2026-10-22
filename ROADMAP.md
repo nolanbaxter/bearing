@@ -596,6 +596,16 @@ speed up the part of the tree's time that re-filing is, 3% of `bench/broadphase.
 sensor and joint columns milestones 10 and 12 added, now there): no other margin beat 1/4; reaching
 32 steps ahead instead of 16 made whole steps 8 to 12% faster for 10,000 fliers or a level of
 10,000, but 5% slower for a pile of 10,000 and 3 to 13% slower for all three at 1,000. Both stay.
+(6) done. `bench/compare.html`'s 10,000 rays into the 1,000-box pile, run the same way in Node:
+65 ms, 62% of it walking the tree, which opened child1 before child2 whichever the ray reached
+first. Now both children are tested as their parent is opened and the nearer is opened next, with
+where the ray enters each kept beside it, so a near hit comes early and everything entered beyond
+it is skipped (`raycast()` in `src/tree.js`; shape casts, the catch's sweep and characters walk the
+same way). And `ray()` makes its set for telling strays apart only when there are strays. 29 ms,
+the same 10,000 hits to the same distances to the last bit; the walk is 29 of the 36 ms saved and
+the set 2. Rapier took 32.6 ms in the browser on 2026-10-14; `bench/RESULTS.md` is redone at the
+end of part A. Measured and left out: building `world.raycast`'s result once instead of for each
+nearer hit (no difference).
 
 **17. Documentation ⬜**
 *Concepts:* writing reference documentation people can learn from.

@@ -39,6 +39,7 @@ export class Tree {
     this.height = new Int32Array(0);     // 0 for a leaf, -1 for a free node
     this.item = new Int32Array(0);       // a leaf's item; NULL for an inner node
     this.stack = new Int32Array(64);     // for queries; grows if a tree is deeper
+    this.at = new Float64Array(64);      // for raycast(): where the ray enters each node on the stack
   }
 
   _alloc() {
@@ -290,47 +291,78 @@ export function raycast(tree, ox, oy, oz, dx, dy, dz, maxT, gx, gy, gz, visit) {
   // A zero component would give 0 * Infinity = NaN on a slab's edge, so it
   // is tested as "inside the slab or not" instead.
   const ix = 1 / dx, iy = 1 / dy, iz = 1 / dz;
-  let stack = tree.stack, top = 0;
-  stack[top++] = tree.root;
+  // Nearest first: both children are tested as their parent is opened, and
+  // the one the ray enters first is opened next, with where it enters kept
+  // beside it. A nearest-hit query then meets a near hit early, and anything
+  // entered past the nearest hit so far is skipped when its turn comes. Opened
+  // child1 before child2 instead, measured on 10,000 rays into the benchmark's
+  // pile (bench/compare.html), the walk was 62% of a raycast: see ROADMAP.md,
+  // milestone 16. Ties go to child1, so the order depends only on the tree.
+  let stack = tree.stack, at = tree.at, top = 0;
+  const t = enter(b, 6 * tree.root, ox, oy, oz, dx, dy, dz, ix, iy, iz, gx, gy, gz, maxT);
+  if (t < 0) return maxT;
+  stack[0] = tree.root; at[0] = t; top = 1;
   while (top > 0) {
-    const n = stack[--top], o = 6 * n;
-    let t0 = 0, t1 = maxT;
-    if (dx === 0) {
-      if (ox < b[o] - gx || ox > b[o + 3] + gx) continue;
-    } else {
-      let near = (b[o] - gx - ox) * ix, far = (b[o + 3] + gx - ox) * ix;
-      if (near > far) { const s = near; near = far; far = s; }
-      if (near > t0) t0 = near;
-      if (far < t1) t1 = far;
-      if (t0 > t1) continue;
-    }
-    if (dy === 0) {
-      if (oy < b[o + 1] - gy || oy > b[o + 4] + gy) continue;
-    } else {
-      let near = (b[o + 1] - gy - oy) * iy, far = (b[o + 4] + gy - oy) * iy;
-      if (near > far) { const s = near; near = far; far = s; }
-      if (near > t0) t0 = near;
-      if (far < t1) t1 = far;
-      if (t0 > t1) continue;
-    }
-    if (dz === 0) {
-      if (oz < b[o + 2] - gz || oz > b[o + 5] + gz) continue;
-    } else {
-      let near = (b[o + 2] - gz - oz) * iz, far = (b[o + 5] + gz - oz) * iz;
-      if (near > far) { const s = near; near = far; far = s; }
-      if (near > t0) t0 = near;
-      if (far < t1) t1 = far;
-      if (t0 > t1) continue;
-    }
+    const n = stack[--top];
+    if (at[top] > maxT) continue;
     if (tree.height[n] === 0) {
       maxT = visit(tree.item[n], n);
       continue;
     }
-    if (top + 2 > stack.length) stack = tree.stack = resized(stack, stack.length * 2);
-    stack[top++] = tree.child2[n];
-    stack[top++] = tree.child1[n];
+    const c1 = tree.child1[n], c2 = tree.child2[n];
+    const t1 = enter(b, 6 * c1, ox, oy, oz, dx, dy, dz, ix, iy, iz, gx, gy, gz, maxT);
+    const t2 = enter(b, 6 * c2, ox, oy, oz, dx, dy, dz, ix, iy, iz, gx, gy, gz, maxT);
+    if (top + 2 > stack.length) {
+      stack = tree.stack = resized(stack, stack.length * 2);
+      at = tree.at = resized(at, stack.length);
+    }
+    // Pushed farther first, so the nearer comes off the stack next.
+    if (t1 >= 0 && t2 >= 0) {
+      if (t2 < t1) { stack[top] = c1; at[top++] = t1; stack[top] = c2; at[top++] = t2; }
+      else { stack[top] = c2; at[top++] = t2; stack[top] = c1; at[top++] = t1; }
+    } else if (t1 >= 0) {
+      stack[top] = c1; at[top++] = t1;
+    } else if (t2 >= 0) {
+      stack[top] = c2; at[top++] = t2;
+    }
   }
   return maxT;
+}
+
+/**
+ * Where the ray enters the box at b[o..o+5] grown by (gx, gy, gz), from 0 to
+ * maxT; -1 if it misses it there.
+ */
+function enter(b, o, ox, oy, oz, dx, dy, dz, ix, iy, iz, gx, gy, gz, maxT) {
+  let t0 = 0, t1 = maxT;
+  if (dx === 0) {
+    if (ox < b[o] - gx || ox > b[o + 3] + gx) return -1;
+  } else {
+    let near = (b[o] - gx - ox) * ix, far = (b[o + 3] + gx - ox) * ix;
+    if (near > far) { const s = near; near = far; far = s; }
+    if (near > t0) t0 = near;
+    if (far < t1) t1 = far;
+    if (t0 > t1) return -1;
+  }
+  if (dy === 0) {
+    if (oy < b[o + 1] - gy || oy > b[o + 4] + gy) return -1;
+  } else {
+    let near = (b[o + 1] - gy - oy) * iy, far = (b[o + 4] + gy - oy) * iy;
+    if (near > far) { const s = near; near = far; far = s; }
+    if (near > t0) t0 = near;
+    if (far < t1) t1 = far;
+    if (t0 > t1) return -1;
+  }
+  if (dz === 0) {
+    if (oz < b[o + 2] - gz || oz > b[o + 5] + gz) return -1;
+  } else {
+    let near = (b[o + 2] - gz - oz) * iz, far = (b[o + 5] + gz - oz) * iz;
+    if (near > far) { const s = near; near = far; far = s; }
+    if (near > t0) t0 = near;
+    if (far < t1) t1 = far;
+    if (t0 > t1) return -1;
+  }
+  return t0;
 }
 
 /** Half the surface area of a box: what matters is how areas compare, so the factor of 2 is left out. */

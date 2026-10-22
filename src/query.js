@@ -320,11 +320,16 @@ function inside(dx, dy, dz) {
  * are looked for after the first, and all keeps maxT to see everything.
  */
 export function ray(world, ox, oy, oz, dx, dy, dz, maxT, mask, ignore, hit, nearest) {
-  const bp = world._broadphase, seen = new Set();
+  // A stray can be reached through the tree as well; it counts once. Strays
+  // are rare (bodies that left their fat boxes within the last step), so the
+  // set telling them apart is only made when there are some.
+  const bp = world._broadphase, extra = strays(world), seen = extra.length > 0 ? new Set() : null;
   const visit = (s) => {
-    // A stray can be reached through the tree as well; it counts once.
-    if (seen.has(s) || !wanted(world, s, mask, ignore)) return maxT;
-    seen.add(s);
+    if (!wanted(world, s, mask, ignore)) return maxT;
+    if (seen !== null) {
+      if (seen.has(s)) return maxT;
+      seen.add(s);
+    }
     let t = -1;
     if (world._shape[s] >= MESH) t = rayLevel(world, s, ox, oy, oz, dx, dy, dz, maxT);
     // The nearest of its parts: each one tried only out to the nearest so far, so a hit is nearer.
@@ -338,7 +343,7 @@ export function ray(world, ox, oy, oz, dx, dy, dz, maxT, mask, ignore, hit, near
     return maxT;
   };
   for (const tree of bp.trees) maxT = walk(tree, ox, oy, oz, dx, dy, dz, maxT, 0, 0, 0, visit);
-  for (const s of strays(world)) visit(s);
+  for (const s of extra) visit(s);
 }
 
 // ---- shape casts ----

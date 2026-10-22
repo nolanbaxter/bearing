@@ -204,6 +204,11 @@ These were made with Nolan and override the rules below where they differ.
   `test/soak.test.js` counts those calls over a world of every feature (`test/scenes.js`,
   `mixed()`). V8's boxing of decimals across non-inlined calls is allowed: halving it measured no
   faster.
+- **Rays walk the tree nearest first** (2026-10-22, milestone 16 step 6): `raycast()` in
+  `src/tree.js` tests both children as a parent is opened (`enter()`), pushes the farther first,
+  keeps each entry distance in `tree.at`, and skips a node entered beyond the current maxT; ties
+  to child1. 10,000 rays into the benchmark pile 65 -> 29 ms. `ray()` in `query.js` makes its
+  stray-telling `Set` only when `strays()` is non-empty.
 - **Forces last one step; static and kinematic bodies ignore forces and impulses** (no throw:
   they act as infinitely heavy). `inertia: null` returns to the shape's inertia.
 - **Tests:** `npm test` (plain scripts, helper in `test/test.js`). `test/errors.test.js` checks
