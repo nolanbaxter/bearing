@@ -789,6 +789,22 @@ Winding's way, copied before the first one:
   - Tumbling's energy can rise: a body spun mostly about its longest or shortest axis gains 2e-4
     to 4e-4 of its energy in 120 s. Momentum stays exact, which bounds it; "energy only falls" is
     true only near the middle axis, where `test/motion.test.js` spins its bodies.
+- **2026-10-22.** The competition studied (Rapier, Jolt, Box2D v3 and Box3D, PhysX, Bullet,
+  cannon-es; sources in the session's research): each solves a contact point's normal 5 to 12
+  times a step where Bearing solved it 64 (8 substeps x 2 passes x 4 sweeps), which is most of
+  the gap and of Bearing's tighter stacks, and spends 2 to 4 friction rows on a box face where
+  Bearing spent 8. Three of their techniques built as experiments and measured against the code
+  of the day, pinned to one P-core: friction once a manifold (box pile 8% faster, pyramid 11-12%,
+  quality as good or better; landed, Nolan approved), a pair's manifold reused while its pose has
+  barely changed (the hull pile 27% faster, boxes no faster; to land for hull pairs only), and a
+  manifold's normal points solved together as one small LCP (pile 8-10%, pyramid 10-12%, but it
+  exposed contact ids flickering on exactly aligned stacks; to measure again once that is fixed).
+  Sleeping sooner measured and not taken: 0.5 s froze slow starters (a box 0.1 deg past friction's
+  hold, cubes 0.45-0.5 deg past balance) and didn't make heaps sleep sooner, since a heap is still
+  genuinely settling until about then; a `sleepTime` setting is not added (Nolan agreed).
+  Certified sleeping (sleep once friction sticks and the body is supported) measured first and not
+  built: the benchmark pile is still collapsing, with hundreds of contacts sliding, until about
+  19 s and asleep at 20, so it could save about a second.
 - **2026-10-22.** `bench/compare.html` run again on the laptop after part A and the audit, results in
   `bench/RESULTS.md`: Bearing now faster than cannon-es on every scene but the ragdolls (1.7 times
   slower there), the box pile 2.2 to 2.3 times faster than on 2026-10-14; against Rapier 1.6x on
