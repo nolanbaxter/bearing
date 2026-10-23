@@ -171,5 +171,9 @@ All notable changes to Bearing are recorded here. The format follows
 - `world.debugLines(options)`: the world as line segments in one `Float32Array`, nine numbers each
   (two ends and a colour), for any engine to draw: collision shapes, the last step's contacts,
   joints, and the broadphase's boxes.
+- Hulls always touch where they overlap: the face a hull is clipped against is taken at its
+  deepest corner, and a face that ties with a better axis is used only if its points hold the
+  overlap. Before, two hulls overlapping by centimetres could get no contact for a step, and heaps
+  of hulls kicked and stayed awake (4 of 16 never slept in 60 s; now all sleep, median 6 s).
 - The `centerOfMass` option, `[x, y, z]` in the body's own frame or `null` for the shape's, moves
   any body's centre of mass, as a car's is lowered so it doesn't roll over.

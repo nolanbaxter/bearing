@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { World } from '../src/bearing.js';
 import { build } from '../src/hull.js';
+import { collide, Shape, Manifold, Placed, BOX, HULL } from '../src/collide.js';
 import { suite, test } from './test.js';
 
 suite('hulls');
@@ -428,6 +429,80 @@ test('off means off: a world of boxes, balls and capsules has no frames to conve
   assert.ok(world._inner.every((g) => g === null));
   world.addBody({ shape: 'hull' });
   assert.equal(world._framedCount, 1);
+});
+
+test('overlapping hulls, and hulls and boxes, always touch, at least as deep as they overlap', () => {
+  // Separating axes give the true depth: the least overlap over every face
+  // normal and every cross product of two edges. A face kept on a tie with a
+  // better axis used to clip to nothing, or to points above the other hull's
+  // deepest corner, and the incident face, the one most against the normal
+  // of all, wasn't always at that corner: rocks in a heap went whole steps
+  // with no contact, 1 to 4 cm into each other, and never slept.
+  const rnd = numbers(7), m = new Manifold(), P = new Placed(), Q = new Placed();
+  const rock = () => {
+    const pts = [];
+    for (let k = 0; k < 12; k++) pts.push(rnd() - 0.5, (rnd() - 0.5) * 0.8, rnd() - 0.5);
+    const h = build(pts), v = h.vertices, c = [0, 0, 0];
+    for (let i = 0; i < v.length; i++) c[i % 3] += v[i] / (v.length / 3);
+    return build(Array.from(v, (x, i) => x - c[i % 3]));
+  };
+  const turned = () => {
+    const q = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5, rnd() - 0.5], l = Math.sqrt(q[0] ** 2 + q[1] ** 2 + q[2] ** 2 + q[3] ** 2);
+    return q.map((x) => x / l);
+  };
+  const along = (x, y, z) => {
+    let hi = -Infinity, lo = Infinity;
+    for (let i = 0; i < P.hull.vertices.length; i += 3) hi = Math.max(hi, P.v[i] * x + P.v[i + 1] * y + P.v[i + 2] * z);
+    for (let i = 0; i < Q.hull.vertices.length; i += 3) lo = Math.min(lo, Q.v[i] * x + Q.v[i + 1] * y + Q.v[i + 2] * z);
+    return hi - lo;
+  };
+  const depth = () => {
+    let least = Infinity;
+    const axis = (x, y, z) => {
+      const l = Math.sqrt(x * x + y * y + z * z);
+      if (l > 1e-9) least = Math.min(least, along(x / l, y / l, z / l), along(-x / l, -y / l, -z / l));
+    };
+    for (const X of [P, Q]) for (let f = 0; f < X.hull.planes.length; f += 4) axis(X.planes[f], X.planes[f + 1], X.planes[f + 2]);
+    const ea = P.hull.edges, eb = Q.hull.edges;
+    for (let i = 0; i < ea.length; i += 2) {
+      const u = 3 * ea[i], w = 3 * ea[i + 1], ux = P.v[w] - P.v[u], uy = P.v[w + 1] - P.v[u + 1], uz = P.v[w + 2] - P.v[u + 2];
+      for (let j = 0; j < eb.length; j += 2) {
+        const p = 3 * eb[j], q = 3 * eb[j + 1], tx = Q.v[q] - Q.v[p], ty = Q.v[q + 1] - Q.v[p + 1], tz = Q.v[q + 2] - Q.v[p + 2];
+        axis(uy * tz - uz * ty, uz * tx - ux * tz, ux * ty - uy * tx);
+      }
+    }
+    return least;
+  };
+  let tried = 0;
+  for (let k = 0; k < 6000; k++) {
+    const a = new Shape(), b = new Shape();
+    a.kind = HULL; a.hull = rock();
+    if (k % 3 === 0) {
+      // Resting a corner into a floor, as on the ground under a heap.
+      b.kind = BOX; b.half.set([2, 0.25, 2]); b.place(0, 0, 0, [0, 0, 0, 1]);
+      const q = turned();
+      a.place(0, 0, 0, q);
+      Q.set(a);
+      let low = Infinity;
+      for (let i = 1; i < Q.hull.vertices.length; i += 3) low = Math.min(low, Q.v[i]);
+      a.place(rnd() - 0.5, 0.25 - low - rnd() * 0.05, rnd() - 0.5, q);
+    } else {
+      if (k % 3 === 1) { b.kind = BOX; b.half.set([0.45, 0.3, 0.35]); } else { b.kind = HULL; b.hull = rock(); }
+      const r = 0.5 + rnd() * 0.4, t = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5], l = Math.sqrt(t[0] ** 2 + t[1] ** 2 + t[2] ** 2);
+      a.place(0, 0, 0, turned());
+      b.place(t[0] / l * r, t[1] / l * r, t[2] / l * r, turned());
+    }
+    P.set(a); Q.set(b);
+    const D = depth(), tolerance = 0.002;
+    if (!(D > tolerance && D < 0.1)) continue;
+    tried++;
+    const n = collide(a, b, tolerance, tolerance, m);
+    assert.ok(n > 0, `pose ${k}: ${D} m into each other and no contact`);
+    const deepest = Math.min(...m.separations.subarray(0, n));
+    assert.ok(deepest <= -D + tolerance, `pose ${k}: ${D} m into each other, deepest point ${deepest}`);
+    assert.ok(along(m.normal[0], m.normal[1], m.normal[2]) <= D + tolerance + 1e-12, `pose ${k}: pushed apart the long way`);
+  }
+  assert.ok(tried > 2000, `${tried} poses overlapped`);
 });
 
 test('hulls and compounds give the same result twice, to the bit', () => {

@@ -204,6 +204,13 @@ These were made with Nolan and override the rules below where they differ.
   the smallest id within the tolerance of the deepest, not the deepest by rounding. Exactly aligned
   stacks lost 59 ids in 600 steps and the pyramid 8,840; now none. `triangle.js` clips on its own
   and may want the same.
+- **Hull face contacts hold the overlap** (2026-10-23): `hullFace` takes the incident face at the
+  deepest corner (of its faces, the one most against the normal), and returns false when its clip
+  doesn't reach within the tolerance of that corner's depth; `hullHull` then uses the strictly best
+  axis. A face kept on a tie (within the tolerance of a better axis) clipped to nothing or to points
+  centimetres shallow, and `nearest` only runs when apart: overlapping hulls got no contact.
+  `test/hulls.test.js` checks 6000 seeded poses against a brute-force depth. `triangle.js`'s
+  `triangleFaceHull` still picks the incident face the old way.
 - **Solver turning terms and locals** (2026-10-22, milestone 16 step 2): Contacts `jac`, `J` = 36
   numbers a point (for n, t1, t2: ra x d, rb x d, Ia⁻¹(ra x d), Ib⁻¹(rb x d)), filled by `lever()` in
   `prepare()`, which also gives the effective masses. `closing()`/`push()` read it; `solve()` and

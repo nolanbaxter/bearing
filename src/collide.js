@@ -1038,10 +1038,11 @@ function boxEdge(x, i, nx, ny, nz, s) {
 // between the normals of the faces either side of it. Any other pair can't
 // be where the hulls are nearest, and its axis would say nothing true. A face
 // is kept unless an edge beats it by more than the tolerance, as between
-// boxes; the other hull's face most against it is then clipped to its sides,
-// for up to four points reduced as boxes' are, and two edges give one point.
-// Apart within the margin with nothing clipped, the hulls are nearest at a
-// corner or an edge's end, and GJK finds where.
+// boxes, and if clipping holds the overlap it measures; the other hull's face
+// most against it, of those at that hull's deepest corner, is clipped to its
+// sides for up to four points reduced as boxes' are, and two edges give one
+// point. Apart within the margin with nothing clipped, the hulls are nearest
+// at a corner or an edge's end, and GJK finds where.
 
 /** A unit cube's hull: a box against a hull is placed as this, scaled. */
 const CUBE = build([-0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5,
@@ -1199,9 +1200,23 @@ function hullHull(a, b, margin, tolerance, out) {
       if (s > edgeSep) { edgeSep = s; ei = i; ej = j; enx = nx; eny = ny; enz = nz; }
     }
   }
+  // The face kept on a tie, as between boxes, is where the hulls touch only
+  // if clipping finds the overlap its axis measures. A face within the
+  // tolerance of a better axis needn't reach the other hull's deepest corner:
+  // a rock's face chosen over an edge crossing 1 mm better clipped to nothing,
+  // 1 to 4 cm deep, and the pair had no contact at all. Then the best axis
+  // decides, which always holds: the deepest corner lies over the best face
+  // (else a nearer face of the hulls' difference would be best), and the best
+  // edges pass each other between their ends.
+  const edgeBest = ei >= 0 && edgeSep > faceA && edgeSep > faceB, bBest = !edgeBest && faceB > faceA;
   if (ei >= 0 && edgeSep > Math.max(faceA, faceB) + tolerance) hullEdges(A, ei, B, ej, enx, eny, enz, margin, out);
-  else if (faceB > faceA + tolerance) hullFace(B, fb, A, true, margin, tolerance, out);
-  else hullFace(A, fa, B, false, margin, tolerance, out);
+  else {
+    const onB = faceB > faceA + tolerance, sure = !edgeBest && onB === bBest;
+    if (!hullFace(onB ? B : A, onB ? fb : fa, onB ? A : B, onB, margin, tolerance, out, sure) && !sure) {
+      if (edgeBest) hullEdges(A, ei, B, ej, enx, eny, enz, margin, out);
+      else hullFace(bBest ? B : A, bBest ? fb : fa, bBest ? A : B, bBest, margin, tolerance, out, true);
+    }
+  }
   if (out.count === 0 && Math.max(faceA, faceB, edgeSep) > 0) nearest(a, b, 0, margin, out);
 }
 
@@ -1216,24 +1231,45 @@ const CUT = 1 << 20;
 /**
  * Face rf of placed hull R as the reference, against the face of I most
  * nearly opposite it. `flipped`: R is the collide() call's b, and the normal,
- * which points from R to I here, is turned to point from a to b.
+ * which points from R to I here, is turned to point from a to b. Returns
+ * whether it added points; none unless they reach, to the tolerance, as deep
+ * as I's deepest corner is under the face's plane, when that is within the
+ * tolerance, and the face isn't the best axis (`sure` false). The best axis
+ * holds, to rounding: `sure`, the corner itself is added if clipping lost it.
  */
-function hullFace(R, rf, I, flipped, margin, tolerance, out) {
+function hullFace(R, rf, I, flipped, margin, tolerance, out, sure) {
   const rp = R.planes, ip = I.planes, rh = R.hull, ih = I.hull;
   const nx = rp[4 * rf], ny = rp[4 * rf + 1], nz = rp[4 * rf + 2], d = rp[4 * rf + 3];
+  // The incident face: of the faces at I's deepest corner, the one most
+  // against n. Most against n of all I's faces, as between boxes, isn't
+  // always at that corner on a hull: the corner's faces can lean every way
+  // round it and another face far off be nearer level, and clipping that
+  // one gave points well above the corner, or none (a rock resting a corner
+  // 2 cm into the floor had its points 1.5 cm above it). The first of equal
+  // corners: any corner of a face lying flat has that face among its own.
+  const iv = I.v, IV = ih.vertices.length / 3;
+  let low = 0, lowest = Infinity;
+  for (let i = 0; i < IV; i++) {
+    const dot = iv[3 * i] * nx + iv[3 * i + 1] * ny + iv[3 * i + 2] * nz;
+    if (dot < lowest) { lowest = dot; low = i; }
+  }
   let inc = 0, least = Infinity;
   for (let f = 0; f < ih.planes.length / 4; f++) {
     const dot = ip[4 * f] * nx + ip[4 * f + 1] * ny + ip[4 * f + 2] * nz;
-    if (dot < least) { least = dot; inc = f; }
+    if (!(dot < least)) continue;
+    let at = false;
+    for (let j = ih.start[f]; j < ih.start[f + 1] && !at; j++) at = ih.loops[j] === low;
+    if (at) { least = dot; inc = f; }
   }
   const i0 = ih.start[inc], m = ih.start[inc + 1] - i0, r0 = rh.start[rf], k = rh.start[rf + 1] - r0;
-  if (clipP.length < 3 * (m + k)) {
-    const c = grown(m + k);
+  // Clipping an m-gon to k sides leaves at most m + k corners; one more for the deepest.
+  if (clipP.length < 3 * (m + k + 1)) {
+    const c = grown(m + k + 1);
     clipP = new Float64Array(3 * c); clipQ = new Float64Array(3 * c);
     featP = new Int32Array(c); featQ = new Int32Array(c); lineP = new Int32Array(c); lineQ = new Int32Array(c);
     keptP = new Float64Array(3 * c); keptS = new Float64Array(c); keptI = new Uint32Array(c);
   }
-  const iv = I.v, rv = R.v;
+  const rv = R.v;
   for (let j = 0; j < m; j++) {
     const v = 3 * ih.loops[i0 + j];
     clipP[3 * j] = iv[v]; clipP[3 * j + 1] = iv[v + 1]; clipP[3 * j + 2] = iv[v + 2];
@@ -1267,10 +1303,29 @@ function hullFace(R, rf, I, flipped, margin, tolerance, out) {
     keptI[n] = mix(flipped ? 1 : 0, rf, inc, feat[j]);
     n++;
   }
-  if (n === 0) return;
+  // Touching or into the face along its normal, and no point as deep as the
+  // deepest corner: clipping cut it off, as past the face's side.
+  const s = lowest - d;
+  if (s <= tolerance) {
+    let deepest = Infinity;
+    for (let j = 0; j < n; j++) if (keptS[j] < deepest) deepest = keptS[j];
+    if (deepest > s + tolerance) {
+      if (!sure) return false;
+      // Named as clipping would have named it, the incident face's own corner.
+      let j = 0;
+      while (ih.loops[i0 + j] !== low) j++;
+      const v = 3 * low, h = s * 0.5;
+      keptP[3 * n] = iv[v] - nx * h; keptP[3 * n + 1] = iv[v + 1] - ny * h; keptP[3 * n + 2] = iv[v + 2] - nz * h;
+      keptS[n] = s;
+      keptI[n] = mix(flipped ? 1 : 0, rf, inc, j);
+      n++;
+    }
+  }
+  if (n === 0) return false;
   if (flipped) setNormal(out, -nx, -ny, -nz);
   else setNormal(out, nx, ny, nz);
   reducePoints(keptP, keptS, keptI, n, nx, ny, nz, tolerance, out);
+  return true;
 }
 
 /**
