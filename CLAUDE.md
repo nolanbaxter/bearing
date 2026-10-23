@@ -214,7 +214,11 @@ These were made with Nolan and override the rules below where they differ.
   `triangle.js` the least-id pressed point. HELD UP (`collide.js`): if the strictly deepest is
   still left out and no body resting on the contact has its weight line (centre of mass along
   `Shape.weight`, set by `load()`, 0 for parts and non-dynamic) inside the four (`rests()`), the
-  four start again from the strictly deepest. Box pile about 2% slower, pinned.
+  four start again from the strictly deepest. Box pile about 2% slower, pinned. UNDER (the same
+  day): where a resting body's weight line meets the patch and the four don't hold it, any pressed
+  point left out restarts the four from the pressed point nearest that line (`foot()`, `under()`),
+  not from the deepest, which rounding decides between near-equal points; HELD UP stays for
+  contacts no weight bears on. `triangle.js` has no UNDER yet. About 1.5% more on the box pile.
 - **Hull face contacts hold the overlap** (2026-10-23): `hullFace` takes the incident face at the
   deepest corner (of its faces, the one most against the normal), and returns false when its clip
   doesn't reach within the tolerance of that corner's depth; `hullHull` then uses the strictly best

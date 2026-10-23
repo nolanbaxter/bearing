@@ -1013,9 +1013,28 @@ function clipPolygon(src, sf, sl, count, dst, df, dl, px, py, pz, offset, plane,
  * (rests()). Then leaving a point out costs nothing, since the four carry the
  * weight, and a face lying flat, whose deepest point is only its tilt's
  * noise, keeps its ids: the 45° stack rests each box on its square.
- * Otherwise the four start from the strictly deepest, as Gregorius has it,
- * so no point sinks past the others unheld, and points take over from each
- * other only where they are equally deep, which feeds nothing in.
+ * Otherwise the four start again, from the pressed point nearest that line
+ * (UNDER), so no point sinks past the others unheld.
+ *
+ * UNDER. Any pressed point left out, not only the deepest, lets the body
+ * sink, and two pressed points as deep as each other, to a few hundredths
+ * of a millimetre, are each the deepest by turns. A rock lay on another face
+ * to face, six points, three pressed nearly in a line and its weight 3 mm to
+ * the side of the outer two, over the middle one: whenever the outer one was
+ * the deeper by rounding, the four kept it and left the middle one out, the
+ * rock tipped onto it, and when it in turn was the deeper the four started
+ * from it and pushed its overlap out, tipping the rock back, a 26-step cycle
+ * at up to 1 cm/s for good. So every pressed point is checked. Nor is the
+ * deepest the start that holds such a body: with a fourth point pressed,
+ * starting from the outer one still left the middle one out, its triangle
+ * with the outer two the smallest on its side. The point nearest the weight
+ * line is the one the body's weight most bears on, so the four start there,
+ * the rest spread round it as before, and which point that is depends on
+ * where the points are, not on depths that rounding decides. A contact no
+ * body's weight bears down on (no gravity, or a static or kinematic body
+ * against a wall) has no such point, and keeps the rule it had: the four
+ * start from the strictly deepest when that one is left out, as Gregorius has
+ * it.
  */
 function reduce(n, nx, ny, nz, tolerance, out) {
   reducePoints(kept, keptSep, keptId, n, nx, ny, nz, tolerance, out);
@@ -1033,8 +1052,17 @@ function reducePoints(kept, keptSep, keptId, n, nx, ny, nz, tolerance, out) {
   let a = -1;
   for (let k = 0; k < n; k++) if (keptSep[k] <= deepest + tolerance && (a < 0 || keptId[k] < keptId[a])) a = k;
   four(kept, keptSep, n, a, nx, ny, nz, pressed, touching);
-  if (deep !== a && deep !== FOUR[1] && deep !== FOUR[2] && deep !== FOUR[3]
-    && !rests(shapeA, kept, nx, ny, nz) && !rests(shapeB, kept, nx, ny, nz)) four(kept, keptSep, n, deep, nx, ny, nz, pressed, touching);
+  if (!rests(shapeA, kept, nx, ny, nz) && !rests(shapeB, kept, nx, ny, nz)) {
+    // UNDER where a weight line meets the patch: any pressed point left out,
+    // and the four start nearest that line. HELD UP where none does: the
+    // strictly deepest left out, and the four start from it.
+    const weighed = foot(shapeA, kept, nx, ny, nz) || foot(shapeB, kept, nx, ny, nz);
+    let left = false;
+    for (let k = 0; k < n && !left; k++) {
+      left = (weighed ? keptSep[k] <= pressed : k === deep) && k !== FOUR[0] && k !== FOUR[1] && k !== FOUR[2] && k !== FOUR[3];
+    }
+    if (left) four(kept, keptSep, n, weighed ? under(kept, keptSep, n, nx, ny, nz, pressed) : deep, nx, ny, nz, pressed, touching);
+  }
   const s = FOUR[0], b = FOUR[2], c = FOUR[3], d = FOUR[1];
   addPoint(out, kept[3 * s], kept[3 * s + 1], kept[3 * s + 2], keptSep[s], keptId[s]);
   addPoint(out, kept[3 * b], kept[3 * b + 1], kept[3 * b + 2], keptSep[b], keptId[b]);
@@ -1088,12 +1116,9 @@ function four(kept, keptSep, n, a, nx, ny, nz, pressed, touching) {
  * every side.
  */
 function rests(s, kept, nx, ny, nz) {
-  const w = s.weight, c = s.center, along = w[0] * nx + w[1] * ny + w[2] * nz, o = FOUR[0];
-  if (along === 0) return false;
-  const t = ((kept[3 * o] - c[0]) * nx + (kept[3 * o + 1] - c[1]) * ny + (kept[3 * o + 2] - c[2]) * nz) / along;
-  if (!(t > 0)) return false;
-  const px = c[0] + w[0] * t, py = c[1] + w[1] * t, pz = c[2] + w[2] * t;
-  let from = o;
+  if (!foot(s, kept, nx, ny, nz)) return false;
+  const px = FOOT[0], py = FOOT[1], pz = FOOT[2];
+  let from = FOUR[0];
   for (let e = 1; e <= 4; e++) {
     const to = FOUR[e & 3];
     if (to < 0) continue;
@@ -1103,6 +1128,36 @@ function rests(s, kept, nx, ny, nz) {
     from = to;
   }
   return true;
+}
+
+/**
+ * Whether shape s has weight and the patch is below its centre of mass along
+ * its gravity; if so, where that line meets the patch's plane (the plane
+ * through FOUR[0]'s point, square to n), into FOOT.
+ */
+function foot(s, kept, nx, ny, nz) {
+  const w = s.weight, c = s.center, along = w[0] * nx + w[1] * ny + w[2] * nz, o = FOUR[0];
+  if (along === 0) return false;
+  const t = ((kept[3 * o] - c[0]) * nx + (kept[3 * o + 1] - c[1]) * ny + (kept[3 * o + 2] - c[2]) * nz) / along;
+  if (!(t > 0)) return false;
+  FOOT[0] = c[0] + w[0] * t; FOOT[1] = c[1] + w[1] * t; FOOT[2] = c[2] + w[2] * t;
+  return true;
+}
+const FOOT = new Float64Array(3);
+
+/**
+ * The pressed point nearest FOOT across the normal (UNDER); the first of
+ * equals. There is always one: the deepest is pressed.
+ */
+function under(kept, keptSep, n, nx, ny, nz, pressed) {
+  let start = -1, near = Infinity;
+  for (let k = 0; k < n; k++) {
+    if (keptSep[k] > pressed) continue;
+    const x = kept[3 * k] - FOOT[0], y = kept[3 * k + 1] - FOOT[1], z = kept[3 * k + 2] - FOOT[2], along = x * nx + y * ny + z * nz;
+    const d = x * x + y * y + z * z - along * along;
+    if (d < near) { near = d; start = k; }
+  }
+  return start;
 }
 
 /**

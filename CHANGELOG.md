@@ -190,6 +190,8 @@ All notable changes to Bearing are recorded here. The format follows
   each push lifted it. Points pressing are now chosen first, then those touching, then the rest,
   and a hull's deepest point is left out only while the four kept hold its weight up. Rocks and
   boxes on a bumpy mesh: 17 of 48 heaps never slept, now none (median 36 s to 7 s); the
-  1,000-box pile's one never-sleeping start now sleeps in 11 s.
+  1,000-box pile's one never-sleeping start now sleeps in 11 s. A rock lying face to face on another,
+  its weight over the middle of three pressed points, rocked between them; the four now start
+  from the pressed point under its weight.
 - The `centerOfMass` option, `[x, y, z]` in the body's own frame or `null` for the shape's, moves
   any body's centre of mass, as a car's is lowered so it doesn't roll over.

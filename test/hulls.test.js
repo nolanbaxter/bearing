@@ -264,6 +264,38 @@ test('a rock lying across another rock\'s edge comes to rest: the four points ke
   }
 });
 
+test('a rock lying face to face on another, its weight beside a line of pressed points, comes to rest', () => {
+  // A pair from x8sleep's heightfield heap, seed 14, at 60 s, the lower made
+  // static, the upper moving as it was. They meet face to face on six points:
+  // three pressed nearly in a line, the middle one 19 mm off it, and the
+  // weight line 3 mm off it on the middle one's side. The four kept left out
+  // whichever of the middle and the outer pressed point rounding made the
+  // shallower, so the rock tipped onto the middle one, then was pushed off it
+  // when the four came back to it, for good (collide.js reducePoints, UNDER).
+  // Sleeping is off: in a heap the rocking kept the island awake, but alone
+  // it stays within its sleep tolerance. Measured: the old choice rocked it
+  // at 4 to 6 mm/s through 20 s, kept or found afresh; with the four started
+  // from the pressed point nearest the weight line it lies on four pressed
+  // points and is below 1e-11 m/s from 3 s.
+  const rnd = numbers(3), rock = [];
+  for (let k = 0; k < 12; k++) rock.push(rnd() - 0.5, (rnd() - 0.5) * 0.8, rnd() - 0.5);
+  for (const afresh of [false, true]) {
+    const world = new World({ sleeping: false });
+    world.addBody({ type: 'static', shape: 'hull', vertices: rock, rotation: [-0.0486, -0.3821, 0.1331, 0.9132] });
+    const top = world.addBody({
+      shape: 'hull', vertices: rock, position: [0.4745, 0.2492, -0.0558], rotation: [0.6743, 0.1476, 0.505, -0.5182],
+      velocity: [-0.0035, -0.0002, 0.0109], angularVelocity: [0.0383, -0.0091, 0.0124],
+    });
+    let fastest = 0;
+    for (let n = 0; n < 5 * 60; n++) {
+      if (afresh) world._pairEpoch++;
+      world.step(DT);
+      if (n >= 4 * 60) fastest = Math.max(fastest, Math.hypot(...top.velocity));
+    }
+    assert.ok(fastest < 1e-6, `${afresh ? 'found afresh' : 'kept'}: still moving at up to ${fastest} m/s in its fifth second`);
+  }
+});
+
 test('a pile of irregular hulls lands on a box, a ball, a capsule, a mesh and a heightfield, and sleeps', () => {
   const rnd = numbers(3), world = new World();
   world.addBody({ type: 'static', size: [10, 1, 10], position: [-5, -0.5, 0] });
