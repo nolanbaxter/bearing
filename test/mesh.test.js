@@ -438,6 +438,43 @@ function level(extra = {}) {
   }, bin);
 }
 
+test('a box or hull landing on, or set down on, a floor of small triangles keeps its corners as its contact points', () => {
+  // Each point's id carries its impulse into the next step (warm starting).
+  // A face held flat over triangles smaller than it touches the ones wholly
+  // under it only at seams. Falling within the margin, those seam points
+  // were taken for points on the face, since where they lay was asked of
+  // the point on the shape's face, above the triangle by more than the
+  // tolerance; and set down exactly on the ground, apart by rounding, each
+  // such triangle gave GJK's closest point, any point of it, with a normal
+  // from rounding. Either way they joined the corners under the triangles'
+  // ids and went the step after: a hull landing lost 2 or 3 ids, and one set
+  // down on a turned heightfield 33 in its first step.
+  const cube = []; for (const z of [-0.5, 0.5]) for (const y of [-0.5, 0.5]) for (const x of [-0.5, 0.5]) cube.push(x, y, z);
+  const N = 101, at = [0.37, 0, -0.21], q = [0, sin(0.2), 0, cos(0.2)];
+  for (const shape of [{}, { shape: 'hull', vertices: cube }]) {
+    for (const ground of ['heightfield', 'mesh', 'turned']) {
+      const world = new World({ sleeping: false });
+      if (ground === 'mesh') world.addBody(floor(100, 0.1));
+      else world.addBody({ shape: 'heightfield', heights: new Array(N * N).fill(ground === 'turned' ? 0.3 : 0), columns: N, spacing: 0.1, ...(ground === 'turned' ? { position: at, rotation: q } : {}) });
+      if (ground === 'turned') world.addBody({ ...shape, position: [at[0], 0.8, at[2]], rotation: q });
+      else world.addBody({ ...shape, position: [0, 2, 0] });
+      const pairs = world._pairs, before = new Map();
+      let lost = 0;
+      steps(world, 0.75, () => {
+        for (let p = 0; p < pairs.count; p++) {
+          if (!pairs.touching[p]) continue;
+          const m = pairs.memory[p], ids = [];
+          for (let s = 0; s < m.count; s++) ids.push(...m.pid.subarray(4 * s, 4 * s + m.points[s]));
+          const key = `${pairs.idA[p]}:${pairs.idB[p]}`;
+          for (const id of before.get(key) ?? []) if (!ids.includes(id)) lost++;
+          before.set(key, ids);
+        }
+      });
+      assert.equal(lost, 0, `${shape.shape ?? 'box'} on ${ground}`);
+    }
+  }
+});
+
 test('a .glb built byte by byte reads back exactly, every node placed as in the scene', () => {
   const { vertices, indices } = readGlb(level());
   // The quarter turn about y takes (x, y, z) to (z, y, -x), worked by hand.
