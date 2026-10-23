@@ -388,3 +388,32 @@ test('boxes and hulls stacked exactly in line, or turned 45° on each other, kee
     }
   }
 });
+
+test('a column of boxes leaning in a heap, each turned on the one below, comes to rest', () => {
+  // Four boxes from the 1,000-box pile's seed 8 at 30 s, as they lay, held by
+  // the four they leaned on, made static. The third sits tilted on the second,
+  // turned against it, so their faces clip to eight points, and the four kept
+  // were chosen by spread alone: two it pivoted on and two 11 to 16 mm off,
+  // leaving out the two at its low end, 3 to 6 mm in. That end sank unheld
+  // while the points kept pushed their own end out, then the four swung over
+  // to it and pushed it out in turn: the column rocked at up to 15 cm/s for
+  // good (still at 120 s), and kept the whole pile awake. With the pressed
+  // points chosen first (collide.js reducePoints), it is still in 1.3 s.
+  const world = new World();
+  const statics = [
+    [[2.0336, 0.4998, -5.6188], [0.5388, 0.5379, 0.4583, 0.4586]],
+    [[3.4584, 4.5079, -3.9419], [-0.5822, -0.5669, 0.438, 0.3845]],
+    [[1.8092, 5.2644, -5.7059], [0.1156, 0.2938, -0.1799, 0.9316]],
+    [[3.1621, 5.4568, -5.1128], [0.5991, -0.0277, -0.7961, -0.0806]],
+  ];
+  const column = [
+    [[2.1687, 1.5251, -5.5853], [-0.2987, 0.6439, 0.6173, 0.3393]],
+    [[2.3826, 2.517, -5.3522], [-0.4844, 0.5133, 0.4759, 0.5248]],
+    [[2.5064, 3.5176, -5.4385], [0.2275, 0.6753, -0.6841, 0.1558]],
+    [[2.7642, 4.5116, -5.1921], [0.8373, -0.0538, -0.5401, -0.066]],
+  ];
+  for (const [position, rotation] of statics) world.addBody({ type: 'static', position, rotation });
+  const boxes = column.map(([position, rotation]) => world.addBody({ position, rotation }));
+  steps(world, 3);
+  for (const [k, b] of boxes.entries()) assert.ok(b.asleep, `box ${k} awake at ${speed(b)} m/s`);
+});

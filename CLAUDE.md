@@ -204,6 +204,17 @@ These were made with Nolan and override the rules below where they differ.
   the smallest id within the tolerance of the deepest, not the deepest by rounding. Exactly aligned
   stacks lost 59 ids in 600 steps and the pyramid 8,840; now none. `triangle.js` clips on its own
   and may want the same.
+- **Four points, nearest first** (2026-10-23, the rocking bugs): `reducePoints` in `collide.js`
+  and `reduce()` in `triangle.js` make each pick (farthest, then the largest triangle on each
+  side) among pressed points (separation <= 0) first, then touching (within the tolerance), then
+  the rest; with nothing overlapping, the points equal to the deepest stand in for pressed.
+  Chosen by spread alone, a pressed point was left out, the body sank into it and the push-out
+  of that overlap fed a steady rocking. Starts: `collide.js` keeps the least id within the
+  tolerance of the deepest (starting from the least pressed one churned ids, 185 a second);
+  `triangle.js` the least-id pressed point. HELD UP (`collide.js`): if the strictly deepest is
+  still left out and no body resting on the contact has its weight line (centre of mass along
+  `Shape.weight`, set by `load()`, 0 for parts and non-dynamic) inside the four (`rests()`), the
+  four start again from the strictly deepest. Box pile about 2% slower, pinned.
 - **Hull face contacts hold the overlap** (2026-10-23): `hullFace` takes the incident face at the
   deepest corner (of its faces, the one most against the normal), and returns false when its clip
   doesn't reach within the tolerance of that corner's depth; `hullHull` then uses the strictly best

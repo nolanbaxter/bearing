@@ -874,6 +874,30 @@ export function touchLevel(g, c, A, o, s, x0, y0, z0, x1, y1, z1, margin, tolera
  * farthest from it; the one making the largest triangle with those two; and
  * the one making the largest on the other side. collide.js's choice for
  * boxes (Gregorius), so a box on a mesh holds as it does on a box.
+ *
+ * NEAREST FIRST. Each choice is made among the pressed points (overlapping:
+ * separation 0 or less), and only where none qualifies (no second one, or
+ * none on one side) among those touching (within the tolerance, the
+ * narrowphase's own "as good as touching"), and only then among the rest,
+ * which hold only if the bodies close on them within the step. "The deepest"
+ * is the pressed point with the least id, the same from step to step however
+ * rounding orders points resting at one depth. On a box, a face's clip gives
+ * at most eight points, its corners and edges. Over a mesh a box gathers a
+ * dozen from the triangles under it, many of them millimetres off, and chosen
+ * by spread alone those won over the points it rested on and the ones it was
+ * about to land on. A box lying across a crest, held by the crest's vertex
+ * under its middle and one point near an end, kept one of them and three
+ * points 1 to 6 mm off, sank 0.7 to 2 mm at the vertex until a triangle's own
+ * face caught it, and was pushed back up by the overlap; a box rocking over a
+ * crest kept points 2 to 7 mm off over the one 0.5 mm off it landed on, sank
+ * 0.5 to 0.7 mm into it, and the push back out sent it over the crest again.
+ * Either rocked for good (17 of 48 heaps of rocks and boxes on the bumpy mesh
+ * never slept). Choosing among points within the tolerance of the deepest
+ * alone (collide.js's tie rule) wasn't enough: points 1.5 mm off are within
+ * it. Where every point is pressed, as a box flat on a floor, or a body lands
+ * on one side with the other side off, the four are the same as before. With
+ * nothing overlapping yet, the points equally deepest, to the bit, stand in
+ * for the pressed ones.
  */
 function reduce(m, out) {
   const X = gathered, S = gatheredSep;
@@ -881,27 +905,37 @@ function reduce(m, out) {
     for (let k = 0; k < m; k++) keep(out, k);
     return;
   }
+  let deepest = S[0];
+  for (let k = 1; k < m; k++) if (S[k] < deepest) deepest = S[k];
+  const pressed = Math.max(deepest, 0), touching = pressed + tolerance_;
   let a = 0;
-  for (let k = 1; k < m; k++) if (S[k] < S[a]) a = k;
+  while (S[a] > pressed) a++;
   let b = -1, far = -1;
-  for (let k = 0; k < m; k++) {
-    const x = X[3 * k] - X[3 * a], y = X[3 * k + 1] - X[3 * a + 1], z = X[3 * k + 2] - X[3 * a + 2];
-    const d = x * x + y * y + z * z;
-    if (d > far) { far = d; b = k; }
+  for (let pass = 0; pass < 3 && b < 0; pass++) {
+    const within = pass === 0 ? pressed : pass === 1 ? touching : Infinity;
+    for (let k = 0; k < m; k++) {
+      if (k === a || S[k] > within) continue;
+      const x = X[3 * k] - X[3 * a], y = X[3 * k + 1] - X[3 * a + 1], z = X[3 * k + 2] - X[3 * a + 2];
+      const d = x * x + y * y + z * z;
+      if (d > far) { far = d; b = k; }
+    }
   }
   const nx = out.normal[0], ny = out.normal[1], nz = out.normal[2];
   let c = -1, d = -1, most = 0, least = 0;
   const abx = X[3 * b] - X[3 * a], aby = X[3 * b + 1] - X[3 * a + 1], abz = X[3 * b + 2] - X[3 * a + 2];
-  for (let k = 0; k < m; k++) {
-    if (k === a || k === b) continue;
-    const x = X[3 * k] - X[3 * a], y = X[3 * k + 1] - X[3 * a + 1], z = X[3 * k + 2] - X[3 * a + 2];
-    // Twice the triangle's signed area, measured along the normal.
-    const area = (aby * z - abz * y) * nx + (abz * x - abx * z) * ny + (abx * y - aby * x) * nz;
-    if (area > most) { most = area; c = k; }
-    if (area < least) { least = area; d = k; }
+  for (let pass = 0; pass < 3 && (c < 0 || d < 0); pass++) {
+    const within = pass === 0 ? pressed : pass === 1 ? touching : Infinity, left = c < 0, right = d < 0;
+    for (let k = 0; k < m; k++) {
+      if (k === a || k === b || S[k] > within) continue;
+      const x = X[3 * k] - X[3 * a], y = X[3 * k + 1] - X[3 * a + 1], z = X[3 * k + 2] - X[3 * a + 2];
+      // Twice the triangle's signed area, measured along the normal.
+      const area = (aby * z - abz * y) * nx + (abz * x - abx * z) * ny + (abx * y - aby * x) * nz;
+      if (left && area > most) { most = area; c = k; }
+      if (right && area < least) { least = area; d = k; }
+    }
   }
   keep(out, a);
-  if (b !== a) keep(out, b);
+  keep(out, b);
   if (c >= 0) keep(out, c);
   if (d >= 0) keep(out, d);
 }

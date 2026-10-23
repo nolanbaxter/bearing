@@ -231,6 +231,39 @@ test('a cube made as a hull stands on its edge within its tolerance of balance, 
   }
 });
 
+test('a rock lying across another rock\'s edge comes to rest: the four points kept hold its weight up', () => {
+  // Pairs of rocks from heaps on terrain (x8sleep's, seeds 5 and 12, at
+  // 60 s), the lower made static. The upper touches the lower on five or more
+  // points, its weight over one the four kept could leave out (collide.js
+  // reducePoints, HELD UP): it sank there until that point came back, up to
+  // a millimetre in, was pushed out, and tipped it back, 0.2 to 0.9 J a cycle,
+  // for good. Each pose runs twice: as it comes, and with the pair's kept
+  // manifold dropped every step (_pairEpoch, as when a body is changed), so
+  // every step's contact is found afresh, as a moving pair's is; choosing
+  // pressed points first held the second only with the kept manifold.
+  // Measured: asleep in 1.0 to 2.5 s, each where it landed.
+  const rnd = numbers(3), rock = [];
+  for (let k = 0; k < 12; k++) rock.push(rnd() - 0.5, (rnd() - 0.5) * 0.8, rnd() - 0.5);
+  const poses = [
+    { lower: [-0.01, 0.22, 0.42, 0.88], position: [0.32, 0.45, -0.28], rotation: [-0.1, -0.03, -0.11, -0.99], rests: 0.29 },
+    { lower: [0.96, -0.06, 0.28, 0.04], position: [0.21, 0.53, -0.27], rotation: [0.05, 0.41, -0.22, 0.89], rests: 0.44 },
+  ];
+  for (const [i, pose] of poses.entries()) {
+    for (const afresh of [false, true]) {
+      const world = new World();
+      world.addBody({ type: 'static', shape: 'hull', vertices: rock, rotation: pose.lower });
+      const top = world.addBody({ shape: 'hull', vertices: rock, position: pose.position, rotation: pose.rotation });
+      for (let n = 0; n < 5 * 60 && !top.asleep; n++) {
+        if (afresh) world._pairEpoch++;
+        world.step(DT);
+      }
+      assert.ok(top.asleep, `pose ${i}${afresh ? ' found afresh' : ''}: still moving at ${Math.hypot(...top.velocity)} m/s`);
+      // On the lower rock, where it landed a few millimetres below where it started.
+      near(top.centerOfMass[1], pose.rests, 0.01, `pose ${i}: its centre's height`);
+    }
+  }
+});
+
 test('a pile of irregular hulls lands on a box, a ball, a capsule, a mesh and a heightfield, and sleeps', () => {
   const rnd = numbers(3), world = new World();
   world.addBody({ type: 'static', size: [10, 1, 10], position: [-5, -0.5, 0] });

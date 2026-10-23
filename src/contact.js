@@ -1028,6 +1028,10 @@ export function load(world, slot, s) {
     s.placed = null;
   }
   s.center[0] = world._position[s3]; s.center[1] = world._position[s3 + 1]; s.center[2] = world._position[s3 + 2];
+  // Its weight, for collide.js reducePoints (HELD UP): what gravity pulls a
+  // dynamic body with, as _accelerate applies it; nothing for any other.
+  const g = world._gravity, scale = world._type[slot] === DYNAMIC ? world._gravityScale[slot] : 0;
+  s.weight[0] = g[0] * scale; s.weight[1] = g[1] * scale; s.weight[2] = g[2] * scale;
   const ax = world._axes, a9 = slot * 9;
   for (let k = 0; k < 9; k++) s.axes[k] = ax[a9 + k];
 }

@@ -69,6 +69,13 @@ export class Shape {
     this.placed = null;
     this.step = 0;
     this.epoch = 0;
+    /**
+     * The pull of gravity on the body this shape is, m/s², for reducePoints:
+     * the world's gravity times the body's gravityScale when contact.js load()
+     * loads a dynamic body, else 0 (a static or kinematic body, a part of a
+     * compound, whose centre isn't its body's, or any shape placed by hand).
+     */
+    this.weight = new Float64Array(3);
   }
 
   /** Places the shape: `q` is a unit quaternion [x, y, z, w] at q[o..o+3]. */
@@ -130,6 +137,7 @@ export class Parts {
 
 /** Shape s takes part's kind and size; place() it after. */
 export function setPart(part, s) {
+  s.weight[0] = 0; s.weight[1] = 0; s.weight[2] = 0;
   s.kind = part.kind;
   s.half[0] = part.half[0]; s.half[1] = part.half[1]; s.half[2] = part.half[2];
   s.hull = part.hull;
@@ -196,6 +204,7 @@ export class Manifold {
 export function collide(a, b, margin, tolerance, out) {
   out.count = 0;
   out.loss = 0;
+  shapeA = a; shapeB = b;
   if (a.kind > b.kind) {
     // Every pair is written lower kind first; the other order is the same
     // contact seen from the other side, so the normal turns round.
@@ -207,6 +216,11 @@ export function collide(a, b, margin, tolerance, out) {
   }
   return out.count;
 }
+
+// The two shapes of the collide() call under way, for reducePoints, which is
+// reached through several pair functions and needs only their centres and
+// weights.
+let shapeA = null, shapeB = null;
 
 function pair(a, b, margin, tolerance, out) {
   if (a.kind === SPHERE) {
@@ -955,16 +969,53 @@ function clipPolygon(src, sf, sl, count, dst, df, dl, px, py, pz, offset, plane,
  * At most four of the n kept points: the deepest; the one farthest from it;
  * the one making the largest triangle with those two; and the one making the
  * largest on the other side (Gregorius). They hold the contact's area, which
- * is what keeps a box from rocking, with the deepest always among them. On
- * any other tie, the first point found.
+ * is what keeps a box from rocking. On any other tie, the first point found.
+ *
+ * NEAREST FIRST. Each choice is made among the pressed points (overlapping:
+ * separation 0 or less), and only where none qualifies (no second one, or
+ * none on one side) among those touching (within the tolerance), and only
+ * then among the rest, which hold only if the bodies close on them within
+ * the step: triangle.js's reduce() makes its choice the same way. Chosen by
+ * spread alone, points up to the tolerance off won over pressed ones. A box
+ * leaning on a box turned against it, eight points, kept the two it pivoted
+ * on and two 11 to 16 mm off, and left out the two at its low end, 3 to 6 mm
+ * in: that end sank unheld while the points kept pushed their own end out of
+ * the overlap, then the four swung over to it and pushed it out in turn, and
+ * each swing lifted the box. It rocked at up to 15 cm/s for good, and kept
+ * the 1,000-box pile's seed 8 awake.
+ *
+ * With nothing overlapping yet, the points as deep as the deepest, to the
+ * bit, count as the pressed ones. Where every point is pressed, as a box flat
+ * on another, the four are the same as before.
  *
  * "The deepest" is any point within the tolerance of the deepest, the one
- * with the least id. A face resting flat on another has every point at the
- * same depth, to rounding, and taking the strictly deepest let rounding pick
- * a different start each step, and with it a different four: a box turned
- * 45° on another, eight points, lost about seven ids a step. Ids come from
- * the features, so the least is the same point from step to step; a box
- * truly tipped has its deep side deeper than the tolerance, and starts there.
+ * with the least id, pressed or not. A face resting flat on another has
+ * every point at the same depth, to rounding, and taking the strictly
+ * deepest let rounding pick a different start each step, and with it a
+ * different four: a box turned 45° on another, eight points, lost about
+ * seven ids a step. Ids come from the features, so the least is the same
+ * point from step to step. Starting from the least pressed one instead,
+ * as triangle.js does, a point hovering at 0 came and went from the start
+ * and a settled heap lost 185 ids a second where this loses 40.
+ *
+ * HELD UP. That start can still leave a pressed point out, the deepest even:
+ * a start that isn't pressed, and two pressed points on one side of the line
+ * to the farthest, leave room for only one of them. A point left out pushes
+ * on nothing, so a body whose weight is over it sinks there, up to the
+ * tolerance, until the four change, and the overlap it sank into is then
+ * pushed out, lifting the body back. A rock lying across another's edge on
+ * five points, its weight over the one left out, rocked so for good: its
+ * tolerance was 2.3 mm, the points it rocked between 0.04 to 1 mm apart in
+ * depth, and each lift was energy in, 0.7 to 0.9 J a cycle for a 160 kg rock,
+ * which the landing on the other side lost again. So the deepest is left out
+ * only while a body resting on the contact is held up by the four kept: the
+ * line from its centre of mass along its gravity meets the patch within them
+ * (rests()). Then leaving a point out costs nothing, since the four carry the
+ * weight, and a face lying flat, whose deepest point is only its tilt's
+ * noise, keeps its ids: the 45° stack rests each box on its square.
+ * Otherwise the four start from the strictly deepest, as Gregorius has it,
+ * so no point sinks past the others unheld, and points take over from each
+ * other only where they are equally deep, which feeds nothing in.
  */
 function reduce(n, nx, ny, nz, tolerance, out) {
   reducePoints(kept, keptSep, keptId, n, nx, ny, nz, tolerance, out);
@@ -976,30 +1027,82 @@ function reducePoints(kept, keptSep, keptId, n, nx, ny, nz, tolerance, out) {
     for (let k = 0; k < n; k++) addPoint(out, kept[3 * k], kept[3 * k + 1], kept[3 * k + 2], keptSep[k], keptId[k]);
     return;
   }
-  let deepest = keptSep[0];
-  for (let k = 1; k < n; k++) if (keptSep[k] < deepest) deepest = keptSep[k];
+  let deepest = keptSep[0], deep = 0;
+  for (let k = 1; k < n; k++) if (keptSep[k] < deepest) { deepest = keptSep[k]; deep = k; }
+  const pressed = Math.max(deepest, 0), touching = pressed + tolerance;
   let a = -1;
   for (let k = 0; k < n; k++) if (keptSep[k] <= deepest + tolerance && (a < 0 || keptId[k] < keptId[a])) a = k;
+  four(kept, keptSep, n, a, nx, ny, nz, pressed, touching);
+  if (deep !== a && deep !== FOUR[1] && deep !== FOUR[2] && deep !== FOUR[3]
+    && !rests(shapeA, kept, nx, ny, nz) && !rests(shapeB, kept, nx, ny, nz)) four(kept, keptSep, n, deep, nx, ny, nz, pressed, touching);
+  const s = FOUR[0], b = FOUR[2], c = FOUR[3], d = FOUR[1];
+  addPoint(out, kept[3 * s], kept[3 * s + 1], kept[3 * s + 2], keptSep[s], keptId[s]);
+  addPoint(out, kept[3 * b], kept[3 * b + 1], kept[3 * b + 2], keptSep[b], keptId[b]);
+  if (c >= 0) addPoint(out, kept[3 * c], kept[3 * c + 1], kept[3 * c + 2], keptSep[c], keptId[c]);
+  if (d >= 0) addPoint(out, kept[3 * d], kept[3 * d + 1], kept[3 * d + 2], keptSep[d], keptId[d]);
+}
+
+// The points four() picks, in the order they go round the normal: the start,
+// the largest triangle on the right of start to farthest, the farthest, and
+// the largest on its left; -1 where a side has none.
+const FOUR = new Int32Array(4);
+
+/**
+ * From start a: the point farthest from it, and the largest triangle with
+ * those two on each side, each pressed first, then touching, then any (NEAREST
+ * FIRST), into FOUR.
+ */
+function four(kept, keptSep, n, a, nx, ny, nz, pressed, touching) {
   let b = -1, far = -1;
-  for (let k = 0; k < n; k++) {
-    const x = kept[3 * k] - kept[3 * a], y = kept[3 * k + 1] - kept[3 * a + 1], z = kept[3 * k + 2] - kept[3 * a + 2];
-    const d = x * x + y * y + z * z;
-    if (d > far) { far = d; b = k; }
+  for (let pass = 0; pass < 3 && b < 0; pass++) {
+    const within = pass === 0 ? pressed : pass === 1 ? touching : Infinity;
+    for (let k = 0; k < n; k++) {
+      if (k === a || keptSep[k] > within) continue;
+      const x = kept[3 * k] - kept[3 * a], y = kept[3 * k + 1] - kept[3 * a + 1], z = kept[3 * k + 2] - kept[3 * a + 2];
+      const d = x * x + y * y + z * z;
+      if (d > far) { far = d; b = k; }
+    }
   }
   let c = -1, d = -1, most = 0, least = 0;
   const abx = kept[3 * b] - kept[3 * a], aby = kept[3 * b + 1] - kept[3 * a + 1], abz = kept[3 * b + 2] - kept[3 * a + 2];
-  for (let k = 0; k < n; k++) {
-    if (k === a || k === b) continue;
-    const x = kept[3 * k] - kept[3 * a], y = kept[3 * k + 1] - kept[3 * a + 1], z = kept[3 * k + 2] - kept[3 * a + 2];
-    // Twice the triangle's signed area, measured along the normal.
-    const area = (aby * z - abz * y) * nx + (abz * x - abx * z) * ny + (abx * y - aby * x) * nz;
-    if (area > most) { most = area; c = k; }
-    if (area < least) { least = area; d = k; }
+  for (let pass = 0; pass < 3 && (c < 0 || d < 0); pass++) {
+    const within = pass === 0 ? pressed : pass === 1 ? touching : Infinity, left = c < 0, right = d < 0;
+    for (let k = 0; k < n; k++) {
+      if (k === a || k === b || keptSep[k] > within) continue;
+      const x = kept[3 * k] - kept[3 * a], y = kept[3 * k + 1] - kept[3 * a + 1], z = kept[3 * k + 2] - kept[3 * a + 2];
+      // Twice the triangle's signed area, measured along the normal.
+      const area = (aby * z - abz * y) * nx + (abz * x - abx * z) * ny + (abx * y - aby * x) * nz;
+      if (left && area > most) { most = area; c = k; }
+      if (right && area < least) { least = area; d = k; }
+    }
   }
-  addPoint(out, kept[3 * a], kept[3 * a + 1], kept[3 * a + 2], keptSep[a], keptId[a]);
-  if (b !== a) addPoint(out, kept[3 * b], kept[3 * b + 1], kept[3 * b + 2], keptSep[b], keptId[b]);
-  if (c >= 0) addPoint(out, kept[3 * c], kept[3 * c + 1], kept[3 * c + 2], keptSep[c], keptId[c]);
-  if (d >= 0) addPoint(out, kept[3 * d], kept[3 * d + 1], kept[3 * d + 2], keptSep[d], keptId[d]);
+  FOUR[0] = a; FOUR[1] = d; FOUR[2] = b; FOUR[3] = c;
+}
+
+/**
+ * Whether shape s rests on the points in FOUR: it has weight, the patch is
+ * below its centre of mass along its gravity (the body underneath isn't held
+ * up by it), and the line from that centre along its gravity meets the
+ * patch's plane inside them, edges included. FOUR's order goes round
+ * anticlockwise seen from the side n points to, so inside is to the left of
+ * every side.
+ */
+function rests(s, kept, nx, ny, nz) {
+  const w = s.weight, c = s.center, along = w[0] * nx + w[1] * ny + w[2] * nz, o = FOUR[0];
+  if (along === 0) return false;
+  const t = ((kept[3 * o] - c[0]) * nx + (kept[3 * o + 1] - c[1]) * ny + (kept[3 * o + 2] - c[2]) * nz) / along;
+  if (!(t > 0)) return false;
+  const px = c[0] + w[0] * t, py = c[1] + w[1] * t, pz = c[2] + w[2] * t;
+  let from = o;
+  for (let e = 1; e <= 4; e++) {
+    const to = FOUR[e & 3];
+    if (to < 0) continue;
+    const ax = kept[3 * from] - px, ay = kept[3 * from + 1] - py, az = kept[3 * from + 2] - pz;
+    const bx = kept[3 * to] - px, by = kept[3 * to + 1] - py, bz = kept[3 * to + 2] - pz;
+    if ((ay * bz - az * by) * nx + (az * bx - ax * bz) * ny + (ax * by - ay * bx) * nz < 0) return false;
+    from = to;
+  }
+  return true;
 }
 
 /**

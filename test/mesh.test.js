@@ -554,6 +554,46 @@ test('a hull resting a corner into a triangle touches at least as deep as it ove
   assert.ok(tried > 2000, `${tried} poses overlapped`);
 });
 
+test('a box resting or rocking on a crest of a bumpy mesh comes to rest', () => {
+  // Boxes that rocked on a crest for good, each the only body awake in a heap
+  // on this mesh (x8: sin(0.2 x + 0.1 z) * 1.2 over 1 m squares), taken after
+  // 60 s with their velocities, and set down alone on the 6 by 6 squares
+  // around them. The first three rest on the crest's vertex under their middle
+  // and one point near an end, with a dozen points of the triangles under them
+  // a few millimetres off: when the four kept left out the vertex, the box sank
+  // there until a triangle's face caught it, the overlap pushed it back, and
+  // none slept in 30 s. The fourth rocks over a crest: when the four kept
+  // points millimetres off over the one it was about to land on, it sank into
+  // that one and the push back out sent it over again. Kept, as the points
+  // they rest and land on, each sleeps in under 3 s.
+  const poses = [
+    { position: [-6.073344952135551, 1.4972435765772525, -5.942770277230397], rotation: [-0.9176497312529144, -0.0077677484037579, 0.3972393776279659, -0.007714251612180011],
+      velocity: [-0.020518035514507288, -0.0010561825041234423, -0.020528659491018644], angularVelocity: [-0.06826740017987869, -0.0008457217263349291, 0.06826283019535023] },
+    { position: [-7.004805436209794, 1.539142381696568, -2.163981120190655], rotation: [0.6449986499425362, -0.2998002781747299, 0.27469359156188833, 0.6470239296451799],
+      velocity: [0.0049616227008843486, 0.00007081404332452805, -0.0003143079226092131], angularVelocity: [-0.0008299996880677495, 0.00019284609397242667, -0.01425346545793042] },
+    { position: [-6.209266565583694, 1.4897660449167345, -3.883362369324237], rotation: [-0.8741367423385727, 0.0065729339975939185, 0.48554207197608246, 0.0095209544450027],
+      velocity: [-0.00876422021164889, 0.005640495232909539, -0.0056925909236064266], angularVelocity: [-0.01873807741970775, 0.0008922152569492375, 0.02824402593850031] },
+    { position: [-7.962760856780643, 1.5333731564384638, 0.12084973047342118], rotation: [0.3641268606983299, -0.5967360866782836, -0.5971228905876719, -0.39339792285940023],
+      velocity: [-0.0013924039592255646, 0.00014570587686701958, 0.0001644439492931325], angularVelocity: [0.0005184371193879654, -0.00010767286169366176, 0.0038352332746354025] },
+  ];
+  for (const pose of poses) {
+    const world = new World(), vertices = [], indices = [], n = 6;
+    const x0 = Math.floor(pose.position[0]) - n / 2, z0 = Math.floor(pose.position[2]) - n / 2;
+    for (let j = 0; j <= n; j++) {
+      for (let i = 0; i <= n; i++) vertices.push(x0 + i, Math.sin((x0 + i + 32) * 0.2 + (z0 + j + 32) * 0.1) * 1.2, z0 + j);
+    }
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) { const a = j * (n + 1) + i; indices.push(a, a + n + 1, a + 1, a + 1, a + n + 1, a + n + 2); }
+    }
+    world.addBody({ shape: 'mesh', vertices, indices });
+    const box = world.addBody({ size: [0.9, 0.6, 0.7], ...pose });
+    let t = 0;
+    while (t < 180 && !box.asleep) { world.step(1 / 60); t++; }
+    assert.ok(box.asleep, `the box at ${pose.position.map((x) => x.toFixed(2))} still awake after 3 s`);
+    assert.ok(apart(box.position, pose.position) < 0.01, `moved ${apart(box.position, pose.position)} m`);
+  }
+});
+
 test('a body on a mesh steps the same whatever the world before it did', () => {
   // A point carried back from where a pair met in the step (impact.js) keeps
   // a shift, and the manifold being built was told so by a flag meet() set;

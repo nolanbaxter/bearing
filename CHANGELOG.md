@@ -184,5 +184,12 @@ All notable changes to Bearing are recorded here. The format follows
 - Hull pairs that have barely moved against each other since the last step keep their contact
   instead of finding it again, within the tolerance a fresh one is found to: a pile of 1,000 hulls
   steps 30% faster. Saved worlds are now format 3; format 2 data is refused.
+- Bodies no longer rock for good. A contact keeps at most four points, and they were chosen for
+  how far apart they lie, so points a few millimetres off could push out the one a body rested
+  on; the body sank there unheld, the overlap was pushed back out when the points changed, and
+  each push lifted it. Points pressing are now chosen first, then those touching, then the rest,
+  and a hull's deepest point is left out only while the four kept hold its weight up. Rocks and
+  boxes on a bumpy mesh: 17 of 48 heaps never slept, now none (median 36 s to 7 s); the
+  1,000-box pile's one never-sleeping start now sleeps in 11 s.
 - The `centerOfMass` option, `[x, y, z]` in the body's own frame or `null` for the shape's, moves
   any body's centre of mass, as a car's is lowered so it doesn't roll over.
