@@ -6,7 +6,8 @@
 
 import assert from 'node:assert/strict';
 import { World, readGlb } from '../src/bearing.js';
-import { Shape, Manifold, SPHERE, CAPSULE, BOX, TRIANGLE } from '../src/collide.js';
+import { Shape, Manifold, Placed, SPHERE, CAPSULE, BOX, HULL, TRIANGLE } from '../src/collide.js';
+import { build } from '../src/hull.js';
 import { touch } from '../src/triangle.js';
 import { Mesh, Heightfield, triangleNormal } from '../src/mesh.js';
 import { closest, Closest, radius } from '../src/gjk.js';
@@ -473,6 +474,111 @@ test('a box or hull landing on, or set down on, a floor of small triangles keeps
       assert.equal(lost, 0, `${shape.shape ?? 'box'} on ${ground}`);
     }
   }
+});
+
+test('a hull resting a corner into a triangle touches at least as deep as it overlaps', () => {
+  // Separating axes give the true depth: the least overlap over the
+  // triangle's normal, the hull's faces, and each hull edge crossed with each
+  // triangle edge. The hull's face clipped against the triangle was the one
+  // most against it of all its faces, often not one at its deepest corner:
+  // rocks on a heightfield got points 1 to 3 cm above how deep they were, or
+  // none, as between hulls before (collide.js).
+  let seed = 7;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const H = new Placed(), T = new Float64Array(9);
+  const out = { count: 0, normal: new Float64Array(3), points: new Float64Array(21), separations: new Float64Array(7), ids: new Uint32Array(7) };
+  const rock = () => {
+    const pts = [];
+    for (let k = 0; k < 12; k++) pts.push(rnd() - 0.5, (rnd() - 0.5) * 0.8, rnd() - 0.5);
+    const h = build(pts), v = h.vertices, c = [0, 0, 0];
+    for (let i = 0; i < v.length; i++) c[i % 3] += v[i] / (v.length / 3);
+    return build(Array.from(v, (x, i) => x - c[i % 3]));
+  };
+  const along = (x, y, z) => {
+    let ha = -Infinity, la = Infinity, ht = -Infinity, lt = Infinity;
+    for (let i = 0; i < H.hull.vertices.length; i += 3) {
+      const d = H.v[i] * x + H.v[i + 1] * y + H.v[i + 2] * z;
+      ha = Math.max(ha, d); la = Math.min(la, d);
+    }
+    for (let i = 0; i < 9; i += 3) {
+      const d = T[i] * x + T[i + 1] * y + T[i + 2] * z;
+      ht = Math.max(ht, d); lt = Math.min(lt, d);
+    }
+    return Math.min(ha - lt, ht - la);
+  };
+  const depth = () => {
+    let least = Infinity;
+    const axis = (x, y, z) => {
+      const l = Math.sqrt(x * x + y * y + z * z);
+      if (l > 1e-9) least = Math.min(least, along(x / l, y / l, z / l));
+    };
+    const ux = T[3] - T[0], uy = T[4] - T[1], uz = T[5] - T[2], vx = T[6] - T[0], vy = T[7] - T[1], vz = T[8] - T[2];
+    axis(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+    for (let f = 0; f < H.hull.planes.length; f += 4) axis(H.planes[f], H.planes[f + 1], H.planes[f + 2]);
+    const e = H.hull.edges;
+    for (let i = 0; i < e.length; i += 2) {
+      const a = 3 * e[i], b = 3 * e[i + 1], ex = H.v[b] - H.v[a], ey = H.v[b + 1] - H.v[a + 1], ez = H.v[b + 2] - H.v[a + 2];
+      for (let k = 0; k < 3; k++) {
+        const p = 3 * k, q = 3 * ((k + 1) % 3), tx = T[q] - T[p], ty = T[q + 1] - T[p + 1], tz = T[q + 2] - T[p + 2];
+        axis(ey * tz - ez * ty, ez * tx - ex * tz, ex * ty - ey * tx);
+      }
+    }
+    return least;
+  };
+  let tried = 0;
+  for (let k = 0; k < 3000; k++) {
+    const a = new Shape();
+    a.kind = HULL; a.hull = rock();
+    // A triangle 4 m across, tilted up to 0.3 rad, and the rock's lowest corner put up to 5 cm into it.
+    const tx = (rnd() - 0.5) * 0.6, tz = (rnd() - 0.5) * 0.6;
+    const corners = [-2, -2, 2, -2, 0, 2];
+    for (let c = 0; c < 3; c++) { const x = corners[2 * c], z = corners[2 * c + 1]; T[3 * c] = x; T[3 * c + 1] = x * tx + z * tz; T[3 * c + 2] = z; }
+    const t = make({ shape: 'triangle', corners: T }), n = t.axes;
+    const q = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5, rnd() - 0.5], l = Math.sqrt(q[0] ** 2 + q[1] ** 2 + q[2] ** 2 + q[3] ** 2);
+    for (let i = 0; i < 4; i++) q[i] /= l;
+    a.place(0, 0, 0, q);
+    H.set(a);
+    let low = Infinity;
+    for (let i = 0; i < H.hull.vertices.length; i += 3) low = Math.min(low, H.v[i] * n[0] + H.v[i + 1] * n[1] + H.v[i + 2] * n[2]);
+    const x = rnd() - 0.5, z = rnd() - 0.5, y = x * tx + z * tz, d = -low - rnd() * 0.05;
+    a.place(x + n[0] * d, y + n[1] * d, z + n[2] * d, q);
+    H.set(a);
+    const D = depth(), tolerance = 0.002;
+    if (!(D > tolerance && D < 0.1)) continue;
+    tried++;
+    const count = touch(a, t, BARE, tolerance, tolerance, out, 0);
+    assert.ok(count > 0, `pose ${k}: ${D} m into the triangle and no contact`);
+    const deepest = Math.min(...out.separations.subarray(0, count));
+    assert.ok(deepest <= -D + tolerance, `pose ${k}: ${D} m into the triangle, deepest point ${deepest}`);
+  }
+  assert.ok(tried > 2000, `${tried} poses overlapped`);
+});
+
+test('a body on a mesh steps the same whatever the world before it did', () => {
+  // A point carried back from where a pair met in the step (impact.js) keeps
+  // a shift, and the manifold being built was told so by a flag meet() set;
+  // mesh pairs never ask meet() and went on with the flag the last pair
+  // left, the last world's in a new one, and took that pair's shifts as
+  // their own: a box resting on a mesh came out 6 mm from where it did
+  // alone, and two copies of one heap on a heightfield parted.
+  const before = (fast) => {
+    const world = new World();
+    world.addBody({ type: 'static', size: [10, 1, 10], position: [0, -0.5, 0] });
+    // Fast, it meets the floor partway through the step, and its contact is carried back.
+    world.addBody(fast ? { position: [0, 0.6, 0], velocity: [0, -12, 0] } : { position: [0, 0.5, 0] });
+    world.step(1 / 60);
+  };
+  const resting = () => {
+    const world = new World();
+    world.addBody({ shape: 'mesh', vertices: [-5, 0, -5, 5, 0, -5, 5, 0, 5, -5, 0, 5], indices: [0, 2, 1, 0, 3, 2] });
+    const box = world.addBody({ position: [0.2, 0.5, 0.1], rotation: [0.05, 0, 0.03, 0.998] });
+    steps(world, 0.5);
+    return [...box.position, ...box.rotation];
+  };
+  before(false);
+  const calm = resting();
+  before(true);
+  assert.deepEqual(resting(), calm);
 });
 
 test('a .glb built byte by byte reads back exactly, every node placed as in the scene', () => {

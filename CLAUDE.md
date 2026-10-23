@@ -210,7 +210,9 @@ These were made with Nolan and override the rules below where they differ.
   axis. A face kept on a tie (within the tolerance of a better axis) clipped to nothing or to points
   centimetres shallow, and `nearest` only runs when apart: overlapping hulls got no contact.
   `test/hulls.test.js` checks 6000 seeded poses against a brute-force depth. `triangle.js`'s
-  `triangleFaceHull` still picks the incident face the old way.
+  `triangleFaceHull` takes its incident face the same way, but without the best-axis fallback:
+  against one triangle the strictly best axis is often sideways off a seam, and heaps on a flat
+  heightfield then never slept.
 - **Solver turning terms and locals** (2026-10-22, milestone 16 step 2): Contacts `jac`, `J` = 36
   numbers a point (for n, t1, t2: ra x d, rb x d, Ia⁻¹(ra x d), Ib⁻¹(rb x d)), filled by `lever()` in
   `prepare()`, which also gives the effective masses. `closing()`/`push()` read it; `solve()` and

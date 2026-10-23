@@ -486,6 +486,10 @@ function level(world, pairs, p, a, b, next) {
   const ez = Math.abs(A[g9 + 6]) * hx + Math.abs(A[g9 + 7]) * hy + Math.abs(A[g9 + 8]) * hz + reach[g];
   const awake = world._awake, kept = pairs.memoryOf(p), rot = world._rotation;
   kept.taken.fill(0, 0, kept.count);
+  // Never carried back (impact() isn't asked of a mesh), so no shifts: left
+  // as the last pair meet() saw had them, emit() gave this pair's points that
+  // pair's, and a world began with the last world's.
+  shifted = false;
   let sub = 0;
   for (let i = 0; i < (parts === null ? 1 : parts.length); i++) {
     if (parts === null) load(world, o, shapeA);

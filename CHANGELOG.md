@@ -175,5 +175,11 @@ All notable changes to Bearing are recorded here. The format follows
   deepest corner, and a face that ties with a better axis is used only if its points hold the
   overlap. Before, two hulls overlapping by centimetres could get no contact for a step, and heaps
   of hulls kicked and stayed awake (4 of 16 never slept in 60 s; now all sleep, median 6 s).
+- Hulls on meshes and heightfields take the same face at their deepest corner. Before, a rock
+  pressed into terrain got points 1 to 4 cm shallower than it was, or none (thousands of cases
+  over a few heaps; now tens, all fast arrivals or corners under a valley seam).
+- A body on a mesh or heightfield steps the same whatever was stepped before it. Contacts on
+  terrain took the carried-back offsets of the last pair that had an impact, even one in another
+  world, so a box on a mesh could rest 6 mm from where it rests in a fresh process.
 - The `centerOfMass` option, `[x, y, z]` in the body's own frame or `null` for the shape's, moves
   any body's centre of mass, as a car's is lowered so it doesn't roll over.

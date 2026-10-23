@@ -624,13 +624,34 @@ function hullRoom(n) {
  */
 const CORNER = 1 << 30;
 
-/** The triangle's face as the reference: the hull's face most against it, clipped to the triangle. Returns as triangleFace does. */
+/**
+ * The triangle's face as the reference: the hull's face at its deepest
+ * corner most against it, clipped to the triangle. Returns as triangleFace
+ * does.
+ */
 function triangleFaceHull(margin, tolerance, out) {
-  const h = H.hull, pl = H.planes, v = H.v, F = h.planes.length / 4;
+  const h = H.hull, pl = H.planes, v = H.v, F = h.planes.length / 4, V = h.vertices.length / 3;
+  // The incident face: of the faces at the hull's deepest corner, the one
+  // most against the triangle, as collide.js's hullFace takes it. The one
+  // most against it of all the hull's faces, as a box's is, needn't be at
+  // that corner on a hull: the corner's faces can lean every way round it
+  // and a face far off be nearer level, and clipping that one gave points
+  // well above the corner, or none (rocks on a heightfield had points 1 to 4
+  // cm short of how deep they were). The first of equal corners: any corner
+  // of a face lying flat has that face among its own, so a rock resting on a
+  // face keeps it, and its ids.
+  let low = 0, lowest = Infinity;
+  for (let i = 0; i < V; i++) {
+    const d = v[3 * i] * up[0] + v[3 * i + 1] * up[1] + v[3 * i + 2] * up[2];
+    if (d < lowest) { lowest = d; low = i; }
+  }
   let f = 0, least = Infinity;
   for (let k = 0; k < F; k++) {
     const d = pl[4 * k] * up[0] + pl[4 * k + 1] * up[1] + pl[4 * k + 2] * up[2];
-    if (d < least) { least = d; f = k; }
+    if (!(d < least)) continue;
+    let at = false;
+    for (let j = h.start[k]; j < h.start[k + 1] && !at; j++) at = h.loops[j] === low;
+    if (at) { least = d; f = k; }
   }
   const i0 = h.start[f], m = h.start[f + 1] - i0;
   hullRoom(m + 3);
