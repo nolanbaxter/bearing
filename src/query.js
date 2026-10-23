@@ -385,7 +385,7 @@ function advance(cast, b, scale, ox, oy, oz, dx, dy, dz, maxT, sliding = false) 
         const nx = (near.a[0] - near.b[0]) / d, ny = (near.a[1] - near.b[1]) / d, nz = (near.a[2] - near.b[2]) / d;
         normal[0] = nx; normal[1] = ny; normal[2] = nz;
         point[0] = near.b[0] + nx * rb; point[1] = near.b[1] + ny * rb; point[2] = near.b[2] + nz * rb;
-      } else if ((b.kind === TRIANGLE ? touch(cast, b, BARE, 0, tolerance, manifold, 0) : collide(cast, b, 0, tolerance, manifold)) > 0) {
+      } else if ((b.kind === TRIANGLE ? touch(cast, b, BARE, null, 0, tolerance, manifold, 0) : collide(cast, b, 0, tolerance, manifold)) > 0) {
         // The cores meet: the shapes overlap, deeply, where it started. The
         // narrowphase knows which way out; its normal runs from the cast to the body.
         normal[0] = -manifold.normal[0]; normal[1] = -manifold.normal[1]; normal[2] = -manifold.normal[2];
@@ -504,7 +504,7 @@ export function overlap(world, shape, mask, ignore, hit) {
     const [hx, hy, hz] = extentsIn(world, s, ext[0], ext[1], ext[2]);
     let touched = false;
     world._geometry[s].triangles(lx - hx, ly - hy, lz - hz, lx + hx, ly + hy, lz + hz, (t) => {
-      if (!touched && touch(shape, triangle(world, s, t), BARE, 0, tolerance, manifold, t) > 0) touched = true;
+      if (!touched && touch(shape, triangle(world, s, t), BARE, null, 0, tolerance, manifold, t) > 0) touched = true;
     });
     if (touched) hit(s);
   };
@@ -566,7 +566,7 @@ function senseLevel(world, s, b, tolerance, out) {
 
 function senseTriangle(t) {
   if (senseOut.count > 0) return;
-  touch(senseShape, triangle(senseWorld, senseSlot, t), BARE, senseTolerance, senseTolerance, senseOut, t);
+  touch(senseShape, triangle(senseWorld, senseSlot, t), BARE, null, senseTolerance, senseTolerance, senseOut, t);
 }
 
 // ---- for character bodies (character.js) ----
@@ -667,7 +667,7 @@ function sweepTriangle(t) {
 
 let deepWorld = null, deepShape = null, deepSelf = -1, deepSlot = -1, deepSep = 0, deepTolerance = 0, deepLevel = -1;
 let deepGx = 0, deepGy = 0, deepGz = 0;   // the shape's half-extents: ext is strays()' scratch too
-const deepNormal = new Float64Array(3);
+const deepNormal = new Float64Array(3), deepFolds = new Float64Array(6);   // deepFolds: a triangle's folds (mesh.js)
 
 /**
  * The deepest overlap of `shape` (slot self's, placed) with anything that
@@ -712,7 +712,7 @@ function deepVisit(s) {
 
 function deepTriangle(t) {
   const g = deepWorld._geometry[deepLevel];
-  if (touch(deepShape, triangle(deepWorld, deepLevel, t), g.edge(t), 0, deepTolerance, manifold, t) > 0) deepKeep(deepLevel);
+  if (touch(deepShape, triangle(deepWorld, deepLevel, t), g.edge(t, deepFolds), deepFolds, 0, deepTolerance, manifold, t) > 0) deepKeep(deepLevel);
 }
 
 /** The manifold just found, if deeper than the deepest so far. */

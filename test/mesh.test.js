@@ -52,12 +52,12 @@ function make({ shape = 'box', size = [1, 1, 1], radius: r = 0.5, height = 2, po
   return s.place(position[0], position[1], position[2], rotation);
 }
 
-/** Every edge and corner a corner from both sides: a lone triangle, with no seams. */
+/** Every edge and corner a corner from both sides: a lone triangle, with no seams and no folds asked of. */
 const BARE = 63;
 
 function run(s, t, margin, tolerance) {
   const out = { count: 0, normal: new Float64Array(3), points: new Float64Array(21), separations: new Float64Array(7), ids: new Uint32Array(7) };
-  touch(s, t, BARE, margin, tolerance, out, 0);
+  touch(s, t, BARE, null, margin, tolerance, out, 0);
   const points = [];
   for (let k = 0; k < out.count; k++) points.push({ p: [...out.points.subarray(3 * k, 3 * k + 3)], s: out.separations[k] });
   return { count: out.count, normal: [...out.normal], points };
@@ -546,7 +546,7 @@ test('a hull resting a corner into a triangle touches at least as deep as it ove
     const D = depth(), tolerance = 0.002;
     if (!(D > tolerance && D < 0.1)) continue;
     tried++;
-    const count = touch(a, t, BARE, tolerance, tolerance, out, 0);
+    const count = touch(a, t, BARE, null, tolerance, tolerance, out, 0);
     assert.ok(count > 0, `pose ${k}: ${D} m into the triangle and no contact`);
     const deepest = Math.min(...out.separations.subarray(0, count));
     assert.ok(deepest <= -D + tolerance, `pose ${k}: ${D} m into the triangle, deepest point ${deepest}`);
@@ -591,6 +591,57 @@ test('a box resting or rocking on a crest of a bumpy mesh comes to rest', () => 
     while (t < 180 && !box.asleep) { world.step(1 / 60); t++; }
     assert.ok(box.asleep, `the box at ${pose.position.map((x) => x.toFixed(2))} still awake after 3 s`);
     assert.ok(apart(box.position, pose.position) < 0.01, `moved ${apart(box.position, pose.position)} m`);
+  }
+});
+
+test("a box slides over ground rippled a millimetre or two as the slope says, and holds below friction's hold", () => {
+  // Ground rippled a + sin(1.3 i) cos(0.9 j) over 0.25 m squares, mesh and
+  // heightfield, tipped to a slope; a 1 m box set down on it, friction 0.5.
+  // Every edge folds a few thousandths of a radian, far past flat, so each is
+  // a corner, not a seam. A box sliding 2 degrees past friction's hold met the
+  // next triangle's near edge side-on (its closest points, an edge against an
+  // edge, or its own front face), with a normal along the ground, and stopped
+  // as at a wall: 0.9 m in 4 s on 0.5 mm ripples where the slope gives 3.06
+  // m. With those left out (triangle.js, FOLDS), friction leaned off the
+  // slide at the one-corner manifolds the ripples make, slowed it 3% short of
+  // mu N, and a box half a degree below the hold slid on for good, 0.1 to 0.25
+  // m. A 1 m box over 0.5 mm ripples, 1.2 m long, climbs and drops at most a
+  // millimetre a ripple: 0.01 J/kg against the 1.2 J/kg it slides with after
+  // 4 s, under 1%, and its normal tilts a few thousandths either way, which
+  // averages out; held to 5% of the slope's figure (the drop it is set down
+  // with adds 2% on flat ground).
+  const hold = Math.atan(0.5), n = 64, c = 0.25;
+  for (const kind of ['mesh', 'heightfield']) {
+    for (const ripple of [0.0005, 0.002]) {
+      const height = (i, j) => ripple * Math.sin(i * 1.3) * Math.cos(j * 0.9);
+      for (const past of [-0.5, 2]) {
+        const a = hold + past * Math.PI / 180, rotation = [0, 0, sin(a / 2), cos(a / 2)], world = new World({ sleeping: false });
+        if (kind === 'mesh') {
+          const vertices = [], indices = [];
+          for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) vertices.push((i - n / 2) * c, height(i, j), (j - n / 2) * c);
+          for (let j = 0; j < n; j++) {
+            for (let i = 0; i < n; i++) { const k = j * (n + 1) + i; indices.push(k, k + n + 1, k + 1, k + 1, k + n + 1, k + n + 2); }
+          }
+          world.addBody({ shape: 'mesh', vertices, indices, rotation });
+        } else {
+          const heights = [];
+          for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) heights.push(height(i, j));
+          world.addBody({ shape: 'heightfield', heights, columns: n + 1, spacing: c, rotation });
+        }
+        const box = world.addBody({ rotation, position: [-0.5 * sin(a), 0.5 * cos(a) + 0.003, 0] });
+        const start = box.position;
+        steps(world, 1.5);
+        const landed = box.position;
+        steps(world, 2.5);
+        const what = `${kind}, ${ripple * 1000} mm ripples, ${past} degrees past the hold`;
+        if (past < 0) {
+          assert.ok(apart(box.position, landed) < 0.001, `${what}: slid ${apart(box.position, landed)} m after landing`);
+        } else {
+          const slope = 0.5 * 9.81 * (Math.sin(a) - 0.5 * Math.cos(a)) * 16;
+          assert.ok(Math.abs(apart(box.position, start) / slope - 1) < 0.05, `${what}: slid ${apart(box.position, start)} m of ${slope}`);
+        }
+      }
+    }
   }
 });
 

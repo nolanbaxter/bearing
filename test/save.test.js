@@ -94,7 +94,7 @@ test('load refuses what save() didn\'t write, data of another format, and damage
   assert.throws(() => World.load(null), /^Error: load: data must be what world.save\(\) returned, got null$/);
   assert.throws(() => World.load({ bodies: [] }), /^Error: load: data must be what world.save\(\) returned, got an object$/);
   const data = new World().save();
-  assert.throws(() => World.load({ ...data, format: 0 }), /^Error: load: data is format 0; this Bearing reads format 3$/);
+  assert.throws(() => World.load({ ...data, format: 0 }), /^Error: load: data is format 0; this Bearing reads format 4$/);
   const damaged = JSON.parse(JSON.stringify(data));
   damaged.objects[0].f._slots = { r: 999 };
   assert.throws(() => World.load(damaged), /^Error: load: data is damaged: a link to object 999, of \d+$/);

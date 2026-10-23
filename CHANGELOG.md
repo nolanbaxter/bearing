@@ -193,5 +193,14 @@ All notable changes to Bearing are recorded here. The format follows
   1,000-box pile's one never-sleeping start now sleeps in 11 s. A rock lying face to face on another,
   its weight over the middle of three pressed points, rocked between them; the four now start
   from the pressed point under its weight.
+- Boxes slide over rippled meshes and heightfields as they should. Every fold between triangles,
+  however slight, could give a contact whose normal pointed along the ground, and a sliding box
+  hit it like a wall: on ripples of half a millimetre, a box 2° past friction's hold slid 0.9 m
+  in 4 s where it should slide 3.06; now 3.14. A contact at a triangle's edge now counts only if
+  its normal lies between that face and the face across the edge, as a contact at a seam already
+  did. Saved worlds are now format 4 (meshes keep each edge's fold); format 3 data is refused.
+- Friction at its limit pushes straight against the slide. A corner resting alone turns as it is
+  pushed, and friction scaled straight down to its limit leaned up to 22° off the slide, so a box
+  on rippled ground half a degree short of friction's hold crept on for good; now it stays put.
 - The `centerOfMass` option, `[x, y, z]` in the body's own frame or `null` for the shape's, moves
   any body's centre of mass, as a car's is lowered so it doesn't roll over.

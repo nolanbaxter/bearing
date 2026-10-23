@@ -46,9 +46,11 @@ import { Parts, Part } from './collide.js';
  * contact (friction solved once a manifold); data of format 1 holds them per
  * point, and is refused rather than misread. 3 since a hull pair keeps its
  * last manifold (pairs.js, cache): data of format 2 has none, and is refused
- * rather than loaded without it.
+ * rather than loaded without it. 4 since a mesh keeps each edge's fold
+ * (mesh.js, FOLDS): data of format 3 has none, and its meshes would stop the
+ * first step that touched them.
  */
-export const FORMAT = 3;
+export const FORMAT = 4;
 
 /** The classes a world holds, by the name their objects are written under. */
 const CLASSES = { Slots, Broadphase, Tree, Pairs, Memory, Contacts, Joints, Forest, Events, Mesh, Heightfield, Hull, Parts, Part };

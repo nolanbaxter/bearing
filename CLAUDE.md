@@ -204,6 +204,16 @@ These were made with Nolan and override the rules below where they differ.
   the smallest id within the tolerance of the deepest, not the deepest by rounding. Exactly aligned
   stacks lost 59 ids in 600 steps and the pyramid 8,840; now none. `triangle.js` clips on its own
   and may want the same.
+- **Folds and friction's direction** (2026-10-23): `mesh.js` keeps each edge's fold, the direction
+  into the triangle across it (`fold()`, `Mesh.folds` Float32Array, the heightfield in `edge()`;
+  float32's 2^-24 is under FLAT), and `beside()` in `triangle.js` drops a contact at any edge
+  within the tolerance whose normal doesn't lie between the face and the face across (FLAT for
+  rounding), for closest points, edge against edge, a box's or hull's own face, balls and
+  capsules; queries pass `null` folds. Folds of a few mrad gave normals along the ground and
+  stopped sliding boxes. Friction at its limit in `solve()` is the impulse on the circle nearest
+  in the 2x2 block's metric (Newton on α in (I + αM)λ = λu, Moré-Sorensen; 3-4 steps, at most
+  13 fuzzed), maximum dissipation; scaling down leaned up to 22° off at a lone corner. Rolling
+  friction still scales. FORMAT 4. Box pile and hulls on terrain about 4% slower, pinned.
 - **Four points, nearest first** (2026-10-23, the rocking bugs): `reducePoints` in `collide.js`
   and `reduce()` in `triangle.js` make each pick (farthest, then the largest triangle on each
   side) among pressed points (separation <= 0) first, then touching (within the tolerance), then

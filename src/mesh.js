@@ -17,6 +17,18 @@
 // sides. So each edge carries two answers, one a side, worked out once for a
 // mesh and cell by cell for a heightfield. An edge with no triangle across it
 // is a corner from either side. triangle.js reads these.
+//
+// FOLDS. A corner's fold matters too, not only that it is one. Seen across
+// an edge, the triangle beside holds everything over it: a contact at the
+// edge whose normal leans past the triangle beside's own side of the edge is
+// a body over that triangle, which its face holds, and the edge contact is a
+// ghost there as at a seam. On ground rippled half a millimetre, every edge
+// folds by a few thousandths of a radian, far past flat, so each is a corner;
+// a box sliding over it met the next triangle's near edge side-on, by the
+// closest points of the two, with a normal along the ground, and stopped as
+// at a wall. So each edge also keeps which way the triangle across runs from
+// it (fold()), and triangle.js keeps an edge's contact only if its normal
+// lies between the two triangles' sides of it.
 
 import { Tree, raycast as walk } from './tree.js';
 
@@ -44,6 +56,29 @@ function flags(bend, length) {
   if (Number.isNaN(bend)) return FRONT | BACK;
   const flat = length * FLAT;
   return (bend < -flat ? FRONT : 0) | (bend > flat ? BACK : 0);
+}
+
+/**
+ * Edge e of triangle p (9 numbers, unit normal n), with the far corner f of
+ * the triangle across it: the way into that triangle from the edge, square to
+ * the edge, as its parts along this triangle's outward square to the edge (m,
+ * in its plane, away from its third corner) and along n, into out[o] and
+ * out[o + 1]. A flat neighbour runs along m, (1, 0); a fold away from the
+ * front tips it down, a fold towards it up. triangle.js reads these.
+ */
+function fold(p, n, e, fx, fy, fz, out, o) {
+  const a = 3 * e, b = 3 * ((e + 1) % 3), c = 3 * ((e + 2) % 3);
+  let ex = p[b] - p[a], ey = p[b + 1] - p[a + 1], ez = p[b + 2] - p[a + 2];
+  const el = Math.sqrt(ex * ex + ey * ey + ez * ez);
+  ex /= el; ey /= el; ez /= el;
+  let mx = ey * n[2] - ez * n[1], my = ez * n[0] - ex * n[2], mz = ex * n[1] - ey * n[0];
+  if (mx * (p[c] - p[a]) + my * (p[c + 1] - p[a + 1]) + mz * (p[c + 2] - p[a + 2]) > 0) { mx = -mx; my = -my; mz = -mz; }
+  let dx = fx - p[a], dy = fy - p[a + 1], dz = fz - p[a + 2];
+  const along = dx * ex + dy * ey + dz * ez;
+  dx -= along * ex; dy -= along * ey; dz -= along * ez;
+  const dl = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  out[o] = (dx * mx + dy * my + dz * mz) / dl;
+  out[o + 1] = (dx * n[0] + dy * n[1] + dz * n[2]) / dl;
 }
 
 /** Corner positions into out, for vertices (an array of numbers) at indices i, j, k. */
@@ -113,6 +148,10 @@ export class Mesh {
         Math.min(tri[0], tri[3], tri[6]), Math.min(tri[1], tri[4], tri[7]), Math.min(tri[2], tri[5], tri[8]),
         Math.max(tri[0], tri[3], tri[6]), Math.max(tri[1], tri[4], tri[7]), Math.max(tri[2], tri[5], tri[8]));
     }
+    // Each edge's fold (see FOLDS), two numbers an edge, six a triangle.
+    // Float32: 2^-24 of a unit direction, under FLAT's 2^-20, the finest
+    // fold that counts.
+    this.folds = new Float32Array(6 * this.count);
     this.edges = this.seams();
   }
 
@@ -137,8 +176,10 @@ export class Mesh {
     walk(this.tree, ox, oy, oz, dx, dy, dz, maxT, gx, gy, gz, visit);
   }
 
-  /** Triangle t's flags: see FRONT and BACK. */
-  edge(t) {
+  /** Triangle t's flags: see FRONT and BACK. Its folds into `folds` (six numbers; see FOLDS). */
+  edge(t, folds) {
+    const f = this.folds, o = 6 * t;
+    for (let k = 0; k < 6; k++) folds[k] = f[o + k];
     return this.edges[t];
   }
 
@@ -201,6 +242,7 @@ export class Mesh {
             if (far !== a && far !== b) {
               const fx = v[3 * far] - tri[0], fy = v[3 * far + 1] - tri[1], fz = v[3 * far + 2] - tri[2];
               bend = fx * n3[0] + fy * n3[1] + fz * n3[2];
+              fold(tri, n3, e, v[3 * far], v[3 * far + 1], v[3 * far + 2], this.folds, 6 * t + 2 * e);
             }
           }
         }
@@ -350,8 +392,9 @@ export class Heightfield {
    * Triangle t's edge flags, worked out now: for each edge, the triangle
    * across it is in the same cell (the diagonal) or the next cell over, and
    * is whichever of that cell's two holds both of the edge's grid points.
+   * Its folds into `folds`, as Mesh.edge.
    */
-  edge(t) {
+  edge(t, folds) {
     this.grid(t, G);
     this.triangle(t, tri);
     normal(tri, n3);
@@ -360,6 +403,7 @@ export class Heightfield {
     for (let e = 0; e < 3; e++) {
       const ai = G[2 * e], aj = G[2 * e + 1], bi = G[(2 * e + 2) % 6], bj = G[(2 * e + 3) % 6];
       let bend = NaN;
+      folds[2 * e] = 0; folds[2 * e + 1] = 0;
       const cell = t >> 1, ci = cell % cells, cj = (cell - ci) / cells;
       // The cell across: the same one for the diagonal, else one step away from this cell's middle.
       let ni = ci, nj = cj, other = -1;
@@ -385,8 +429,10 @@ export class Heightfield {
         for (let c = 0; c < 3; c++) {
           const fi = H[2 * c], fj = H[2 * c + 1];
           if ((fi === ai && fj === aj) || (fi === bi && fj === bj)) continue;
-          const fx = this.x0 + fi * this.spacing - tri[0], fy = this.h(fi, fj) - tri[1], fz = this.z0 + fj * this.spacing - tri[2];
+          const X = this.x0 + fi * this.spacing, Y = this.h(fi, fj), Z = this.z0 + fj * this.spacing;
+          const fx = X - tri[0], fy = Y - tri[1], fz = Z - tri[2];
           bend = fx * n3[0] + fy * n3[1] + fz * n3[2];
+          fold(tri, n3, e, X, Y, Z, folds, 2 * e);
         }
       }
       const ex = (bi - ai) * this.spacing, ey = this.h(bi, bj) - this.h(ai, aj), ez = (bj - aj) * this.spacing;

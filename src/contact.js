@@ -50,6 +50,21 @@
 // the same limit as before, with three rows where there were eight. One point
 // has no spread, so its twist is the patch's spinning friction above.
 //
+// SLIDING. Held at the circle, friction pushes straight against the anchor's
+// slide, as Coulomb's does: of every impulse on the circle, that one takes
+// the most energy out (the maximum dissipation principle). Scaling the
+// unheld impulse down to the circle does that only when the block pushes the
+// same both ways, as at a box face's middle. An anchor off to one side, a
+// box's corner resting alone, turns as it is pushed, so the block pushes one
+// way more readily than the other, and the scaled impulse settled, pass after
+// pass, where the block's inverse sends the slide (M v), not against it. A box
+// on ground rippled half a millimetre rests on a dozen manifolds, many one
+// corner each: their friction leaned up to 22 degrees off the slide, slowed
+// it 3% less than mu N, and a box half a degree short of friction's hold slid
+// on for good. So the impulse is the one on the circle the block's own
+// metric puts nearest the unheld one, which is the one whose slide it leaves
+// runs straight against it.
+//
 // The anchor is the points' centre, each point weighed by how near it is to
 // touching: fully within the tolerance, fading to nothing at twice it, as
 // Box3D weighs by its speculative distance. A point further off only matters
@@ -1471,8 +1486,33 @@ export function solve(world, c, h, bias) {
       let n1 = o1 - (tm[m3] * v1 + tm[m3 + 1] * v2), n2 = o2 - (tm[m3 + 1] * v1 + tm[m3 + 2] * v2);
       const limit = mu * pressed, l2 = n1 * n1 + n2 * n2;
       if (l2 > limit * limit) {
-        const scale = limit / Math.sqrt(l2);
-        n1 *= scale; n2 *= scale;
+        // Sliding: the impulse on the circle that leaves the anchor sliding
+        // straight against it (see SLIDING), by Newton's method on α in
+        // (I + α M) λ = λu, M the block's mass, λu the impulse unheld, as a
+        // trust region's step is found (Moré and Sorensen): 1/|λ| is near
+        // linear in α, and exactly so when M is a multiple of I, where one
+        // step gives what scaling λu down did. It is concave, so each step
+        // from α = 0 stays short of the answer and |λ| only falls towards the
+        // limit; it stops when a step no longer moves α on, at rounding, and
+        // takes |λ| the last hair to the limit by scaling, as before.
+        const ma = tm[m3], mb = tm[m3 + 1], mc = tm[m3 + 2];
+        let al = 0, x = n1, y = n2, ll = l2;
+        while (limit > 0) {
+          const ab = al * mb, d = (1 + al * ma) * (1 + al * mc) - ab * ab;
+          const px = ma * x + mb * y, py = mb * x + mc * y;
+          const wx = ((1 + al * mc) * px - ab * py) / d, wy = ((1 + al * ma) * py - ab * px) / d;
+          const lw = x * wx + y * wy;
+          if (!(lw > 0)) break;
+          const next = al + (Math.sqrt(ll) / limit - 1) * ll / lw;
+          if (!(next > al)) break;
+          al = next;
+          const ab2 = al * mb, d2 = (1 + al * ma) * (1 + al * mc) - ab2 * ab2;
+          x = ((1 + al * mc) * n1 - ab2 * n2) / d2; y = ((1 + al * ma) * n2 - ab2 * n1) / d2;
+          ll = x * x + y * y;
+          if (!(ll > limit * limit)) break;
+        }
+        const scale = limit / Math.sqrt(ll);
+        n1 = x * scale; n2 = y * scale;
         c.sliding[m] = 1;
       } else {
         c.sliding[m] = 0;

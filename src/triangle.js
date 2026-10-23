@@ -32,6 +32,18 @@
 // clipping makes on a seam lies inside the surface the triangles make
 // together, not at its edge, so it too is left out: the box's own corners,
 // wherever they lie, are what holds it.
+//
+// FOLDS. Past a corner, the same holds by its fold (mesh.js, FOLDS): the
+// normals a contact at an edge can have run from this triangle's face to the
+// triangle across's, and no further. One leaning further out means the shape
+// is over the triangle across, which holds it; one leaning back, over this
+// one, whose face holds it. Either is left out (beside()). On ground rippled
+// half a millimetre a box sliding downhill met the next triangle side-on, by
+// the closest points, an edge against an edge or its own front face, with a
+// normal along the ground, and stopped as at a wall, where it would have
+// slid over the fold. Only normals of the shape's own choosing are asked:
+// the closest points, an edge against an edge, the shape's own face. The
+// triangle's own face is always within what its edges allow.
 
 import { Shape, Manifold, Placed, SPHERE, CAPSULE, HULL, TRIANGLE, MAX_POINTS } from './collide.js';
 import { closest, Closest } from './gjk.js';
@@ -42,6 +54,10 @@ const near = new Closest();
 // The triangle turned to face the shape, and its corners, for the helpers below.
 const up = new Float64Array(3), P = new Float64Array(9);
 let corners = 0;   // which edges are corners from the shape's side, bit e for edge e
+// The triangle's front normal (ahead), and its edges' folds (mesh.js fold(): two numbers an edge), or
+// null for a triangle met alone, as queries meet them, with its seams in BARE, where nothing is asked of folds.
+const ahead = new Float64Array(3);
+let folds = null;
 /**
  * Added to the id of a point made by the triangle's own features, so the same
  * feature of two triangles doesn't share an id: (t + 1) * 512, past the 9
@@ -53,11 +69,13 @@ let mix = 0;
 /** The most points one triangle can give: a 4-sided face clipped by 3 planes, or a triangle by 4, has at most 7 sides. */
 const MOST = 7;
 
-export function touch(s, t, flags, margin, tolerance, out, tri) {
+export function touch(s, t, flags, fold, margin, tolerance, out, tri) {
   out.count = 0;
   mix = (tri + 1) * 512;
   P.set(t.points);
+  folds = fold;
   const nx = t.axes[0], ny = t.axes[1], nz = t.axes[2];
+  ahead[0] = nx; ahead[1] = ny; ahead[2] = nz;
   const front = (s.center[0] - P[0]) * nx + (s.center[1] - P[1]) * ny + (s.center[2] - P[2]) * nz >= 0;
   const k = front ? 1 : -1;
   up[0] = k * nx; up[1] = k * ny; up[2] = k * nz;
@@ -79,6 +97,60 @@ function seam(region) {
   if (region >= 3) return (corners >> (region - 3) & 1) === 0;
   // Corner v is where edge v (from it) and edge v - 1 (into it) meet.
   return (corners >> region & 1) === 0 && (corners >> ((region + 2) % 3) & 1) === 0;
+}
+
+/**
+ * Whether a contact at (x, y, z) on the triangle, its normal (nx, ny, nz)
+ * from the triangle out to the shape, leans out of what an edge within the
+ * tolerance of it allows (see FOLDS). Past a corner a normal may lean as far
+ * as the triangle across does, and no further (its fold, mesh.js fold()):
+ * leaning further, the shape is over that triangle. Past a seam it may not
+ * lean at all, since the triangle across runs on flat or rises; seam() leaves
+ * out most such points already, but asks only the edge region() names. The
+ * face's own normal leans nowhere, so a ball resting on a face beside a seam
+ * keeps it. And at an edge, away from the corners, a normal may not lean
+ * back over this triangle either: the shape is over this triangle, whose
+ * face holds it (box() and hull() take the face when nothing else is left),
+ * as a box's front face, a few centimetres short of a triangle running on
+ * under the box, held it off the triangle's far corner, raised a hair. Near a
+ * corner a lean back from one edge can be a lean past the other, beyond the
+ * corner, so only leaning past is asked there.
+ *
+ * Every edge within the tolerance is asked, not only the one region() names:
+ * near a corner, a point found on one edge is within the tolerance of the
+ * other, and a box's edge meeting a long edge just past a sharp corner, its
+ * normal along the ground, was named by the short edge, past which it leans
+ * nowhere. An edge with no triangle across has no fold, (0, 0), and allows
+ * any lean out. FLAT, the angle within which a fold counts as none, is how far
+ * a normal must lean, as a seam is flat to within it: rounding can tip the
+ * face's own normal either way.
+ */
+function beside(x, y, z, nx, ny, nz, tolerance) {
+  if (folds === null) return false;
+  const t2 = tolerance * tolerance;
+  let near = 0, back = false;
+  for (let e = 0; e < 3; e++) {
+    const a = 3 * e, b = 3 * ((e + 1) % 3), c = 3 * ((e + 2) % 3);
+    const ex = P[b] - P[a], ey = P[b + 1] - P[a + 1], ez = P[b + 2] - P[a + 2];
+    const px = x - P[a], py = y - P[a + 1], pz = z - P[a + 2];
+    // Within the tolerance of the edge, its ends included.
+    const ee = ex * ex + ey * ey + ez * ez, f = Math.max(0, Math.min(1, (px * ex + py * ey + pz * ez) / ee));
+    const qx = px - f * ex, qy = py - f * ey, qz = pz - f * ez;
+    if (qx * qx + qy * qy + qz * qz > t2) continue;
+    near++;
+    // This triangle's outward square to the edge, in its plane: away from its third corner.
+    let mx = ey * ahead[2] - ez * ahead[1], my = ez * ahead[0] - ex * ahead[2], mz = ex * ahead[1] - ey * ahead[0];
+    if (mx * (P[c] - P[a]) + my * (P[c + 1] - P[a + 1]) + mz * (P[c + 2] - P[a + 2]) > 0) { mx = -mx; my = -my; mz = -mz; }
+    const l = Math.sqrt(mx * mx + my * my + mz * mz), out = (nx * mx + ny * my + nz * mz) / l;
+    if (out < -FLAT) back = true;
+    // The sine of the lean past the triangle across's own side of the edge:
+    // n · g, g the way into it (fold()), in this triangle's frame, where the
+    // front normal stands for either side's, g being fixed. A seam allows no
+    // lean past it, as if the triangle across ran on flat.
+    const seamed = (corners >> e & 1) === 0, gm = seamed ? 1 : folds[2 * e], gn = seamed ? 0 : folds[2 * e + 1];
+    if (gm * out + gn * (nx * ahead[0] + ny * ahead[1] + nz * ahead[2]) > FLAT) return true;
+  }
+  return near === 1 && back;
 }
 
 /** Which region of the triangle a point on it lies in, to within the tolerance. */
@@ -167,6 +239,8 @@ function sphere(s, t, margin, tolerance, out) {
     where = FACE;
   } else if (d > r / 67108864) {   // past rounding (2^-26 of the radius): a direction of its own
     nx /= d; ny /= d; nz /= d;
+    // Over the triangle across a fold: it holds the ball (see FOLDS).
+    if (beside(Q[0], Q[1], Q[2], nx, ny, nz, tolerance)) return;
     sep = d - r;
   } else {
     // Its centre on the triangle: the face's direction.
@@ -214,12 +288,14 @@ function capsule(s, t, margin, tolerance, out) {
   const c = s.center, a = s.axes, r = s.half[0], h = s.half[1];
   // The closest points of the cores: the capsule's segment and the triangle.
   const d = closest(s, t, near);
-  let nx, ny, nz, sep, where;
+  let nx, ny, nz, sep, where, held = false;
   const apart = d > r / 67108864;
   if (apart) {
     nx = (near.a[0] - near.b[0]) / d; ny = (near.a[1] - near.b[1]) / d; nz = (near.a[2] - near.b[2]) / d;
     sep = d - r;
     where = region(near.b[0], near.b[1], near.b[2], tolerance);
+    // Nearest at an edge, leaning over the triangle across it: as at a seam (see FOLDS).
+    held = seam(where) || beside(near.b[0], near.b[1], near.b[2], nx, ny, nz, tolerance);
   }
   // Lying over the triangle: its segment, clipped to the prism over the
   // triangle, rests on the face at both ends, as a capsule lies on a box.
@@ -239,7 +315,7 @@ function capsule(s, t, margin, tolerance, out) {
   // the whole capsule reaches no deeper along it, or one tilted down past the
   // triangle's edge, nearest the edge, would be pushed the long way out.
   const whole = Math.min(k * e0, k * e1) - r;
-  if (over && (!apart || seam(where) || (face <= sep + tolerance && whole >= sep - tolerance))) {
+  if (over && (!apart || held || (face <= sep + tolerance && whole >= sep - tolerance))) {
     const ux = k * up[0], uy = k * up[1], uz = k * up[2];
     aim(out, -ux, -uy, -uz);
     for (let e = 0; e < 2; e++) {
@@ -254,7 +330,7 @@ function capsule(s, t, margin, tolerance, out) {
   }
   // Nearest at a seam, and not over this triangle: it is over the triangle
   // beside, whose face holds it, as for a box (see closestPoints).
-  if (!apart || seam(where) || sep > margin) return;
+  if (!apart || held || sep > margin) return;
   aim(out, -nx, -ny, -nz);
   const m = r + sep / 2;
   add(out, near.a[0] - nx * m, near.a[1] - ny * m, near.a[2] - nz * m, sep, where);
@@ -464,7 +540,7 @@ function boxFace(b, k, sign, margin, tolerance, out) {
   for (let i = 0; i < n; i++) {
     const x = src[3 * i], y = src[3 * i + 1], z = src[3 * i + 2];
     const sep = (x - c[0]) * ux + (y - c[1]) * uy + (z - c[2]) * uz - h[k];
-    if (sep > margin || seam(region(x, y, z, tolerance))) continue;
+    if (sep > margin || seam(region(x, y, z, tolerance)) || beside(x, y, z, -ux, -uy, -uz, tolerance)) continue;
     add(out, x - ux * sep / 2, y - uy * sep / 2, z - uz * sep / 2, sep, mix + 64 + srcId[i]);
   }
   // Touching the box's face only where this triangle has seams: the
@@ -499,7 +575,7 @@ function edgeContact(b, k, e, nx, ny, nz, margin, tolerance, out) {
   s = Math.max(-h[k], Math.min(h[k], uv * w - ur));
   const bx = ox + s * ux, by = oy + s * uy, bz = oz + s * uz;
   const tx = P[a] + w * vx, ty = P[a + 1] + w * vy, tz = P[a + 2] + w * vz;
-  if (seam(region(tx, ty, tz, tolerance))) return false;
+  if (seam(region(tx, ty, tz, tolerance)) || beside(tx, ty, tz, -nx, -ny, -nz, tolerance)) return false;
   const sep = (tx - bx) * nx + (ty - by) * ny + (tz - bz) * nz;
   if (sep > margin) return false;
   aim(out, nx, ny, nz);
@@ -518,8 +594,10 @@ function edgeContact(b, k, e, nx, ny, nz, margin, tolerance, out) {
  */
 function closestPoints(b, t, margin, tolerance, out) {
   const d = closest(b, t, near);
-  if (!(d > 0) || d > margin || seam(region(near.b[0], near.b[1], near.b[2], tolerance))) return;
+  if (!(d > 0) || d > margin) return;
   const nx = (near.b[0] - near.a[0]) / d, ny = (near.b[1] - near.a[1]) / d, nz = (near.b[2] - near.a[2]) / d;
+  if (seam(region(near.b[0], near.b[1], near.b[2], tolerance))
+    || beside(near.b[0], near.b[1], near.b[2], -nx, -ny, -nz, tolerance)) return;
   aim(out, nx, ny, nz);
   add(out, near.a[0] + nx * d / 2, near.a[1] + ny * d / 2, near.a[2] + nz * d / 2, d, mix + 255);
 }
@@ -706,7 +784,7 @@ function hullFace(f, margin, tolerance, out) {
   for (let k = 0; k < n; k++) {
     const x = src[3 * k], y = src[3 * k + 1], z = src[3 * k + 2];
     const sep = x * nx + y * ny + z * nz - d;
-    if (sep > margin || seam(region(x, y, z, tolerance))) continue;
+    if (sep > margin || seam(region(x, y, z, tolerance)) || beside(x, y, z, -nx, -ny, -nz, tolerance)) continue;
     add(out, x - nx * sep / 2, y - ny * sep / 2, z - nz * sep / 2, sep, mix + 64 + srcId[k]);
   }
   if (out.count > 0) aim(out, nx, ny, nz);
@@ -729,7 +807,7 @@ function hullEdge(k, e, nx, ny, nz, margin, tolerance, out) {
   if (w < 0) { w = 0; s = Math.max(0, Math.min(1, -ur / uu)); } else if (w > 1) { w = 1; s = Math.max(0, Math.min(1, (uv - ur) / uu)); }
   const bx = ox + s * ux, by = oy + s * uy, bz = oz + s * uz;
   const tx = P[a] + w * vx, ty = P[a + 1] + w * vy, tz = P[a + 2] + w * vz;
-  if (seam(region(tx, ty, tz, tolerance))) return;
+  if (seam(region(tx, ty, tz, tolerance)) || beside(tx, ty, tz, -nx, -ny, -nz, tolerance)) return;
   const sep = (tx - bx) * nx + (ty - by) * ny + (tz - bz) * nz;
   if (sep > margin) return;
   // Apart and nearest off an edge's end: the closest points take it.
@@ -761,7 +839,7 @@ export class Touches {
 
 const tri = new Shape();
 tri.kind = TRIANGLE;
-const local = new Float64Array(9);
+const local = new Float64Array(9), FOLDS = new Float64Array(6);
 const one = {
   count: 0, normal: new Float64Array(3), points: new Float64Array(3 * MOST),
   separations: new Float64Array(MOST), ids: new Uint32Array(MOST),
@@ -790,7 +868,7 @@ function visit(t) {
   tri.center[1] = (p[1] + p[4] + p[7]) / 3;
   tri.center[2] = (p[2] + p[5] + p[8]) / 3;
   triangleNormal(p, tri.axes);
-  if (touch(shape, tri, geometry.edge(t), margin_, tolerance_, one, t) === 0) return;
+  if (touch(shape, tri, geometry.edge(t, FOLDS), FOLDS, margin_, tolerance_, one, t) === 0) return;
   const nx = one.normal[0], ny = one.normal[1], nz = one.normal[2];
   let g = 0;
   while (g < groups && normals[3 * g] * nx + normals[3 * g + 1] * ny + normals[3 * g + 2] * nz < 1 - SAME) g++;
