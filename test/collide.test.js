@@ -371,11 +371,14 @@ test('every point sits midway between the two surfaces, never out in the open', 
   // lying tilted on a box's face keeps the ball around each end of its
   // clipped segment off the face: a true constraint, since the ball is part of
   // the capsule, but that ball's lowest point is inside the capsule, not on it.
+  // A box pair's points may sit off the incident box by up to the tolerance:
+  // a corner past the reference face's side by no more than that is snapped
+  // onto the side, keeping its id, rather than cut (collide.js clipPolygon).
   for (const [ka, kb] of PAIRS) {
     for (let k = 0; k < 400; k++) {
       const a = randomShape(ka), b = randomShape(kb);
       const r = run(a, b, MARGIN, TOLERANCE);
-      const slack = ka === 'capsule' && kb === 'capsule' ? TOLERANCE : 0;
+      const slack = (ka === 'capsule' && kb === 'capsule') || (ka === 'box' && kb === 'box') ? TOLERANCE : 0;
       const ballOfA = ka === 'capsule' && kb === 'box';
       for (const { p, s } of r.points) {
         const onA = sd(a, p.map((v, i) => v - r.normal[i] * s / 2));

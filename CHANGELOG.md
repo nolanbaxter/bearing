@@ -36,7 +36,9 @@ All notable changes to Bearing are recorded here. The format follows
   once. Static and kinematic bodies are not moved by them.
 - Collision. Every pair of box, sphere and capsule gets exact contact points, found before the
   shapes touch, and a soft-step solver keeps them apart: bodies rest, stack, slide and bounce. A
-  210-box pyramid stands within 1.5 mm of where it was built; a box on a slope holds until tan θ
+  210-box pyramid stands within a tenth of a millimetre of where it was built (contact points keep
+  their names from step to step even where faces line up exactly, so each keeps what it carried
+  over); a box on a slope holds until tan θ
   passes its friction and then slides at exactly g (sin θ − μ cos θ); balls with restitution 1 keep
   their momentum and energy. Kinematic bodies push dynamic ones and carry what stands on them.
 - Body options `friction` (0.5), `restitution` (0), `damping`, `angularDamping` and `gravityScale`.

@@ -198,6 +198,12 @@ These were made with Nolan and override the rules below where they differ.
   rule's rest pose is taken again every whole `SLEEP_TIME` still (`_sleep`), so a body is still
   while it strays under a pixel in any second: without that, out-of-step creepers under 5 mm/s
   kept one big island awake. No API change.
+- **Contact ids hold under ties** (2026-10-23, the point-label fix): in `collide.js`, a clipped
+  corner past a side plane by no more than the contact `tolerance` is snapped onto it and keeps its
+  own id (`clipPolygon`, `clipSides`, the edge line records alike), and `reducePoints` starts from
+  the smallest id within the tolerance of the deepest, not the deepest by rounding. Exactly aligned
+  stacks lost 59 ids in 600 steps and the pyramid 8,840; now none. `triangle.js` clips on its own
+  and may want the same.
 - **Solver turning terms and locals** (2026-10-22, milestone 16 step 2): Contacts `jac`, `J` = 36
   numbers a point (for n, t1, t2: ra x d, rb x d, Ia⁻¹(ra x d), Ib⁻¹(rb x d)), filled by `lever()` in
   `prepare()`, which also gives the effective masses. `closing()`/`push()` read it; `solve()` and

@@ -28,24 +28,25 @@ test('a box dropped flat on the floor comes to rest where it lands, without slid
 });
 
 test('a stack of 10 boxes stands for 10 seconds', () => {
-  // Measured with the default 8 substeps and friction solved once a contact
-  // (milestone 16): no box strays more than 1.07 mm (0.88 with friction at
-  // each point), the top sinks 6.9 mm in all (about 0.7 mm a contact), and all
-  // is still by the end. 1.5 mm is the pyramid's limit below.
+  // Measured with the default 8 substeps: no box strays 0.06 mm, the top sinks
+  // 6.9 mm in all (about 0.7 mm a contact), and all is still by the end. (The
+  // top strayed 0.9 to 1.1 mm while rounding changed the contact points' ids
+  // from step to step: see collide.js clipPolygon.)
   const world = new World();
   ground(world);
   const boxes = [];
   for (let k = 0; k < 10; k++) boxes.push(world.addBody({ position: [0, 0.5 + k, 0] }));
   steps(world, 10);
-  for (const [k, b] of boxes.entries()) assert.ok(sideways(b, [0, 0, 0]) < 0.0015, `box ${k} strayed`);
+  for (const [k, b] of boxes.entries()) assert.ok(sideways(b, [0, 0, 0]) < 0.001, `box ${k} strayed`);
   assert.ok(9.5 - boxes[9].position[1] < 0.01, `the top sank ${9.5 - boxes[9].position[1]}`);
   for (const b of boxes) assert.ok(speed(b) < 1e-3);
 });
 
 test('a pyramid of 210 boxes stands for 10 seconds', () => {
-  // 20 on the bottom row. Measured: no box strays 1.5 mm, which the default
-  // substeps were chosen to keep under half a box's tolerance (2.5 mm); the
-  // top sinks 8 mm over 20 rows; nothing still moves 1 mm/s.
+  // 20 on the bottom row. Measured: no box strays 0.07 mm (1.5 mm while
+  // rounding changed contact ids, which the default substeps were chosen to
+  // keep under half a box's tolerance, 2.5 mm); the top sinks 7.4 mm over 20
+  // rows; nothing still moves 1 mm/s.
   const world = new World();
   ground(world);
   const boxes = [], start = [];
@@ -356,5 +357,34 @@ test('a cube on its edge stands within its tolerance of balance, and tips over p
     const cube = world.addBody({ position: [-r * Math.sin(a - 45 * deg), r * Math.cos(a - 45 * deg), 0], rotation: [0, 0, Math.sin(a / 2), Math.cos(a / 2)] });
     steps(world, 10);
     assert.equal(cube.position[1] > 0.6, stands, `${past}° past balance`);
+  }
+});
+
+test('boxes and hulls stacked exactly in line, or turned 45° on each other, keep their contact points from step to step', () => {
+  // Each point's id carries its impulse into the next step (warm starting).
+  // Faces exactly on faces put every corner on a side, and rounding put it a
+  // hair inside or out, so ids changed and impulses were lost: 59 in 600 steps
+  // of this stack, 4,328 turned 45°, where rounding also picked which four of
+  // the eight points to keep. A lost id here is the pair's memory after one
+  // step holding an id it doesn't after the next, while it stays touching.
+  const cube = []; for (const z of [-0.5, 0.5]) for (const y of [-0.5, 0.5]) for (const x of [-0.5, 0.5]) cube.push(x, y, z);
+  for (const shape of [{}, { shape: 'hull', vertices: cube }]) {
+    for (const turn of [0, Math.PI / 4]) {
+      const world = new World({ sleeping: false });
+      ground(world);
+      for (let i = 0; i < 6; i++) world.addBody({ ...shape, position: [0, 0.5 + i, 0], rotation: [0, Math.sin(i % 2 ? turn / 2 : 0), 0, Math.cos(i % 2 ? turn / 2 : 0)] });
+      const pairs = world._pairs, before = new Map();
+      let lost = 0;
+      for (let n = 0; n < 120; n++) {
+        world.step(1 / 60);
+        for (let p = 0; p < pairs.count; p++) {
+          if (!pairs.touching[p]) continue;
+          const key = `${pairs.idA[p]}:${pairs.idB[p]}`, ids = [...pairs.pid.subarray(4 * p, 4 * p + pairs.points[p])];
+          for (const id of before.get(key) ?? []) if (!ids.includes(id)) lost++;
+          before.set(key, ids);
+        }
+      }
+      assert.equal(lost, 0, `${shape.shape ?? 'box'} turned ${turn}`);
+    }
   }
 });

@@ -29,7 +29,7 @@ density unless you give one), no tolerances to tune, and nothing to size in adva
   from the shape. Lopsided bodies tumble as real ones do, keeping their angular momentum exactly.
 - **Contacts**: exact contact points for every pair of shapes, friction that holds a box on a slope
   until it is steep enough to slide, bounces that settle, and stacks that stand. A 210-box pyramid
-  stands for as long as you like on the defaults, within 1.5 mm of where it was built.
+  stands for as long as you like on the defaults, within a tenth of a millimetre of where it was built.
 - **Thousands of bodies**: only bodies whose boxes overlap are tested. Bodies at rest go to sleep
   and cost nothing until something disturbs them, and `world.moved()` lists only the bodies a
   renderer has to draw again. 32 collision layers, with a mask per body for what it collides with.

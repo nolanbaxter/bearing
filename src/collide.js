@@ -739,9 +739,9 @@ function boxBox(a, b, margin, tolerance, out) {
   if (edgeI >= 0 && edgeSep > Math.max(faceA, faceB) + tolerance) {
     edgeContact(a, b, edgeI, edgeJ, enx, eny, enz, margin, out);
   } else if (faceB > faceA + tolerance) {
-    faceContact(b, a, axisB, true, margin, out);
+    faceContact(b, a, axisB, true, margin, tolerance, out);
   } else {
-    faceContact(a, b, axisA, false, margin, out);
+    faceContact(a, b, axisA, false, margin, tolerance, out);
   }
   // Apart, but within the margin, and neither a face nor a pair of edges gave
   // a point: the boxes are nearest at a corner, or at an edge's end. The
@@ -825,7 +825,7 @@ function support(X, h, nx, ny, nz) {
  * nearly opposite it. `flipped` is true when ref is the collide() call's b, so
  * the normal, which here points from ref to inc, is turned to point from a to b.
  */
-function faceContact(ref, inc, axis, flipped, margin, out) {
+function faceContact(ref, inc, axis, flipped, margin, tolerance, out) {
   const R = ref.axes, I = inc.axes, hr = ref.half, hi = inc.half;
   const dx = inc.center[0] - ref.center[0], dy = inc.center[1] - ref.center[1], dz = inc.center[2] - ref.center[2];
   const s = sign(dx * R[3 * axis] + dy * R[3 * axis + 1] + dz * R[3 * axis + 2]);
@@ -863,8 +863,8 @@ function faceContact(ref, inc, axis, flipped, margin, out) {
     const px = R[3 * c] * side, py = R[3 * c + 1] * side, pz = R[3 * c + 2] * side;
     const offset = px * ref.center[0] + py * ref.center[1] + pz * ref.center[2] + hr[c];
     count = src === 0
-      ? clipPolygon(polyA, featA, lineA, count, polyB, featB, lineB, px, py, pz, offset, plane)
-      : clipPolygon(polyB, featB, lineB, count, polyA, featA, lineA, px, py, pz, offset, plane);
+      ? clipPolygon(polyA, featA, lineA, count, polyB, featB, lineB, px, py, pz, offset, plane, tolerance)
+      : clipPolygon(polyB, featB, lineB, count, polyA, featA, lineA, px, py, pz, offset, plane, tolerance);
     src = 1 - src;
   }
   const poly = src === 0 ? polyA : polyB, feat = src === 0 ? featA : featB;
@@ -885,7 +885,7 @@ function faceContact(ref, inc, axis, flipped, margin, out) {
   if (n === 0) return;
   if (flipped) setNormal(out, -nx, -ny, -nz);
   else setNormal(out, nx, ny, nz);
-  reduce(n, nx, ny, nz, out);
+  reduce(n, nx, ny, nz, tolerance, out);
 }
 
 /**
@@ -894,8 +894,20 @@ function faceContact(ref, inc, axis, flipped, margin, out) {
  * made where an edge crosses the plane takes its feature from that edge's
  * line and the plane: incident edge e and plane k is 4 + 4e + k; side planes
  * j and k, a corner of the reference face, is 20 + 4 min + max.
+ *
+ * SNAPPED. A vertex past the plane by no more than the tolerance is kept, as
+ * itself, moved onto the plane, and stands in for the cut its edge out would
+ * have made. Without this, boxes stacked exactly in line have their corners
+ * on each other's sides, and rounding, which differs from step to step, puts
+ * each corner a hair inside or outside: kept as a corner one step, cut into
+ * two points named by edge and side the next, so the ids changed and the
+ * points lost their warm-started impulses (59 ids in 10 s of a stack of
+ * ten, enough to tip it rocking). Now an id changes only when the geometry
+ * does, by more than the tolerance, which is what the tolerance means here
+ * (see TOLERANCE above). The patch differs from the exact clip by slivers
+ * no wider than it.
  */
-function clipPolygon(src, sf, sl, count, dst, df, dl, px, py, pz, offset, plane) {
+function clipPolygon(src, sf, sl, count, dst, df, dl, px, py, pz, offset, plane, slack) {
   let n = 0;
   for (let v = 0; v < count; v++) {
     const w = (v + 1) % count;
@@ -903,14 +915,21 @@ function clipPolygon(src, sf, sl, count, dst, df, dl, px, py, pz, offset, plane)
     const bx = src[3 * w], by = src[3 * w + 1], bz = src[3 * w + 2];
     const da = ax * px + ay * py + az * pz - offset, db = bx * px + by * py + bz * pz - offset;
     const line = sl[v];   // the line edge v -> w lies on
-    if (da <= 0) {
-      dst[3 * n] = ax; dst[3 * n + 1] = ay; dst[3 * n + 2] = az;
+    if (da <= slack) {
+      if (da > 0) {
+        dst[3 * n] = ax - px * da; dst[3 * n + 1] = ay - py * da; dst[3 * n + 2] = az - pz * da;
+      } else {
+        dst[3 * n] = ax; dst[3 * n + 1] = ay; dst[3 * n + 2] = az;
+      }
       df[n] = sf[v];
-      // The edge leaving this vertex stays on its line, unless it is cut.
-      dl[n] = line;
+      // The edge leaving this vertex stays on its line, unless it is cut, or
+      // this vertex, snapped, stands in for the cut.
+      dl[n] = da > 0 && db > slack ? 4 + plane : line;
       n++;
     }
-    if ((da <= 0) !== (db <= 0)) {
+    // A cut only between a vertex truly inside and one past the slack: one
+    // within it is its own cut.
+    if ((da <= 0 && db > slack) || (da > slack && db <= 0)) {
       const t = da / (da - db);
       dst[3 * n] = ax + (bx - ax) * t; dst[3 * n + 1] = ay + (by - ay) * t; dst[3 * n + 2] = az + (bz - az) * t;
       df[n] = line < 4 ? 4 + 4 * line + plane : 20 + 4 * Math.min(line - 4, plane) + Math.max(line - 4, plane);
@@ -928,20 +947,30 @@ function clipPolygon(src, sf, sl, count, dst, df, dl, px, py, pz, offset, plane)
  * the one making the largest triangle with those two; and the one making the
  * largest on the other side (Gregorius). They hold the contact's area, which
  * is what keeps a box from rocking, with the deepest always among them. On
- * any tie, the first point found.
+ * any other tie, the first point found.
+ *
+ * "The deepest" is any point within the tolerance of the deepest, the one
+ * with the least id. A face resting flat on another has every point at the
+ * same depth, to rounding, and taking the strictly deepest let rounding pick
+ * a different start each step, and with it a different four: a box turned
+ * 45° on another, eight points, lost about seven ids a step. Ids come from
+ * the features, so the least is the same point from step to step; a box
+ * truly tipped has its deep side deeper than the tolerance, and starts there.
  */
-function reduce(n, nx, ny, nz, out) {
-  reducePoints(kept, keptSep, keptId, n, nx, ny, nz, out);
+function reduce(n, nx, ny, nz, tolerance, out) {
+  reducePoints(kept, keptSep, keptId, n, nx, ny, nz, tolerance, out);
 }
 
 /** reduce()'s work on any list of n points, with their separations and ids. */
-function reducePoints(kept, keptSep, keptId, n, nx, ny, nz, out) {
+function reducePoints(kept, keptSep, keptId, n, nx, ny, nz, tolerance, out) {
   if (n <= MAX_POINTS) {
     for (let k = 0; k < n; k++) addPoint(out, kept[3 * k], kept[3 * k + 1], kept[3 * k + 2], keptSep[k], keptId[k]);
     return;
   }
-  let a = 0;
-  for (let k = 1; k < n; k++) if (keptSep[k] < keptSep[a]) a = k;
+  let deepest = keptSep[0];
+  for (let k = 1; k < n; k++) if (keptSep[k] < deepest) deepest = keptSep[k];
+  let a = -1;
+  for (let k = 0; k < n; k++) if (keptSep[k] <= deepest + tolerance && (a < 0 || keptId[k] < keptId[a])) a = k;
   let b = -1, far = -1;
   for (let k = 0; k < n; k++) {
     const x = kept[3 * k] - kept[3 * a], y = kept[3 * k + 1] - kept[3 * a + 1], z = kept[3 * k + 2] - kept[3 * a + 2];
@@ -1171,8 +1200,8 @@ function hullHull(a, b, margin, tolerance, out) {
     }
   }
   if (ei >= 0 && edgeSep > Math.max(faceA, faceB) + tolerance) hullEdges(A, ei, B, ej, enx, eny, enz, margin, out);
-  else if (faceB > faceA + tolerance) hullFace(B, fb, A, true, margin, out);
-  else hullFace(A, fa, B, false, margin, out);
+  else if (faceB > faceA + tolerance) hullFace(B, fb, A, true, margin, tolerance, out);
+  else hullFace(A, fa, B, false, margin, tolerance, out);
   if (out.count === 0 && Math.max(faceA, faceB, edgeSep) > 0) nearest(a, b, 0, margin, out);
 }
 
@@ -1189,7 +1218,7 @@ const CUT = 1 << 20;
  * nearly opposite it. `flipped`: R is the collide() call's b, and the normal,
  * which points from R to I here, is turned to point from a to b.
  */
-function hullFace(R, rf, I, flipped, margin, out) {
+function hullFace(R, rf, I, flipped, margin, tolerance, out) {
   const rp = R.planes, ip = I.planes, rh = R.hull, ih = I.hull;
   const nx = rp[4 * rf], ny = rp[4 * rf + 1], nz = rp[4 * rf + 2], d = rp[4 * rf + 3];
   let inc = 0, least = Infinity;
@@ -1218,9 +1247,12 @@ function hullFace(R, rf, I, flipped, margin, out) {
     const ex = rv[q] - rv[p], ey = rv[q + 1] - rv[p + 1], ez = rv[q + 2] - rv[p + 2];
     const mx = ey * nz - ez * ny, my = ez * nx - ex * nz, mz = ex * ny - ey * nx;
     const offset = mx * rv[p] + my * rv[p + 1] + mz * rv[p + 2];
+    // The side's normal is as long as its edge (n is unit and square to it),
+    // so the tolerance, in metres, is measured in edge lengths too.
+    const length = Math.sqrt(mx * mx + my * my + mz * mz);
     count = src === 0
-      ? clipSides(clipP, featP, lineP, count, clipQ, featQ, lineQ, mx, my, mz, offset, j)
-      : clipSides(clipQ, featQ, lineQ, count, clipP, featP, lineP, mx, my, mz, offset, j);
+      ? clipSides(clipP, featP, lineP, count, clipQ, featQ, lineQ, mx, my, mz, offset, j, tolerance * length, length)
+      : clipSides(clipQ, featQ, lineQ, count, clipP, featP, lineP, mx, my, mz, offset, j, tolerance * length, length);
     src = 1 - src;
   }
   const poly = src === 0 ? clipP : clipQ, feat = src === 0 ? featP : featQ;
@@ -1238,16 +1270,17 @@ function hullFace(R, rf, I, flipped, margin, out) {
   if (n === 0) return;
   if (flipped) setNormal(out, -nx, -ny, -nz);
   else setNormal(out, nx, ny, nz);
-  reducePoints(keptP, keptS, keptI, n, nx, ny, nz, out);
+  reducePoints(keptP, keptS, keptI, n, nx, ny, nz, tolerance, out);
 }
 
 /**
  * clipPolygon's work for faces of any number of sides: the polygon in src
  * clipped to (x, y, z)·m <= offset, into dst; returns the count. A point
  * made by the cut is named by the line it was on and the plane, or the two
- * planes for a corner of the reference face.
+ * planes for a corner of the reference face. Snapped within `slack` as
+ * clipPolygon is; m is `length` long, not unit.
  */
-function clipSides(src, sf, sl, count, dst, df, dl, mx, my, mz, offset, plane) {
+function clipSides(src, sf, sl, count, dst, df, dl, mx, my, mz, offset, plane, slack, length) {
   let n = 0;
   for (let v = 0; v < count; v++) {
     const w = v + 1 < count ? v + 1 : 0;
@@ -1255,12 +1288,17 @@ function clipSides(src, sf, sl, count, dst, df, dl, mx, my, mz, offset, plane) {
     const bx = src[3 * w], by = src[3 * w + 1], bz = src[3 * w + 2];
     const da = ax * mx + ay * my + az * mz - offset, db = bx * mx + by * my + bz * mz - offset;
     const line = sl[v];
-    if (da <= 0) {
-      dst[3 * n] = ax; dst[3 * n + 1] = ay; dst[3 * n + 2] = az;
-      df[n] = sf[v]; dl[n] = line;
+    if (da <= slack) {
+      if (da > 0) {
+        const t = da / (length * length);
+        dst[3 * n] = ax - mx * t; dst[3 * n + 1] = ay - my * t; dst[3 * n + 2] = az - mz * t;
+      } else {
+        dst[3 * n] = ax; dst[3 * n + 1] = ay; dst[3 * n + 2] = az;
+      }
+      df[n] = sf[v]; dl[n] = da > 0 && db > slack ? CUT + plane : line;
       n++;
     }
-    if ((da <= 0) !== (db <= 0)) {
+    if ((da <= 0 && db > slack) || (da > slack && db <= 0)) {
       const t = da / (da - db);
       dst[3 * n] = ax + (bx - ax) * t; dst[3 * n + 1] = ay + (by - ay) * t; dst[3 * n + 2] = az + (bz - az) * t;
       df[n] = line < CUT ? CUT + 2 * (line * 4096 + plane) : 2 * CUT + 2 * (Math.min(line - CUT, plane) * 4096 + Math.max(line - CUT, plane));
