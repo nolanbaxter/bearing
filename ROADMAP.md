@@ -796,7 +796,8 @@ Winding's way, copied before the first one:
   Bearing spent 8. Three of their techniques built as experiments and measured against the code
   of the day, pinned to one P-core: friction once a manifold (box pile 8% faster, pyramid 11-12%,
   quality as good or better; landed, Nolan approved), a pair's manifold reused while its pose has
-  barely changed (the hull pile 27% faster, boxes no faster; to land for hull pairs only), and a
+  barely changed (the hull pile 27% faster, boxes no faster; landed 2026-10-23 for hull pairs only,
+  30% faster, kept only within the tolerance a fresh manifold is found to), and a
   manifold's normal points solved together as one small LCP (pile 8-10%, pyramid 10-12%, but it
   exposed contact ids flickering on exactly aligned stacks; to measure again once that is fixed).
   Sleeping sooner measured and not taken: 0.5 s froze slow starters (a box 0.1 deg past friction's

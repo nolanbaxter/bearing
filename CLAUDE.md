@@ -213,6 +213,14 @@ These were made with Nolan and override the rules below where they differ.
   `triangleFaceHull` takes its incident face the same way, but without the best-axis fallback:
   against one triangle the strictly best axis is often sideways off a seam, and heaps on a flat
   heightfield then never slept.
+- **Hull pairs keep their manifold** (2026-10-23, approved: "land 1 and 2"; Jolt's body pair
+  cache, parry's try_update_contacts): `reused()`/`remember()` in `contact.js`, rows in
+  `pairs.js` (`cache`, `cacheOf`, `uncache`; dropped on `forget`, removal and a new
+  `_pairEpoch`). Kept while `loss + 2 drift <= tolerance` and `drift + moving() <= tolerance`, the
+  drift measured from the pose it was found at; `Manifold.loss` is how far `collide()` let it fall
+  short of exact (a face kept on a tie, a corner left out), so a kept manifold is never worse than
+  a fresh one. Not for impact manifolds, meshes, heightfields or parts; boxes measured no faster.
+  Hull pile 30% faster pinned; FORMAT 3.
 - **Solver turning terms and locals** (2026-10-22, milestone 16 step 2): Contacts `jac`, `J` = 36
   numbers a point (for n, t1, t2: ra x d, rb x d, Ia⁻¹(ra x d), Ib⁻¹(rb x d)), filled by `lever()` in
   `prepare()`, which also gives the effective masses. `closing()`/`push()` read it; `solve()` and

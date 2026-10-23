@@ -263,12 +263,16 @@ export function narrow(world, pairs, broadphase, next, from) {
       p++;
       continue;
     }
-    load(world, a, shapeA);
-    load(world, b, shapeB);
-    if (!meet(world, a, b, null, null, tolerance, margin)) {
-      pairs.forget(p);
-      p++;
-      continue;
+    const hull = shape[a] === HULL_SHAPE || shape[b] === HULL_SHAPE;
+    if (!hull || !reused(world, pairs, p, a, b, tolerance)) {
+      load(world, a, shapeA);
+      load(world, b, shapeB);
+      if (!meet(world, a, b, null, null, tolerance, margin)) {
+        pairs.forget(p);
+        p++;
+        continue;
+      }
+      if (hull) remember(world, pairs, p, a, b);
     }
     // Static bodies are never awake, and _wake leaves them be.
     if (awake[a] !== awake[b]) world._wake(awake[a] ? b : a);
@@ -278,6 +282,199 @@ export function narrow(world, pairs, broadphase, next, from) {
   }
   return next.count;
 }
+
+/**
+ * REUSE. A hull pair (one body a hull, the other a box, a ball, a capsule
+ * or a hull; neither a mesh, a heightfield or one with parts) whose two
+ * bodies have barely moved against each other since the narrowphase last
+ * looked at it gets that manifold again, rebuilt from where
+ * its points sit on each body, instead of being found afresh: Jolt's body pair
+ * cache, and parry's try_update_contacts. Most of a settling pile's pairs, and
+ * every resting one's, are such pairs. Each point keeps its end on a, in a's
+ * frame, and its end on b, in b's frame; rebuilt, the two ends are placed
+ * where their bodies are now, the point is midway between them and its
+ * separation is how far apart they are along the normal, exactly as collide()
+ * reports one, and the normal turns with a. A ball's or a capsule's end is
+ * kept as its core (its centre, or the nearest point of its axis) and put
+ * back on its surface along the normal, for core()'s reason: a ball's surface
+ * point turns away as it rolls, and a contact point carried off to the side
+ * would push off-centre, a torque the true contact never has. A manifold
+ * found at the moment of impact isn't kept, and one whose bodies may have
+ * been reshaped, refiltered or joined since (World._pairEpoch) is dropped
+ * (pairs.js holds). A body moved by hand needs nothing of its own: the pose
+ * below is read from where the bodies are now, so a teleport is a drift like
+ * any other, and one kinematic body set by hand every step costs only its
+ * own pairs their kept manifolds, not every pair in the world.
+ *
+ * Only hull pairs keep one. Measured with every plain pair kept: 1,000
+ * hulls, whose collide() is separating axes over faces and edges, ran
+ * 27% faster, while boxes, a pyramid and terrain, whose collide() is about
+ * as cheap as the rebuild, ran no faster and stored about 300 bytes more a pair.
+ * Rebuilt or found, a manifold reaches emit() and carry() the same way, so
+ * the solver's anchor, twist, slip and warm start see no difference.
+ *
+ * How far it may have moved, and why. The drift is the most any point of the
+ * smaller body (in reach) has moved against the larger since the manifold was
+ * found: its centre's move in the larger's frame, plus the chord the turn
+ * between them sweeps at its reach, 2 sin(θ/2) r, read exactly off the turn's
+ * quaternion. Two rules, both from the tolerance, the pair's PIXEL that the
+ * narrowphase itself already decides within (collide.js, TOLERANCE):
+ *
+ *   2 drift ≤ tolerance. A kept point's two ends each moved with their bodies,
+ *   so its separation is off from the true one by at most the drift of each
+ *   end, twice the drift: within what the narrowphase lets a face win over a
+ *   nearly-as-good edge. Its place, the lever the solver pushes at, is off by
+ *   at most the drift, half a pixel.
+ *
+ *   drift + moving ≤ tolerance. A point the kept manifold lacks was further
+ *   than the margin when it was found, and the margin is at least the
+ *   tolerance, so it can come no nearer than tolerance - drift by the time the
+ *   step starts, and the step closes the pair by no more than moving() (the
+ *   same bound that asks for a time of impact): such a point still can't
+ *   touch by the step's end, so leaving it out loses nothing. A pair moving
+ *   fast enough to need a time of impact (moving > tolerance) never gets here.
+ *
+ *   loss + 2 drift ≤ tolerance, which holds the first rule in it. collide()
+ *   lets a hull's manifold fall short of the exact answer by up to the
+ *   tolerance (Manifold.loss): a face kept on a tie separates the hulls that
+ *   much less than the best axis does, and its deepest point is that much
+ *   shallower than the deepest corner under the face. Drift moves every
+ *   axis's and every corner's separation by up to 2 drift (each body's end of
+ *   it, as for a point), so a kept manifold falls short by loss + 2 drift: at
+ *   most the tolerance, the most a fresh collide() would. Without the loss, a
+ *   kept normal fell behind the best axis by up to 1.25 tolerances on rock
+ *   heaps (measured against brute-force separating axes over every face and
+ *   edge pair), and on heaps of rocks and boxes a kept manifold's deepest
+ *   point was up to 1.09 tolerances shallower than a fresh one's, missing a
+ *   corner a fresh collide() adds; with it, 0.80 and 0.99.
+ *
+ * The rules are measured against the pose the manifold was found at, not the
+ * last step's, so a slow creep can't add up past them unseen.
+ */
+function reused(world, pairs, p, a, b, tolerance) {
+  if (pairs.cache[p] === 0) return false;
+  const r = pairs.cache[p] - 1, count = pairs.cachePoints[r];
+  const g = relative(world, a, b), pose = pairs.cachePose, p7 = 7 * r;
+  const ex = POSE[0] - pose[p7], ey = POSE[1] - pose[p7 + 1], ez = POSE[2] - pose[p7 + 2];
+  // The turn since, conj(then) ⊗ now: its vector part is sin(θ/2) along the axis, either way round.
+  const cx = -pose[p7 + 3], cy = -pose[p7 + 4], cz = -pose[p7 + 5], cw = pose[p7 + 6];
+  const rx = POSE[3], ry = POSE[4], rz = POSE[5], rw = POSE[6];
+  const ux = cw * rx + cx * rw + cy * rz - cz * ry;
+  const uy = cw * ry + cy * rw + cz * rx - cx * rz;
+  const uz = cw * rz + cz * rw + cx * ry - cy * rx;
+  const drift = Math.sqrt(ex * ex + ey * ey + ez * ez) + 2 * Math.sqrt(ux * ux + uy * uy + uz * uz) * world._reach[g];
+  if (pairs.cacheLoss[r] + 2 * drift > tolerance || drift + moving(world, a, b) > tolerance) return false;
+  const pos = world._position, A = world._axes, a3 = 3 * a, b3 = 3 * b, a9 = 9 * a, b9 = 9 * b;
+  const local = pairs.cacheLocal, ln = pairs.cacheNormal, p3 = 3 * r;
+  const n = manifold.normal, lx = ln[p3], ly = ln[p3 + 1], lz = ln[p3 + 2];
+  const nx = A[a9] * lx + A[a9 + 3] * ly + A[a9 + 6] * lz;
+  const ny = A[a9 + 1] * lx + A[a9 + 4] * ly + A[a9 + 7] * lz;
+  const nz = A[a9 + 2] * lx + A[a9 + 5] * ly + A[a9 + 8] * lz;
+  n[0] = nx; n[1] = ny; n[2] = nz;
+  // A round end's core, put back on its surface: a's toward b, b's toward a.
+  const ra = rounded(world, a), rb = -rounded(world, b);
+  manifold.count = count;
+  for (let k = 0; k < count; k++) {
+    const o = 6 * (P * r + k), k3 = 3 * k;
+    const ax = local[o], ay = local[o + 1], az = local[o + 2], bx = local[o + 3], by = local[o + 4], bz = local[o + 5];
+    const pax = pos[a3] + A[a9] * ax + A[a9 + 3] * ay + A[a9 + 6] * az + nx * ra;
+    const pay = pos[a3 + 1] + A[a9 + 1] * ax + A[a9 + 4] * ay + A[a9 + 7] * az + ny * ra;
+    const paz = pos[a3 + 2] + A[a9 + 2] * ax + A[a9 + 5] * ay + A[a9 + 8] * az + nz * ra;
+    const pbx = pos[b3] + A[b9] * bx + A[b9 + 3] * by + A[b9 + 6] * bz + nx * rb;
+    const pby = pos[b3 + 1] + A[b9 + 1] * bx + A[b9 + 4] * by + A[b9 + 7] * bz + ny * rb;
+    const pbz = pos[b3 + 2] + A[b9 + 2] * bx + A[b9 + 5] * by + A[b9 + 8] * bz + nz * rb;
+    const s = (pbx - pax) * nx + (pby - pay) * ny + (pbz - paz) * nz, half = 0.5 * s;
+    manifold.separations[k] = s;
+    // Midway, on the line through a round end's core along the normal, where
+    // collide() puts a ball's or a capsule's points: the other end, kept on
+    // its own body, falls behind as a ball rolls on, and a point midway to it
+    // would push off-centre too.
+    if (rb !== 0) {
+      manifold.points[k3] = pbx - nx * half; manifold.points[k3 + 1] = pby - ny * half; manifold.points[k3 + 2] = pbz - nz * half;
+    } else if (ra !== 0) {
+      manifold.points[k3] = pax + nx * half; manifold.points[k3 + 1] = pay + ny * half; manifold.points[k3 + 2] = paz + nz * half;
+    } else {
+      manifold.points[k3] = (pax + pbx) * 0.5; manifold.points[k3 + 1] = (pay + pby) * 0.5; manifold.points[k3 + 2] = (paz + pbz) * 0.5;
+    }
+    manifold.ids[k] = pairs.cacheId[P * r + k];
+  }
+  shifted = false;
+  return true;
+}
+
+/** Keeps the manifold just found for pair p, for reused(); not one found at the moment of impact. */
+function remember(world, pairs, p, a, b) {
+  if (shifted) { if (pairs.cache[p] !== 0) pairs.uncache(p); return; }
+  const count = manifold.count, r = pairs.cacheOf(p);
+  pairs.cachePoints[r] = count;
+  relative(world, a, b);
+  const pose = pairs.cachePose, p7 = 7 * r;
+  for (let k = 0; k < 7; k++) pose[p7 + k] = POSE[k];
+  pairs.cacheLoss[r] = manifold.loss;
+  // Into a body's frame: the transpose of its axes, each axis dotted in turn.
+  const pos = world._position, A = world._axes, a3 = 3 * a, b3 = 3 * b, a9 = 9 * a, b9 = 9 * b;
+  const n = manifold.normal, nx = n[0], ny = n[1], nz = n[2], ln = pairs.cacheNormal, p3 = 3 * r;
+  ln[p3] = A[a9] * nx + A[a9 + 1] * ny + A[a9 + 2] * nz;
+  ln[p3 + 1] = A[a9 + 3] * nx + A[a9 + 4] * ny + A[a9 + 5] * nz;
+  ln[p3 + 2] = A[a9 + 6] * nx + A[a9 + 7] * ny + A[a9 + 8] * nz;
+  const local = pairs.cacheLocal;
+  for (let k = 0; k < count; k++) {
+    const o = 6 * (P * r + k), k3 = 3 * k, half = 0.5 * manifold.separations[k];
+    const px = manifold.points[k3], py = manifold.points[k3 + 1], pz = manifold.points[k3 + 2];
+    const ax = px - nx * half - pos[a3], ay = py - ny * half - pos[a3 + 1], az = pz - nz * half - pos[a3 + 2];
+    const bx = px + nx * half - pos[b3], by = py + ny * half - pos[b3 + 1], bz = pz + nz * half - pos[b3 + 2];
+    local[o] = A[a9] * ax + A[a9 + 1] * ay + A[a9 + 2] * az;
+    local[o + 1] = A[a9 + 3] * ax + A[a9 + 4] * ay + A[a9 + 5] * az;
+    local[o + 2] = A[a9 + 6] * ax + A[a9 + 7] * ay + A[a9 + 8] * az;
+    local[o + 3] = A[b9] * bx + A[b9 + 1] * by + A[b9 + 2] * bz;
+    local[o + 4] = A[b9 + 3] * bx + A[b9 + 4] * by + A[b9 + 5] * bz;
+    local[o + 5] = A[b9 + 6] * bx + A[b9 + 7] * by + A[b9 + 8] * bz;
+    cored(world, a, local, o);
+    cored(world, b, local, o + 3);
+    pairs.cacheId[P * r + k] = manifold.ids[k];
+  }
+}
+
+/** A ball's or a capsule's radius, the depth of its surface over its core; 0 for any other shape. */
+function rounded(world, s) {
+  const shape = world._shape[s];
+  return shape === SPHERE_SHAPE || shape === CAPSULE_SHAPE ? world._dims[3 * s] : 0;
+}
+
+/** A kept end at local[o..o+2], in slot s's frame, moved onto its core if it is round (see core()). */
+function cored(world, s, local, o) {
+  const shape = world._shape[s];
+  if (shape === SPHERE_SHAPE) { local[o] = 0; local[o + 1] = 0; local[o + 2] = 0; return; }
+  if (shape !== CAPSULE_SHAPE) return;
+  const half = (world._dims[3 * s + 1] - 2 * world._dims[3 * s]) * 0.5, y = local[o + 1];
+  local[o] = 0; local[o + 1] = y < -half ? -half : y > half ? half : y; local[o + 2] = 0;
+}
+
+/**
+ * The pose of a and b against each other, into POSE: the smaller body's
+ * centre in the larger's frame, then the larger's rotation undone from the
+ * smaller's, conj(qh) ⊗ qg. Which is which depends only on their reach, which
+ * only setBody changes, and that moves World._pairEpoch on, dropping the kept
+ * manifold. Measured in the larger one's frame, a point's drift is bounded
+ * by the smaller one's reach: a box on a 400 m floor is bounded by the box.
+ * Returns the smaller one.
+ */
+function relative(world, a, b) {
+  const h = world._reach[a] >= world._reach[b] ? a : b, g = h === a ? b : a;
+  const pos = world._position, A = world._axes, q = world._rotation, h3 = 3 * h, g3 = 3 * g, h9 = 9 * h, h4 = 4 * h, g4 = 4 * g;
+  const dx = pos[g3] - pos[h3], dy = pos[g3 + 1] - pos[h3 + 1], dz = pos[g3 + 2] - pos[h3 + 2];
+  POSE[0] = A[h9] * dx + A[h9 + 1] * dy + A[h9 + 2] * dz;
+  POSE[1] = A[h9 + 3] * dx + A[h9 + 4] * dy + A[h9 + 5] * dz;
+  POSE[2] = A[h9 + 6] * dx + A[h9 + 7] * dy + A[h9 + 8] * dz;
+  const ax = -q[h4], ay = -q[h4 + 1], az = -q[h4 + 2], aw = q[h4 + 3];
+  const bx = q[g4], by = q[g4 + 1], bz = q[g4 + 2], bw = q[g4 + 3];
+  POSE[3] = aw * bx + ax * bw + ay * bz - az * by;
+  POSE[4] = aw * by + ay * bw + az * bx - ax * bz;
+  POSE[5] = aw * bz + az * bw + ax * by - ay * bx;
+  POSE[6] = aw * bw - ax * bx - ay * by - az * bz;
+  return g;
+}
+const POSE = new Float64Array(7);
 
 /**
  * Whether shapeA and shapeB (slots a and b, or parts partA and partB of

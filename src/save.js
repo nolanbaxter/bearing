@@ -44,9 +44,11 @@ import { Parts, Part } from './collide.js';
  * The layout of the data world.save() writes. 2 since milestone 16, when a
  * pair's remembered friction and slip went from one per point to one per
  * contact (friction solved once a manifold); data of format 1 holds them per
- * point, and is refused rather than misread.
+ * point, and is refused rather than misread. 3 since a hull pair keeps its
+ * last manifold (pairs.js, cache): data of format 2 has none, and is refused
+ * rather than loaded without it.
  */
-export const FORMAT = 2;
+export const FORMAT = 3;
 
 /** The classes a world holds, by the name their objects are written under. */
 const CLASSES = { Slots, Broadphase, Tree, Pairs, Memory, Contacts, Joints, Forest, Events, Mesh, Heightfield, Hull, Parts, Part };

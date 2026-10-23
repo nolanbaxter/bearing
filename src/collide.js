@@ -177,6 +177,14 @@ export class Manifold {
     this.points = new Float64Array(3 * MAX_POINTS);
     this.separations = new Float64Array(MAX_POINTS);
     this.ids = new Uint32Array(MAX_POINTS);
+    // How far, in metres, the manifold falls short of the exact answer where
+    // the narrowphase let it, by up to the tolerance: the most of how much
+    // less its axis separates the shapes than the best axis does (a face kept
+    // on a tie, hullHull) and how much shallower its deepest point is than the
+    // deepest corner under the face (hullFace). Above 0 only for hulls (and
+    // boxes against them). contact.js's reused() reads it: a manifold found
+    // within a tie may be kept only while it stays within one.
+    this.loss = 0;
   }
 }
 
@@ -187,6 +195,7 @@ export class Manifold {
  */
 export function collide(a, b, margin, tolerance, out) {
   out.count = 0;
+  out.loss = 0;
   if (a.kind > b.kind) {
     // Every pair is written lower kind first; the other order is the same
     // contact seen from the other side, so the normal turns round.
@@ -1212,7 +1221,10 @@ function hullHull(a, b, margin, tolerance, out) {
   if (ei >= 0 && edgeSep > Math.max(faceA, faceB) + tolerance) hullEdges(A, ei, B, ej, enx, eny, enz, margin, out);
   else {
     const onB = faceB > faceA + tolerance, sure = !edgeBest && onB === bBest;
-    if (!hullFace(onB ? B : A, onB ? fb : fa, onB ? A : B, onB, margin, tolerance, out, sure) && !sure) {
+    if (hullFace(onB ? B : A, onB ? fb : fa, onB ? A : B, onB, margin, tolerance, out, sure)) {
+      const behind = Math.max(faceA, faceB, edgeSep) - (onB ? faceB : faceA);
+      if (behind > out.loss) out.loss = behind;
+    } else if (!sure) {
       if (edgeBest) hullEdges(A, ei, B, ej, enx, eny, enz, margin, out);
       else hullFace(bBest ? B : A, bBest ? fb : fa, bBest ? A : B, bBest, margin, tolerance, out, true);
     }
@@ -1325,6 +1337,14 @@ function hullFace(R, rf, I, flipped, margin, tolerance, out, sure) {
   if (flipped) setNormal(out, -nx, -ny, -nz);
   else setNormal(out, nx, ny, nz);
   reducePoints(keptP, keptS, keptI, n, nx, ny, nz, tolerance, out);
+  // Touching, the deepest point kept can be up to the tolerance shallower
+  // than the deepest corner: a corner past the face's side is added only
+  // beyond that, and reducePoints keeps a point within it of the deepest.
+  if (s <= tolerance) {
+    let kept = Infinity;
+    for (let j = 0; j < out.count; j++) if (out.separations[j] < kept) kept = out.separations[j];
+    if (kept - s > out.loss) out.loss = kept - s;
+  }
   return true;
 }
 

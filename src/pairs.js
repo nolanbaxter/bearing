@@ -55,6 +55,29 @@ export class Pairs {
     this.twist = new Float64Array(0);      // the manifold's rolling and twist friction, an angular impulse, world vector
     this.touching = new Uint8Array(0);     // 1 while its bodies touch, as of the last step that looked
     this.checked = new Float64Array(0);    // World._pairEpoch when it was last found pairable, its bodies the same (holds)
+    // A hull pair's kept manifold (contact.js, reused), by pair: 1 + its row
+    // in the cache below, or 0 for none. Only pairs with a hull keep one, so
+    // a pile of boxes or balls pays these four bytes a pair and nothing more.
+    this.cache = new Int32Array(0);
+    // The cache, one row a kept manifold, rows [0, cached) in use, each
+    // knowing its pair (owner) so a row given back is filled from the last,
+    // keeping them dense, and they shrink by the world's quarter rule. A row:
+    // its point count, the pose it was found at (the smaller body's centre in
+    // the larger's frame, then the larger's rotation undone from the
+    // smaller's), how far it fell short of exact (Manifold.loss), its normal
+    // in a's frame, and each point's end on a, in a's frame, and on b, in b's
+    // frame, and feature id. Kept in rows of their
+    // own, not columns beside every pair's, because a row is about 300 bytes
+    // and most pairs (boxes, balls, capsules) never fill one.
+    this.cached = 0;
+    this.cacheCapacity = 0;
+    this.cacheOwner = new Int32Array(0);
+    this.cachePoints = new Uint8Array(0);
+    this.cachePose = new Float64Array(0);
+    this.cacheLoss = new Float64Array(0);
+    this.cacheNormal = new Float64Array(0);
+    this.cacheLocal = new Float64Array(0);
+    this.cacheId = new Uint32Array(0);
     /** A mesh pair's Memory, by pair; null for any other pair. */
     this.memory = [];
     this.spare = [];
@@ -77,6 +100,7 @@ export class Pairs {
     this.points = resized(this.points, c);
     this.touching = resized(this.touching, c);
     this.checked = resized(this.checked, c);
+    this.cache = resized(this.cache, c);
     this.pid = resized(this.pid, c * P);
     this.normalImpulse = resized(this.normalImpulse, c * P);
     this.friction = resized(this.friction, c * 3);
@@ -178,7 +202,7 @@ export class Pairs {
     }
     const p = this.count;
     this._grow(p + 1);
-    this.a[p] = a; this.b[p] = b; this.idA[p] = ida; this.idB[p] = idb; this.points[p] = 0; this.touching[p] = 0;
+    this.a[p] = a; this.b[p] = b; this.idA[p] = ida; this.idB[p] = idb; this.points[p] = 0; this.touching[p] = 0; this.cache[p] = 0;
     this.checked[p] = w._pairEpoch;
     this.memory[p] = null;
     this._put(a, b, p);
@@ -189,6 +213,7 @@ export class Pairs {
   /** Takes pair p off the list; the pairs that fill its place come from the end of each run. */
   remove(p) {
     this.part(p);
+    if (this.cache[p] !== 0) this.uncache(p);
     this._delete(this._find(this.a[p], this.b[p]));
     const kept = this.memory[p];
     if (kept) { kept.count = 0; this.spare.push(kept); }
@@ -205,9 +230,47 @@ export class Pairs {
   /** Pair p touched nothing this step: nothing to start the next from, and no longer touching. */
   forget(p) {
     this.points[p] = 0;
+    if (this.cache[p] !== 0) this.uncache(p);
     const kept = this.memory[p];
     if (kept) kept.count = 0;
     this.part(p);
+  }
+
+  /** Pair p's row in the cache, 0-based, taken when it first keeps a manifold. */
+  cacheOf(p) {
+    if (this.cache[p] !== 0) return this.cache[p] - 1;
+    const r = this.cached++;
+    if (r === this.cacheCapacity) this._cacheAlloc(Math.max(16, 2 * r));
+    this.cacheOwner[r] = p;
+    this.cache[p] = r + 1;
+    return r;
+  }
+
+  /** Pair p keeps no manifold now: its row goes, and the last row fills its place. */
+  uncache(p) {
+    const r = this.cache[p] - 1, last = --this.cached;
+    this.cache[p] = 0;
+    if (r === last) return;
+    const q = this.cacheOwner[last];
+    this.cacheOwner[r] = q;
+    this.cache[q] = r + 1;
+    this.cachePoints[r] = this.cachePoints[last];
+    this.cachePose.copyWithin(7 * r, 7 * last, 7 * last + 7);
+    this.cacheLoss[r] = this.cacheLoss[last];
+    this.cacheNormal.copyWithin(3 * r, 3 * last, 3 * last + 3);
+    this.cacheLocal.copyWithin(6 * P * r, 6 * P * last, 6 * P * last + 6 * P);
+    this.cacheId.copyWithin(P * r, P * last, P * last + P);
+  }
+
+  _cacheAlloc(c) {
+    this.cacheOwner = resized(this.cacheOwner, c);
+    this.cachePoints = resized(this.cachePoints, c);
+    this.cachePose = resized(this.cachePose, 7 * c);
+    this.cacheLoss = resized(this.cacheLoss, c);
+    this.cacheNormal = resized(this.cacheNormal, 3 * c);
+    this.cacheLocal = resized(this.cacheLocal, 6 * P * c);
+    this.cacheId = resized(this.cacheId, P * c);
+    this.cacheCapacity = c;
   }
 
   /** Pair p is no longer touching: its end, if it was. */
@@ -240,6 +303,8 @@ export class Pairs {
     this.points[to] = this.points[from];
     this.touching[to] = this.touching[from];
     this.checked[to] = this.checked[from];
+    this.cache[to] = this.cache[from];
+    if (this.cache[to] !== 0) this.cacheOwner[this.cache[to] - 1] = to;
     this.pid.copyWithin(to * P, from * P, from * P + P);
     this.normalImpulse.copyWithin(to * P, from * P, from * P + P);
     this.friction.copyWithin(to * 3, from * 3, from * 3 + 3);
@@ -253,7 +318,9 @@ export class Pairs {
     if (i === j) return;
     swap(this.a, i, j, 1); swap(this.b, i, j, 1);
     swap(this.idA, i, j, 1); swap(this.idB, i, j, 1);
-    swap(this.points, i, j, 1); swap(this.touching, i, j, 1); swap(this.checked, i, j, 1);
+    swap(this.points, i, j, 1); swap(this.touching, i, j, 1); swap(this.checked, i, j, 1); swap(this.cache, i, j, 1);
+    if (this.cache[i] !== 0) this.cacheOwner[this.cache[i] - 1] = i;
+    if (this.cache[j] !== 0) this.cacheOwner[this.cache[j] - 1] = j;
     swap(this.pid, i, j, P); swap(this.normalImpulse, i, j, P); swap(this.friction, i, j, 3); swap(this.slip, i, j, 3); swap(this.twist, i, j, 3);
     const kept = this.memory[i];
     this.memory[i] = this.memory[j];
@@ -273,8 +340,10 @@ export class Pairs {
     // or joined or freed: each moves World._pairEpoch on. Until it does, a
     // pair found pairable stays so, and only its fat boxes are looked at.
     // Measured: see ROADMAP.md, milestone 16. A pair asleep through a change
-    // is checked when it is next looked at, its mark being older.
+    // is checked when it is next looked at, its mark being older. A kept
+    // manifold goes too: a body's shape may have changed under it.
     if (this.checked[p] !== w._pairEpoch) {
+      if (this.cache[p] !== 0) this.uncache(p);
       if (w._slots.slotOf(this.idA[p]) !== a || w._slots.slotOf(this.idB[p]) !== b) return false;
       if (!pairable(w, a, b)) return false;
       this.checked[p] = w._pairEpoch;
@@ -290,6 +359,11 @@ export class Pairs {
       this._alloc(c);
       this.memory.length = Math.min(this.memory.length, c);
       this.spare.length = 0;
+    }
+    if (this.cacheCapacity > 16 && this.cached <= this.cacheCapacity / 4) {
+      let c = 16;
+      while (c < this.cached) c *= 2;
+      this._cacheAlloc(c);
     }
     if (this.slots > 16 && 8 * this.count <= this.slots) {
       let s = 16;

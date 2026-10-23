@@ -181,5 +181,8 @@ All notable changes to Bearing are recorded here. The format follows
 - A body on a mesh or heightfield steps the same whatever was stepped before it. Contacts on
   terrain took the carried-back offsets of the last pair that had an impact, even one in another
   world, so a box on a mesh could rest 6 mm from where it rests in a fresh process.
+- Hull pairs that have barely moved against each other since the last step keep their contact
+  instead of finding it again, within the tolerance a fresh one is found to: a pile of 1,000 hulls
+  steps 30% faster. Saved worlds are now format 3; format 2 data is refused.
 - The `centerOfMass` option, `[x, y, z]` in the body's own frame or `null` for the shape's, moves
   any body's centre of mass, as a car's is lowered so it doesn't roll over.
