@@ -606,6 +606,19 @@ the same 10,000 hits to the same distances to the last bit; the walk is 29 of th
 the set 2. Rapier took 32.6 ms in the browser on 2026-10-14; `bench/RESULTS.md` is redone at the
 end of part A. Measured and left out: building `world.raycast`'s result once instead of for each
 nearer hit (no difference).
+(7) done (2026-10-26). `src/graph.js`: each step's manifolds take the lowest of 32 colours (the
+width of JavaScript's bitwise integers) free on their dynamic bodies, one `Math.clz32`, with an
+overflow solved after them; their rows are moved so each colour's lie together, ordered by b's
+slot, and every pass walks them straight through. Within a colour any order gives the same bits
+(tested by reversing every colour). Coloured afresh each step: kept colours measured no steadier
+for sleep or ids. Joints stay serial before the contacts (the forest is one exact factorisation;
+workers can split it by tree). Sleep and quality as before; at most 9 colours on piles and rocks,
+12 with chains, no overflow outside a slab carrying 49 boxes. Pinned, three runs: the 1,000- and
+8,000-box piles, hulls and chains even, the pyramid 2-4% and terrain 1-4% slower. Measured and
+left out: visiting the rows through a list in colour order (2-6% on the pyramid and terrain,
+12-14% at 8,000 boxes); one generic copy over every column (10% of a step, megamorphic); the
+solver-body gather into compact records (4-15% slower at 1,000 bodies, 2% at 8,000: the body
+columns already sit in L2, and workers can solve from them by slot).
 
 **17. Documentation ⬜**
 *Concepts:* writing reference documentation people can learn from.

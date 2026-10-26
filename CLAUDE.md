@@ -224,7 +224,16 @@ These were made with Nolan and override the rules below where they differ.
   the old update; pivoting capped at 2^count rounds. One-point manifolds keep the old update.
   `block` is scratch to `save()`. 16 normal solves a point a step against 36-52 swept. Pinned:
   pile 5-6% faster, pyramid 13-17%, hulls 2% slower, terrain even; sleep and qualx as before.
- (2026-10-23, the rocking bugs): `reducePoints` in `collide.js`
+- **Graph colouring** (2026-10-26, milestone 16 step 7): `src/graph.js` `colour()`, called in
+  `step()` after narrowing: per-body 32-bit masks (`_colours`, COLOURS = 32, the bitwise width),
+  lowest free colour by `Math.clz32`, OVERFLOW after them; `arrange()` moves the found columns
+  (`FOUND`) into colour runs (`starts`), sorted within a colour by b's slot (two 12-bit digits,
+  DIGITS = 4096, the high one only past 4,096 slots), one mover per array type (a generic one went
+  megamorphic, 10% of a step). Store, touched and restitution keep pair order through `c.row`.
+  All of it scratch to `save()`. Coloured afresh each step (kept colours measured no better).
+  Joints serial before contacts. No solver-body gather (measured slower). Any order within a
+  colour gives the same bits: that is what workers rely on.
+- **Four points, nearest first** (2026-10-23, the rocking bugs): `reducePoints` in `collide.js`
   and `reduce()` in `triangle.js` make each pick (farthest, then the largest triangle on each
   side) among pressed points (separation <= 0) first, then touching (within the tolerance), then
   the rest; with nothing overlapping, the points equal to the deepest stand in for pressed.

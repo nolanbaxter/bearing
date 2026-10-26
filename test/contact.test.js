@@ -183,6 +183,38 @@ test('off means off: where nothing touches, the contact solver never runs', () =
   assert.ok(world._solverSteps > 0);
 });
 
+test('no two manifolds of one colour share a moving body, and a slab carrying 49 boxes overflows and still holds them', () => {
+  // The slab touches the floor and 49 boxes: 50 manifolds on one dynamic
+  // body, more than the 32 colours (graph.js, MASKS), so some are solved in
+  // the overflow, and every box still rests on it.
+  const world = new World();
+  ground(world);
+  const slab = world.addBody({ size: [16, 0.5, 16], position: [0, 0.25, 0] });
+  const boxes = [];
+  for (let i = 0; i < 49; i++) boxes.push(world.addBody({ position: [(i % 7 - 3) * 2, 1, (Math.floor(i / 7) - 3) * 2] }));
+  let overflowed = 0;
+  for (let n = 0; n < 120; n++) {
+    world.step(1 / 60);
+    const c = world._contacts, type = world._type;
+    for (let k = 0; k < 32; k++) {
+      const seen = new Set();
+      for (let m = c.starts[k]; m < c.starts[k + 1]; m++) {
+        for (const s of [c.a[m], c.b[m]]) {
+          if (type[s] !== 0) continue;
+          assert.ok(!seen.has(s), `step ${n}: colour ${k} has body ${s} twice`);
+          seen.add(s);
+        }
+      }
+    }
+    overflowed = Math.max(overflowed, c.starts[33] - c.starts[32]);
+  }
+  assert.ok(overflowed >= 50 - 32, `${overflowed}`);
+  assert.ok(Math.abs(slab.position[1] - 0.25) < 0.005, `${slab.position[1]}`);
+  for (const b of boxes) assert.ok(Math.abs(b.position[1] - 1) < 0.01, `${b.position[1]}`);
+  steps(world, 2);
+  assert.ok(slab.asleep && boxes.every((b) => b.asleep));
+});
+
 test('taking a box out of a stack lets the ones above fall', () => {
   const world = new World();
   ground(world);

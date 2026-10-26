@@ -108,6 +108,7 @@ import { rotate, atan2 } from './core/math.js';
 import { resized } from './core/slots.js';
 import { impact, posed, UNSURE } from './impact.js';
 import { COMPLIANCE } from './forest.js';
+import { COLOURS, DIGITS } from './graph.js';
 
 const DYNAMIC = 0, STATIC = 1;
 const BOX = 0, SPHERE_SHAPE = 1, CAPSULE_SHAPE = 2, HULL_SHAPE = 3, MESH = 5;   // World's shape codes; a heightfield is 6
@@ -149,6 +150,10 @@ export class Contacts {
   constructor() {
     this.count = 0;
     this.capacity = 0;
+    /** Where each colour's run of `order` starts, the overflow's last, then the end (graph.js). */
+    this.starts = new Int32Array(COLOURS + 2);
+    /** One digit's counts while the rows are sorted by slot (graph.js, DIGIT). */
+    this.digits = new Int32Array(DIGITS + 1);
     this._alloc(0);
   }
 
@@ -161,6 +166,12 @@ export class Contacts {
     grow('key', Int32Array, m);    // which parts made it, as its Memory knows it again
     grow('partA', Int32Array, m); grow('partB', Int32Array, m);   // the part of a and of b it is on, or -1
     grow('points', Uint8Array, m);
+    // Its colour; once the rows are laid out colour by colour (graph.js,
+    // arrange), which manifold, in the order narrow() found them, each row
+    // holds (order), and the row each found manifold went to (row); and the
+    // room arrange() moves a column through, as wide as the widest it moves.
+    grow('colour', Int32Array, m); grow('order', Int32Array, m); grow('row', Int32Array, m);
+    grow('scratch', Float64Array, 3 * p);
     grow('normal', Float64Array, 3 * m); grow('t1', Float64Array, 3 * m); grow('t2', Float64Array, 3 * m);
     grow('friction', Float64Array, m); grow('restitution', Float64Array, m); grow('tolerance', Float64Array, m);
     // Rolling and spinning (contacts of one or two points; see PATCHES above):
@@ -852,14 +863,17 @@ function carry(from, p, next, m) {
  */
 export function store(world, c) {
   const pairs = world._pairs;
-  for (let m = 0; m < c.count; m++) {
+  // In the order narrow() found them (graph.js, arrange): a mesh or parts
+  // pair's manifolds then come together, in order.
+  for (let f = 0; f < c.count; f++) {
+    const m = c.row[f];
     slipped(world, c, m);
     const p = c.pair[m], sub = c.sub[m];
     if (sub < 0) {
       keep(pairs, p, c, m);
       continue;
     }
-    // A mesh or parts pair's manifolds come in order, so the last one sets the count.
+    // Those come in order, so the last one sets the count.
     const kept = pairs.memoryOf(p);
     kept.ensure(sub + 1);
     kept.count = sub + 1;
@@ -1295,7 +1309,8 @@ export function makeSoft(hertz, zeta, h, out = soft) {
 
 /**
  * Applies every point's accumulated impulse, at the start of each substep:
- * the warm start, which begins each substep at last time's answer.
+ * the warm start, which begins each substep at last time's answer. Colour by
+ * colour, as solve() goes, so it splits across threads the same way.
  */
 export function warmStart(world, c) {
   const v = world._velocity, w = world._angular, invI = world._invI, invMass = world._invMass, jac = c.jac;
@@ -1435,6 +1450,8 @@ export function solve(world, c, h, bias) {
   const inv = 1 / h;
   // A soft point's give over its own K_kk (see BLOCK): is/ms, and COMPLIANCE.
   const springy = soft.impulseScale / soft.massScale + COMPLIANCE;
+  // The rows lie colour by colour (graph.js): no two manifolds of one colour
+  // share a body the solve moves, so within a colour the order changes nothing.
   for (let m = 0; m < c.count; m++) {
     const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3, m3 = 3 * m;
     const nx = c.normal[m3], ny = c.normal[m3 + 1], nz = c.normal[m3 + 2];
@@ -1699,12 +1716,15 @@ export function solve(world, c, h, bias) {
  * pair's normal; and the fastest closing speed among its points at impact.
  */
 export function touched(world, pairs, c) {
-  const events = world._events, p3 = world._position, start = world._start;
-  for (let m = 0; m < c.count;) {
-    const p = c.pair[m];
-    // A mesh pair's manifolds come together; any one of them touching will do.
+  const events = world._events, p3 = world._position, start = world._start, row = c.row;
+  // In the order narrow() found them (graph.js, arrange), so events come in
+  // pair order and a mesh pair's manifolds come together.
+  for (let f = 0; f < c.count;) {
+    const p = c.pair[row[f]];
+    // Any one of a mesh pair's manifolds touching will do.
     let hit = -1;
-    for (; m < c.count && c.pair[m] === p; m++) {
+    for (; f < c.count && c.pair[row[f]] === p; f++) {
+      const m = row[f];
       if (hit >= 0) continue;
       let meets = c.gap[m] <= c.tolerance[m];
       for (let k = 0; k < c.points[m] && !meets; k++) meets = c.maxNormalImpulse[m * P + k] > 0;
@@ -1748,8 +1768,10 @@ function closing(v, w, a3, b3, jac, j, dx, dy, dz) {
  */
 export function restitution(world, c, gravity) {
   const v = world._velocity, w = world._angular, invI = world._invI, invMass = world._invMass;
-  for (let m = 0; m < c.count; m++) {
-    const e = c.restitution[m];
+  // In the order narrow() found them (graph.js, arrange): bounces aren't
+  // coloured, being once a step and only for bouncy manifolds.
+  for (let f = 0; f < c.count; f++) {
+    const m = c.row[f], e = c.restitution[m];
     if (e === 0) continue;
     const threshold = Math.sqrt(2 * gravity * c.tolerance[m]);
     const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3, m3 = 3 * m;

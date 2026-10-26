@@ -36,6 +36,7 @@ import {
   jointSoft, JOINT_STIFFNESS, JOINT_DAMPING_RATIO, plantJoints,
 } from './joints.js';
 import { Broadphase } from './broadphase.js';
+import { colour } from './graph.js';
 import { Pairs } from './pairs.js';
 import { Body } from './body.js';
 import {
@@ -260,6 +261,7 @@ const COLUMNS = [
   ['_staticMoved', Uint8Array, 1],   // 1 for a static body moved or changed since the last step
   ['_sensor', Uint8Array, 1],        // 1 for a sensor: it reports what it overlaps, and pushes nothing
   ['_lock', Uint8Array, 1],          // bit k: it never turns about world axis k
+  ['_colours', Int32Array, 1],       // while a step colours its manifolds: the colours this body's hold, as bits (graph.js)
   // Characters (character.js):
   ['_maxSlope', Float64Array, 1],
   ['_slopeCos', Float64Array, 1],    // cos(maxSlope): ground whose normal is this near up is walkable
@@ -853,6 +855,9 @@ export class World {
     next.trim();
     pairs.trim();
     const touching = next.count, held = jointed ? joints.active : 0;
+    // Coloured, and the rows laid out colour by colour, before anything else
+    // is worked out for them (graph.js).
+    if (touching > 0) colour(this, next);
     if (held > 0) plantJoints(this);
 
     const substeps = this._substeps, h = dt / substeps;

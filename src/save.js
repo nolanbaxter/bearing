@@ -39,6 +39,7 @@ import { Events } from './events.js';
 import { Mesh, Heightfield } from './mesh.js';
 import { Hull } from './hull.js';
 import { Parts, Part } from './collide.js';
+import { COLOURS, DIGITS } from './graph.js';
 
 /**
  * The layout of the data world.save() writes. 2 since milestone 16, when a
@@ -64,9 +65,13 @@ const TYPED_NAME = new Map(Object.entries(TYPED).map(([k, v]) => [v, k]));
  * Fields that are scratch, not state: the debug lines' buffer, made afresh by
  * the next call, and the contacts' turning terms (contact.js, J), worked out
  * afresh before each step reads them, 36 numbers a point, which would nearly
- * double a pile's save.
+ * double a pile's save; and the step's colours and solve order, and each
+ * body's colour mask (graph.js), made afresh by each step.
  */
-const SCRATCH = { World: new Set(['_lines', '_placed']), Contacts: new Set(['jac', 'fjac', 'block']) };
+const SCRATCH = {
+  World: new Set(['_lines', '_placed', '_colours']),
+  Contacts: new Set(['jac', 'fjac', 'block', 'colour', 'order', 'row', 'scratch', 'starts', 'digits']),
+};
 
 /** The world as plain, JSON-safe data. */
 export function save(world, World) {
@@ -148,7 +153,13 @@ export function load(data, World) {
     if (!(made[0] instanceof World)) throw new Error('no world first');
     made[0]._lines = new Float32Array(0);
     made[0]._placed = [];
-    for (const o of made) if (o instanceof Contacts) { o.jac = new Float64Array(o.normalMass.length * 12); o.fjac = new Float64Array(o.friction.length * 24); o.block = new Float64Array(o.normalMass.length * 4); }
+    made[0]._colours = new Int32Array(made[0]._type.length);
+    for (const o of made) {
+      if (!(o instanceof Contacts)) continue;
+      o.jac = new Float64Array(o.normalMass.length * 12); o.fjac = new Float64Array(o.friction.length * 24); o.block = new Float64Array(o.normalMass.length * 4);
+      o.colour = new Int32Array(o.a.length); o.order = new Int32Array(o.a.length); o.row = new Int32Array(o.a.length);
+      o.scratch = new Float64Array(o.point.length); o.starts = new Int32Array(COLOURS + 2); o.digits = new Int32Array(DIGITS + 1);
+    }
     return made[0];
   } catch (e) {
     return fail('load', `data is damaged: ${e.message}`);
