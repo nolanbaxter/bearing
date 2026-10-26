@@ -722,6 +722,12 @@ Winding's way, copied before the first one:
   placeholder or 0.1.0 itself.
 - What Winding has for a public repository: `CONTRIBUTING.md` (branches, tests, what a change
   includes, versions), `SECURITY.md`, `CODE_OF_CONDUCT.md`, and issue and pull request templates.
+- **Branding, made with Nolan just before the release** (Nolan, 2026-10-26): a logo and wordmarks
+  like Winding's (`docs/logo.svg`, `wordmark-light.svg`, `wordmark-dark.svg` in its repo: a small
+  flat SVG mark whose shape is the name's technical meaning, mid-tone colours that read on white
+  and on dark, the README's `<picture>` header), bear-themed. Ideas so far: a fish (Bearing, bear,
+  bear eats fish); a ball bearing; a bear's paw, whose pad and toes are circles like a bearing's
+  balls. Nolan is still thinking it over.
 
 ---
 
