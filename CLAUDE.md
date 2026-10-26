@@ -233,7 +233,17 @@ These were made with Nolan and override the rules below where they differ.
   All of it scratch to `save()`. Coloured afresh each step (kept colours measured no better).
   Joints serial before contacts. No solver-body gather (measured slower). Any order within a
   colour gives the same bits: that is what workers rely on.
-- **Four points, nearest first** (2026-10-23, the rocking bugs): `reducePoints` in `collide.js`
+- **Workers** (2026-10-26, milestone 16 step 8, API approved: "keep auto and land it"):
+  `src/core/jobs.js` (Winding's job system: epoch-tagged cursor, the stepping thread claims too,
+  2 s hang bound then one thread), `src/worker.js` runs `contact.js` `JOBS`. Split: warm start,
+  solve and relax per colour, `prepare()`, and plain pairs' narrowphase (verdict and record per
+  pair, emitted in pair order on the stepping thread). Everything else stays on one thread.
+  Shared arrays kept shared by `resized()`, re-sent only when one moved; workers start on the first
+  step with enough work, ready via Atomics, sleep between steps, spin within one, end on
+  `destroy()`/GC, unref'd in Node. `workers`: `'auto'` = max(1, floor(threads/2) - 1), `0`, or a
+  cap; not saved. Velocities written back only for bodies with inverse mass (shared statics).
+  Every threshold measured. Same bits with any count, tested (`test/workers.test.js`).
+ (2026-10-23, the rocking bugs): `reducePoints` in `collide.js`
   and `reduce()` in `triangle.js` make each pick (farthest, then the largest triangle on each
   side) among pressed points (separation <= 0) first, then touching (within the tolerance), then
   the rest; with nothing overlapping, the points equal to the deepest stand in for pressed.

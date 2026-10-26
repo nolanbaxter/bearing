@@ -30,7 +30,9 @@ import { volume, inertia as shapeInertia, hullMass, shifted, turnedTensor, matri
 import { build } from './hull.js';
 import {
   Contacts, PIXEL, narrow, store, inertias, prepare, makeSoft, warmStart, solve, restitution, touched, gapOf,
+  WORK, crowded,
 } from './contact.js';
+import { Jobs, cores, sharedMemory } from './core/jobs.js';
 import {
   Joints, Joint, addJoint, setJoint, jointOf, jointSlot, dropJoint, dropJointsOf, gather, warmStartJoints, solveJoints,
   jointSoft, JOINT_STIFFNESS, JOINT_DAMPING_RATIO, plantJoints,
@@ -76,7 +78,7 @@ const PART_OPTIONS = ['shape', 'size', 'radius', 'height', 'vertices', 'position
 const CUBE_CORNERS = [-0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5,
   -0.5, -0.5, 0.5, 0.5, -0.5, 0.5, -0.5, 0.5, 0.5, 0.5, 0.5, 0.5];
 
-const WORLD_OPTIONS = ['gravity', 'substeps', 'sleeping'];
+const WORLD_OPTIONS = ['gravity', 'substeps', 'sleeping', 'workers'];
 const DEBUG_OPTIONS = ['shapes', 'contacts', 'joints', 'boxes'];
 const RAY_OPTIONS = ['maxDistance', 'mask', 'ignore'];
 const CAST_OPTIONS = ['maxDistance', 'mask', 'ignore', 'rotation'];
@@ -161,6 +163,24 @@ const SLEEP_TIME = 1;
 // don't depend on how it spins, so it spins as fast as it is made to, unless
 // its centre of mass is off its centre and its centre swings round.
 const SPIN = Math.PI;
+
+// WORKERS (core/jobs.js). 'auto' is half the threads the machine reports,
+// less the one stepping the world, and at least one where there are two:
+// where a core runs two threads, the second shares its arithmetic, so one
+// worker a core. Measured on the i7-1260P (4 P-cores with two threads each,
+// 8 E-cores, 16 threads), steps of the 1,000-box pile and the pyramid were
+// 2.5 and 2.5 times as fast with 3 workers, 2.8 with 4, 3.3 and 3.2 with 7
+// (the rule's), 3.4 and 3.2 with 9, 3.3 and 3.0 with 11, and 2.5 and 2.0
+// with 15, every thread spinning against the system's own; the 8,000-box
+// pile, the rock heap and the terrain 2.4, 2.0 and 2.0 times with 3, 2.7,
+// 2.2 and 2.1 with 4, and 3.3, 2.4 and 2.2 with 7. A worker on the stepping
+// thread's own core made the pile 1.26 times as fast, and one on another
+// core 2.1. A number given is never more than the threads less one, since
+// more only wait on each other.
+const auto = (threads) => (threads < 2 ? 0 : Math.max(1, Math.floor(threads / 2) - 1));
+/** The worker module: Bearing's own code, in a thread of its own. */
+const WORKER = new URL('./worker.js', import.meta.url);
+
 const BODY_OPTIONS = [
   'type', 'shape', 'size', 'radius', 'height', 'vertices', 'indices', 'heights', 'columns', 'spacing', 'parts',
   'density', 'mass', 'inertia', 'centerOfMass',
@@ -327,6 +347,10 @@ export class World {
     /** Steps that ran the contact solver: for the off-means-off test, which reads it. */
     this._solverSteps = 0;
     this._sleeping = o.sleeping === undefined ? true : flag('World', 'sleeping', o.sleeping);
+    /** The workers setting as given, and the job system it makes, or null for none (see WORKERS). */
+    this._workers = 'auto';
+    this._jobs = null;
+    this._setWorkers('World', 'workers', o.workers === undefined ? 'auto' : o.workers);
     this._stepCount = 0;
     this._reset();
     /** Steps that looked for islands: for the off-means-off test, which reads it. */
@@ -431,6 +455,35 @@ export class World {
       // Still times stopped counting while it was off; they start again from now.
       for (let i = 0; i < this._awakeCount; i++) this._settle(this._awakeList[i]);
     }
+  }
+
+  /**
+   * How many threads besides this one may share a step's work: 'auto', or
+   * at most this many. Changing it ends the workers it had.
+   */
+  get workers() {
+    this._live('workers');
+    return this._workers;
+  }
+
+  set workers(value) {
+    this._live('workers');
+    this._setWorkers(null, 'world.workers', value);
+  }
+
+  /**
+   * Checks and sets the workers setting, and makes the job system for it:
+   * none for 0, where shared memory is missing, or on a machine of one
+   * thread. Its workers start later, when a step first has work for them.
+   */
+  _setWorkers(caller, name, value) {
+    if (value !== 'auto' && (!Number.isInteger(value) || value < 0)) {
+      fail(caller, `${name} must be 'auto' or a whole number, 0 or more, got ${show(value)}`);
+    }
+    if (this._jobs !== null && this._jobs !== undefined) this._jobs.destroy();
+    this._workers = value;
+    const threads = cores(), count = Math.min(value === 'auto' ? auto(threads) : value, threads - 1);
+    this._jobs = sharedMemory && count > 0 ? new Jobs(WORK, count, WORKER) : null;
   }
 
   get stepCount() {
@@ -844,6 +897,9 @@ export class World {
     // Joints the same way: one holding a sleeping body to an awake one wakes
     // it, and the joints to solve are those with an awake body (joints.js).
     next.count = 0;
+    next.onParts = 0;
+    next.wasPlain = next.plain;
+    next.plain = 0;
     let from = 0;
     const joints = this._joints, jointed = joints.count > 0;
     do {
@@ -873,26 +929,38 @@ export class World {
         startQ[s4] = q[s4]; startQ[s4 + 1] = q[s4 + 1]; startQ[s4 + 2] = q[s4 + 2]; startQ[s4 + 3] = q[s4 + 3];
       }
     }
-    if (touching > 0) {
-      this._solverSteps++;
-      prepare(this, next);
-      makeSoft(STIFFNESS / h, DAMPING_RATIO, h);
-    }
-    if (held > 0) {
-      this._jointSteps++;
-      makeSoft(JOINT_STIFFNESS / h, JOINT_DAMPING_RATIO, h, jointSoft);
-    }
-    // Joints before contacts, in each pass, as Box2D 3 orders them: a joint
-    // can't give, and a contact solved after it sees where it holds.
-    for (let sub = 0; sub < substeps; sub++) {
-      this._accelerate(h);
-      if (held > 0) warmStartJoints(this);
-      if (touching > 0) warmStart(this, next);
-      if (held > 0) solveJoints(this, h, true);
-      if (touching > 0) solve(this, next, h, true);
-      this._move(h);
-      if (held > 0) solveJoints(this, h, false);
-      if (touching > 0) solve(this, next, h, false);
+    // The workers (core/jobs.js) take their share of preparing the contacts
+    // and of each colour's solve, from here to the last substep, if the
+    // step's widest colour is worth them. Whatever happens, they go back to
+    // sleep after: left spinning, they would hold cores for nothing. Moving
+    // the bodies (_accelerate, _move) stays on this thread: measured, 1.1% of
+    // the landing pile's step and 0.6% of the pyramid's, so sharing it could
+    // save no more than that, for two more dispatches a substep.
+    const jobs = this._jobs, parallel = jobs !== null && jobs.begin(this, next, touching > 0 && crowded(next, jobs.least));
+    try {
+      if (touching > 0) {
+        this._solverSteps++;
+        prepare(this, next);
+        makeSoft(STIFFNESS / h, DAMPING_RATIO, h);
+      }
+      if (held > 0) {
+        this._jointSteps++;
+        makeSoft(JOINT_STIFFNESS / h, JOINT_DAMPING_RATIO, h, jointSoft);
+      }
+      // Joints before contacts, in each pass, as Box2D 3 orders them: a joint
+      // can't give, and a contact solved after it sees where it holds.
+      for (let sub = 0; sub < substeps; sub++) {
+        this._accelerate(h);
+        if (held > 0) warmStartJoints(this);
+        if (touching > 0) warmStart(this, next);
+        if (held > 0) solveJoints(this, h, true);
+        if (touching > 0) solve(this, next, h, true);
+        this._move(h);
+        if (held > 0) solveJoints(this, h, false);
+        if (touching > 0) solve(this, next, h, false);
+      }
+    } finally {
+      if (parallel) jobs.end();
     }
     if (touching > 0) {
       const g = this._gravity;
@@ -1517,10 +1585,12 @@ export class World {
     this._angular[s3] += v3[0]; this._angular[s3 + 1] += v3[1]; this._angular[s3 + 2] += v3[2];
   }
 
-  /** Lets go of every body and all storage. Using the world afterwards throws; calling this again does nothing. */
+  /** Lets go of every body and all storage, and ends its workers. Using the world afterwards throws; calling this again does nothing. */
   destroy() {
     if (this._destroyed) return;
     this._destroyed = true;
+    if (this._jobs !== null) this._jobs.destroy();
+    this._jobs = null;
     this._slots = new Slots();
     for (const [name, Type] of COLUMNS) this[name] = new Type(0);
     this._geometry = [];

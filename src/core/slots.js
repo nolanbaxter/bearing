@@ -130,9 +130,18 @@ export class Slots {
   }
 }
 
-/** A copy of `array` with room for `length` items: longer is zero-filled, shorter is cut. */
+// Absent on a browser page that isn't cross-origin isolated, where naming it would throw.
+const SHARED = globalThis.SharedArrayBuffer;
+
+/**
+ * A copy of `array` with room for `length` items: longer is zero-filled,
+ * shorter is cut. Shared memory stays shared (see core/jobs.js), so a column
+ * the workers read is one they can still read after it grows or shrinks.
+ */
 export function resized(array, length) {
-  const next = new array.constructor(length);
+  const next = SHARED !== undefined && array.buffer instanceof SHARED
+    ? new array.constructor(new SHARED(length * array.BYTES_PER_ELEMENT))
+    : new array.constructor(length);
   next.set(length < array.length ? array.subarray(0, length) : array);
   return next;
 }

@@ -91,7 +91,7 @@ Every call, setting and entry, A to Z by its name.
 
 **V** &nbsp; [`body.velocity`](#body-velocity)
 
-**W** &nbsp; [`new World()`](#world) · [`body.world`](#body-world) · [`joint.world`](#joint-world)
+**W** &nbsp; [`new World()`](#world) · [`world.workers`](#world-workers) · [`body.world`](#body-world) · [`joint.world`](#joint-world)
 
 <a id="world-class"></a>
 ## World
@@ -109,10 +109,11 @@ Makes an empty world, ready to step at once.
 | `gravity` | `[0, -9.81, 0]` | Acceleration of every dynamic body, in m/s². Earth's, pointing down Y. |
 | `substeps` | `8` | How many smaller steps each step is solved in. See [`world.substeps`](#world-substeps). |
 | `sleeping` | `true` | Whether bodies at rest go to sleep. See [`world.sleeping`](#world-sleeping). |
+| `workers` | `'auto'` | How many threads besides yours may share each step's work. See [`world.workers`](#world-workers). |
 
 Returns: the world.
 
-Throws: `World: options must be an object, got …`; `World: unknown option '…' (did you mean '…'?)`; `World: unknown option '…' (the options are gravity, substeps, sleeping)`; `World: gravity must be 3 finite numbers, got …`; `World: substeps must be a whole number, 1 or more, got …`; `World: sleeping must be true or false, got …`.
+Throws: `World: options must be an object, got …`; `World: unknown option '…' (did you mean '…'?)`; `World: unknown option '…' (the options are gravity, substeps, sleeping, workers)`; `World: gravity must be 3 finite numbers, got …`; `World: substeps must be a whole number, 1 or more, got …`; `World: sleeping must be true or false, got …`; `World: workers must be 'auto' or a whole number, 0 or more, got …`.
 
 ```js
 const world = new World();
@@ -172,6 +173,48 @@ world.sleeping = false;   // everything stays awake, as when checking a scene by
 Notes: with it off, nothing about sleeping is kept or worked out at all. Results with it on and
 off differ slightly, because a body falling asleep has its last, too-small-to-see motion stopped;
 each is deterministic.
+
+<a id="world-workers"></a>
+### `world.workers` → `'auto' | number`
+
+How many workers, threads besides the one stepping the world, may share each
+[`step`](#world-step)'s work: `'auto'`, the default, for Bearing's choice; `0` for none; or a
+whole number for at most that many. Change it at any time; changing it ends the workers the world
+had.
+
+Throws: `workers: this world was destroyed`; `world.workers must be 'auto' or a whole number, 0 or more, got …`.
+
+```js
+world.workers = 0;   // one thread: nothing started, nothing shared
+```
+
+Notes: results are the same to the bit with any number of workers or none (see
+[Determinism](#determinism)). The workers share three things with the stepping thread, which
+takes its share too: finding the contacts between boxes, balls and capsules; preparing every
+contact; and solving them, in groups that share no body that moves, one group after another as on
+one thread, where only the order within a group, which changes no result, differs. Hulls, meshes,
+heightfields and compounds are found, and joints, sleep and the rest run, on the stepping thread.
+
+- **They start by themselves**, the first step with enough work for them (a group of four
+  contacts, or 128 pairs of bodies near enough to touch), and steps run on one thread until they
+  are running, a few tens of milliseconds later. A world that never has that much never starts
+  any. There is nothing to wait for and nothing to call.
+- **`'auto'` is half the machine's threads, less one**, and at least one where there are two
+  (`navigator.hardwareConcurrency` in a browser, `os.availableParallelism()` in Node): one worker
+  a core where each core runs two threads, since the second shares the core's arithmetic. On an
+  i7-1260P laptop, 16 threads, that is 7, which stepped a 1,000-box pile 3.3 times as fast as one
+  thread, within 2% of the best of any count; 11 and 15 were slower. A number is never more than
+  the machine's threads less one. Fewer workers spin on fewer cores while a step runs: set a
+  number to trade speed for power.
+- **Shared memory is needed.** In a browser that means a cross-origin isolated page, one served
+  with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`
+  (`crossOriginIsolated` is then `true`). Without it, or in Node before 20.16, the world runs on
+  one thread, with the same results.
+- **Between steps they sleep**, using nothing. While a step runs they wait for the next group by
+  spinning, so a step uses up to that many more cores while it lasts.
+- **[`destroy()`](#world-destroy) ends them**, and so does the world being garbage collected. They
+  never keep a Node process from exiting.
+- **They aren't saved.** A world from [`World.load`](#world-load) has `'auto'`, as a new one does.
 
 <a id="world-bodycount"></a>
 ### `world.bodyCount` → `number`
@@ -810,15 +853,16 @@ A big mesh or heightfield is many segments: three for each of its triangles.
 <a id="world-destroy"></a>
 ### `world.destroy()`
 
-Lets go of every body and all of the world's storage. Afterwards every call on the world throws,
-naming the call, and every body's [`alive`](#body-alive) is `false`. Calling it again does nothing.
+Lets go of every body and all of the world's storage, and ends its [workers](#world-workers).
+Afterwards every call on the world throws, naming the call, and every body's
+[`alive`](#body-alive) is `false`. Calling it again does nothing.
 
 ```js
 world.destroy();
 ```
 
-Notes: a world starts nothing that keeps running, no timers and no listeners, so there is nothing
-else to stop.
+Notes: a world starts nothing else that keeps running, no timers and no listeners, so there is
+nothing else to stop. A world dropped without it ends its workers when it is garbage collected.
 
 <a id="body"></a>
 ## Body
@@ -1762,8 +1806,8 @@ Notes: results are fresh objects each call; a query isn't meant for the inside o
 
 The same calls, with the same arguments, in the same order, give the same results to the bit: the
 same `transforms`, the same velocities, the same everything, on any CPU, in any browser, in Node,
-Deno or Bun, in a worker or not. That is what replays, tests that compare whole worlds, and
-lockstep multiplayer need.
+Deno or Bun, in a worker or not, and with any number of [`workers`](#world-workers) or none. That
+is what replays, tests that compare whole worlds, and lockstep multiplayer need.
 
 It holds because JavaScript defines `+`, `-`, `*`, `/` and `Math.sqrt` exactly: it forbids fused
 multiply-add and extended precision, so every engine rounds them the same way. The functions the

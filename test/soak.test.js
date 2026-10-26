@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { World, Joint } from '../src/bearing.js';
 import { suite, testAsync as test } from './test.js';
 import { mixed } from './scenes.js';
+import { sharedMemory, cores } from '../src/core/jobs.js';
 
 if (typeof globalThis.gc !== 'function') {
   throw new Error('run with node --expose-gc test/soak.test.js');
@@ -29,6 +30,13 @@ async function collect() {
 const heap = () => process.memoryUsage().heapUsed + process.memoryUsage().arrayBuffers;
 /** Rounds run before memory is measured: see the colliding pile's test. */
 const WARM = 10;
+/**
+ * The tests that measure memory step their worlds on one thread. A worker
+ * lets go of storage the world has outgrown when its own thread next
+ * collects garbage, which this process can't ask it to, so its memory would
+ * blur theirs; the workers' memory has a test of its own, at the end.
+ */
+const ONE = { workers: 0 };
 
 /** Everything the broadphase holds: tree nodes in use and allotted, and pairs listed. */
 const held = (world) => {
@@ -131,7 +139,7 @@ await test('memory comes back after a burst', async () => {
 });
 
 await test('a colliding pile built and cleared 50 times: contact storage and memory come back', async () => {
-  const world = new World();
+  const world = new World(ONE);
   world.addBody({ type: 'static', size: [100, 1, 100], position: [0, -0.5, 0] });
   world.step(1 / 60);
   // The first rounds are a warm-up and aren't measured: V8 compiles the
@@ -163,7 +171,7 @@ await test('a colliding pile built and cleared 50 times: contact storage and mem
 });
 
 await test('stacks put to sleep, woken and cleared 30 times: the awake list, the asleep pairs and the moved log come back', async () => {
-  const world = new World();
+  const world = new World(ONE);
   const floor = world.addBody({ type: 'static', size: [100, 1, 100], position: [0, -0.5, 0] });
   world.step(1 / 60);
   let before = 0;
@@ -203,7 +211,7 @@ await test('stacks put to sleep, woken and cleared 30 times: the awake list, the
 });
 
 await test('hulls and compounds made, piled on a mesh and removed 30 times: their shapes and frames go', async () => {
-  const world = new World();
+  const world = new World(ONE);
   world.step(1 / 60);
   let seed = 7;
   const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -245,7 +253,7 @@ await test('hulls and compounds made, piled on a mesh and removed 30 times: thei
 });
 
 await test('a world saved, loaded and drawn 30 times: the loaded worlds go, and the drawing keeps one array', async () => {
-  const world = new World();
+  const world = new World(ONE);
   world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
   for (let i = 0; i < 60; i++) world.addBody({ shape: i % 2 ? 'sphere' : 'box', position: [(i % 6) - 3, 1 + Math.floor(i / 6), 0] });
   let before = 0, loaded = null, lines = null;
@@ -256,6 +264,7 @@ await test('a world saved, loaded and drawn 30 times: the loaded worlds go, and 
     }
     for (let s = 0; s < 5; s++) world.step(1 / 60);
     const copy = World.load(JSON.parse(JSON.stringify(world.save())));
+    copy.workers = 0;
     for (let s = 0; s < 5; s++) copy.step(1 / 60);
     if (round === WARM) loaded = new WeakRef(copy);
     if (round % 2) copy.destroy();
@@ -273,7 +282,7 @@ await test('a world saved, loaded and drawn 30 times: the loaded worlds go, and 
 });
 
 await test('meshes and heightfields made, landed on and removed 30 times: their triangles and pair memories go', async () => {
-  const world = new World();
+  const world = new World(ONE);
   world.step(1 / 60);
   // A floor of 800 triangles, as test/mesh.test.js builds it.
   const vertices = [], indices = [];
@@ -316,7 +325,7 @@ await test('meshes and heightfields made, landed on and removed 30 times: their 
 });
 
 await test('a pile landing past sensors and cleared 30 times: event storage, sensor pairs and memory come back', async () => {
-  const world = new World();
+  const world = new World(ONE);
   world.addBody({ type: 'static', size: [40, 1, 40], position: [0, -0.5, 0] });
   world.step(1 / 60);
   let before = 0;
@@ -358,7 +367,7 @@ await test('a pile landing past sensors and cleared 30 times: event storage, sen
 });
 
 await test('chains and ragdoll-like trees made, swung and removed 30 times: joint storage, trees and memory come back', async () => {
-  const world = new World();
+  const world = new World(ONE);
   world.addBody({ type: 'static', size: [40, 1, 40], position: [0, -0.5, 0] });
   world.step(1 / 60);
   const start = world.bodyCount;
@@ -414,7 +423,7 @@ await test('chains and ragdoll-like trees made, swung and removed 30 times: join
 });
 
 await test('characters made, walked about a level and removed 30 times: nothing of them stays', async () => {
-  const world = new World();
+  const world = new World(ONE);
   world.addBody({ type: 'static', size: [40, 1, 40], position: [0, -0.5, 0] });
   for (let k = 0; k < 4; k++) world.addBody({ type: 'static', size: [1, 0.15 * (k + 1), 6], position: [2 + k, 0.075 * (k + 1), 0] });
   const lift = world.addBody({ type: 'kinematic', size: [3, 0.4, 3], position: [-4, 0.2, 0], velocity: [0, 0.5, 0] });
@@ -463,3 +472,37 @@ await test('removed bodies\' handles and destroyed worlds are collected', async 
   assert.equal(world.bodyCount, 0);
 });
 
+
+// Where a world can have no workers (one thread, or no shared memory), there is nothing to soak.
+const able = sharedMemory && cores() > 1;
+await (able ? test : async (name) => console.log(`  --  ${name}: skipped, no workers on this machine`))('worlds with workers piled, cleared and destroyed 20 times: their threads end and their memory comes back', async () => {
+  let before = 0, jobs = null;
+  for (let round = 0; round < 20; round++) {
+    if (round === WARM) {
+      await collect();
+      before = heap();
+    }
+    const world = new World({ workers: 2 });
+    world.addBody({ type: 'static', size: [40, 1, 40], position: [0, -0.5, 0] });
+    const pile = [];
+    for (let k = 0; k < 200; k++) pile.push(world.addBody({ position: [(k % 10) * 1.01 - 5, 0.5 + Math.floor(k / 20) * 1.01, (Math.floor(k / 10) % 2) * 1.01] }));
+    for (let s = 0; s < 10 || !(await world._jobs.ready()); s++) world.step(1 / 60);
+    for (let s = 0; s < 20; s++) world.step(1 / 60);
+    assert.ok(world._jobs.parallel > 0, `round ${round}: the workers never took part`);
+    // A burst gone: the contacts' storage shrinks, and the workers are sent the smaller.
+    for (const b of pile) world.remove(b);
+    world.step(1 / 60);
+    assert.equal(world._contacts.capacity, 0, `round ${round}: contact storage kept`);
+    if (round === WARM) jobs = new WeakRef(world._jobs);
+    const ended = world._jobs.workers.map((w) => new Promise((resolve) => w.once('exit', resolve)));
+    world.destroy();
+    await Promise.all(ended);
+  }
+  await collect();
+  assert.equal(jobs.deref(), undefined, 'a destroyed world\'s job system is still held');
+  const grown = heap() - before;
+  // A world here holds about 600 KB of shared columns and contacts at its
+  // busiest, so one kept each round would show as 6 MB over the 10 measured
+  // rounds: 1 MB tells them apart, as for the rounds above.
+  assert.ok(grown < 1024 * 1024, `grew ${(grown / 1024).toFixed(0)} KB`);
+});

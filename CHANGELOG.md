@@ -207,5 +207,11 @@ All notable changes to Bearing are recorded here. The format follows
   17%, with stacks, slopes and sleeping as before.
 - Contacts are solved in groups that share no moving body, ready for solving on several threads
   later. Results change in their last digits, and are still the same on every machine.
+- `new World({ workers })` and `world.workers`: a world shares each step's contact work with
+  threads of its own, `'auto'` by default, with results the same to the bit as on one thread. A
+  landing pile of 1,000 boxes steps 3.2 times as fast on an i7-1260P laptop, 8,000 boxes 3.4
+  times. They start by themselves once a world has enough contacts, sleep between steps, and end
+  with `destroy()`. In a browser they need a cross-origin isolated page; without one, or with
+  `workers: 0`, everything runs on one thread as before.
 - The `centerOfMass` option, `[x, y, z]` in the body's own frame or `null` for the shape's, moves
   any body's centre of mass, as a car's is lowered so it doesn't roll over.

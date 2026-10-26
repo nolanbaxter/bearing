@@ -108,7 +108,7 @@ import { rotate, atan2 } from './core/math.js';
 import { resized } from './core/slots.js';
 import { impact, posed, UNSURE } from './impact.js';
 import { COMPLIANCE } from './forest.js';
-import { COLOURS, DIGITS } from './graph.js';
+import { COLOURS, DIGITS, OVERFLOW } from './graph.js';
 
 const DYNAMIC = 0, STATIC = 1;
 const BOX = 0, SPHERE_SHAPE = 1, CAPSULE_SHAPE = 2, HULL_SHAPE = 3, MESH = 5;   // World's shape codes; a heightfield is 6
@@ -150,6 +150,13 @@ export class Contacts {
   constructor() {
     this.count = 0;
     this.capacity = 0;
+    /** This step's manifolds on a part of a compound (see prepare). */
+    this.onParts = 0;
+    /** This step's manifolds between plain bodies, and the last step's: how much the workers' look would find (see LOOKED). */
+    this.plain = 0;
+    this.wasPlain = 0;
+    /** Records taken so far by the workers (see LOOKED): one number, counted atomically. */
+    this.taken = new Int32Array(1);
     /** Where each colour's run of `order` starts, the overflow's last, then the end (graph.js). */
     this.starts = new Int32Array(COLOURS + 2);
     /** One digit's counts while the rows are sorted by slot (graph.js, DIGIT). */
@@ -211,6 +218,8 @@ export class Contacts {
     grow('normalImpulse', Float64Array, p);
     grow('maxNormalImpulse', Float64Array, p); grow('relativeVelocity', Float64Array, p);
     grow('lever', Float64Array, p);   // the point's distance from the friction anchor, across the normal: its twist lever
+    // What the workers found for the plain pairs, a record a row (see LOOKED).
+    grow('records', Float64Array, RECORD * m);
     this.capacity = capacity;
   }
 
@@ -261,58 +270,89 @@ const v3 = new Float64Array(3);
  * woken stack is held up in the very step it wakes.
  */
 export function narrow(world, pairs, broadphase, next, from) {
-  const box = world._box, reach = world._motion, awake = world._awake, shape = world._shape, sensor = world._sensor;
-  const inner = world._inner;
-  const sensing = world._sensorCount > 0;
+  const awake = world._awake, sensing = world._sensorCount > 0;
+  // The workers look at the plain pairs first (see LOOKED), if the last step
+  // found enough contacts between plain bodies to be worth them: a pile
+  // landing, not a heap of hulls or chains whose links merely lie near each
+  // other. This thread then takes every pair in order, as before, using what
+  // they found.
+  const jobs = world._jobs, looked = jobs !== null && jobs.begin(world, next, next.wasPlain >= jobs.least[MEET]);
+  if (looked) {
+    const args = jobs.args, g = world._gravity;
+    args[5] = world._stepDt; args[6] = g[0]; args[7] = g[1]; args[8] = g[2]; args[9] = world._pairEpoch;
+    Atomics.store(next.taken, 0, 0);
+    jobs.run(MEET, world, next, from, pairs.active);
+    jobs.end();
+  }
   for (let p = from; p < pairs.active;) {
     if (!pairs.holds(p, broadphase)) {
-      pairs.remove(p);   // the last pair moves into p, so p is looked at again
+      pairs.remove(p);   // the last pair moves into p, its verdict with it, so p is looked at again
       continue;
     }
-    const a = pairs.a[p], b = pairs.b[p], a6 = a * 6, b6 = b * 6;
-    // Fat boxes overlap, but their actual boxes, grown only by this step's
-    // motion, may not: nothing can touch this step, and nothing is carried.
-    if (box[a6] > box[b6 + 3] || box[b6] > box[a6 + 3] || box[a6 + 1] > box[b6 + 4]
-      || box[b6 + 1] > box[a6 + 4] || box[a6 + 2] > box[b6 + 5] || box[b6 + 2] > box[a6 + 5]) {
-      pairs.forget(p);
-      p++;
-      continue;
+    const a = pairs.a[p], b = pairs.b[p], tolerance = Math.min(world._size[a], world._size[b]) * PIXEL;
+    const verdict = looked ? pairs.verdict[p] : UNSEEN;
+    if (verdict === UNSEEN ? find(world, pairs, p, a, b, next, tolerance, sensing) : took(world, pairs, p, next, verdict)) {
+      // Static bodies are never awake, and _wake leaves them be.
+      if (awake[a] !== awake[b]) world._wake(awake[a] ? b : a);
+      const m = emit(world, next, p, a, b, manifold, 1, tolerance, -1, -1, -1, 0);
+      carry(pairs, p, next, m);
     }
-    if (sensing && (sensor[a] === 1 || sensor[b] === 1)) {
-      world._sense(p);
-      p++;
-      continue;
-    }
-    if (shape[a] >= MESH || shape[b] >= MESH) {
-      level(world, pairs, p, a, b, next);
-      p++;
-      continue;
-    }
-    const tolerance = Math.min(world._size[a], world._size[b]) * PIXEL;
-    const margin = reach[a] + reach[b] + tolerance;
-    if (inner[a] instanceof Parts || inner[b] instanceof Parts) {
-      parted(world, pairs, p, a, b, next, tolerance, margin);
-      p++;
-      continue;
-    }
-    const hull = shape[a] === HULL_SHAPE || shape[b] === HULL_SHAPE;
-    if (!hull || !reused(world, pairs, p, a, b, tolerance)) {
-      load(world, a, shapeA);
-      load(world, b, shapeB);
-      if (!meet(world, a, b, null, null, tolerance, margin)) {
-        pairs.forget(p);
-        p++;
-        continue;
-      }
-      if (hull) remember(world, pairs, p, a, b);
-    }
-    // Static bodies are never awake, and _wake leaves them be.
-    if (awake[a] !== awake[b]) world._wake(awake[a] ? b : a);
-    const m = emit(world, next, p, a, b, manifold, 1, tolerance, -1, -1, -1, 0);
-    carry(pairs, p, next, m);
     p++;
   }
   return next.count;
+}
+
+/**
+ * Pair p, between slots a and b, found here: true if `manifold` now holds a
+ * contact for narrow() to emit, false if there is none, or the pair was
+ * dealt with otherwise (a sensor's, a mesh's, or one with parts).
+ */
+function find(world, pairs, p, a, b, next, tolerance, sensing) {
+  const box = world._box, shape = world._shape, a6 = a * 6, b6 = b * 6;
+  // Fat boxes overlap, but their actual boxes, grown only by this step's
+  // motion, may not: nothing can touch this step, and nothing is carried.
+  if (box[a6] > box[b6 + 3] || box[b6] > box[a6 + 3] || box[a6 + 1] > box[b6 + 4]
+    || box[b6 + 1] > box[a6 + 4] || box[a6 + 2] > box[b6 + 5] || box[b6 + 2] > box[a6 + 5]) {
+    pairs.forget(p);
+    return false;
+  }
+  if (sensing && (world._sensor[a] === 1 || world._sensor[b] === 1)) {
+    world._sense(p);
+    return false;
+  }
+  if (shape[a] >= MESH || shape[b] >= MESH) {
+    level(world, pairs, p, a, b, next);
+    return false;
+  }
+  const margin = world._motion[a] + world._motion[b] + tolerance, inner = world._inner;
+  if (inner[a] instanceof Parts || inner[b] instanceof Parts) {
+    parted(world, pairs, p, a, b, next, tolerance, margin);
+    return false;
+  }
+  const hull = shape[a] === HULL_SHAPE || shape[b] === HULL_SHAPE;
+  if (!hull || !reused(world, pairs, p, a, b, tolerance)) {
+    load(world, a, shapeA);
+    load(world, b, shapeB);
+    const met = meet(world, a, b, null, null, tolerance, margin);
+    if (asked) world._impacts++;
+    if (!met) {
+      pairs.forget(p);
+      return false;
+    }
+    if (hull) remember(world, pairs, p, a, b);
+  }
+  return true;
+}
+
+/** Pair p as the workers found it (see LOOKED): find()'s answer, from its verdict. */
+function took(world, pairs, p, next, verdict) {
+  if (verdict === ASKED || (verdict > 0 && next.records[RECORD * (verdict - 1)] === 1)) world._impacts++;
+  if (verdict < 0) {
+    pairs.forget(p);
+    return false;
+  }
+  restore(next, verdict - 1);
+  return true;
 }
 
 /**
@@ -524,11 +564,12 @@ const POSE = new Float64Array(7);
  */
 function meet(world, a, b, partA, partB, tolerance, margin) {
   shifted = false;
+  asked = false;
   if (collide(shapeA, shapeB, margin, tolerance, manifold) === 0) return false;
   const moves = least(manifold) > tolerance ? moving(world, a, b) : 0;
   if (moves > tolerance) {
     const dt = world._stepDt, t = impact(world, a, b, shapeA, shapeB, dt, tolerance, partA, partB);
-    world._impacts++;
+    asked = true;
     const ahead = t >= 0 ? moves * (1 - t / dt) + 2 * tolerance : 0;
     if (t === -1 || (t !== UNSURE && collide(shapeA, shapeB, ahead, tolerance, manifold) === 0)) return false;
     if (t !== UNSURE) back(world, a, b, t, manifold, partA, partB);
@@ -561,7 +602,9 @@ function parted(world, pairs, p, a, b, next, tolerance, margin) {
       const dx = shapeB.center[0] - shapeA.center[0], dy = shapeB.center[1] - shapeA.center[1], dz = shapeB.center[2] - shapeA.center[2];
       const r = ra + rb + margin;
       if (dx * dx + dy * dy + dz * dz > r * r) continue;
-      if (!meet(world, a, b, partA, partB, tolerance, margin)) continue;
+      const met = meet(world, a, b, partA, partB, tolerance, margin);
+      if (asked) world._impacts++;
+      if (!met) continue;
       if (awake[a] !== awake[b]) world._wake(awake[a] ? b : a);
       const key = i * nb + j, m = emit(world, next, p, a, b, manifold, 1, tolerance, sub++, la === null ? -1 : i, lb === null ? -1 : j, key);
       for (let k = 0; k < kept.count; k++) {
@@ -689,6 +732,31 @@ const CA = new Float64Array(3), CB = new Float64Array(3), QA = new Float64Array(
 /** back()'s shifts, for emit() to keep; `shifted` says the manifold has them. */
 const SHIFT = new Float64Array(12);
 let shifted = false;
+/**
+ * Whether the last meet() asked for a time of impact, which world._impacts
+ * counts: counted by its caller, since a worker's meet() has no world to count in.
+ */
+let asked = false;
+
+// LOOKED. Before this thread takes the pairs in order, the workers look at
+// the plain ones (core/jobs.js, MEET): both bodies boxes, balls or capsules
+// with nothing of their own off their centre, neither a sensor, each awake or
+// static, and the pair checked since anything that could change its bodies
+// (World._pairEpoch). For each they find what this thread would: its boxes
+// apart, or no meeting, or a manifold, kept in a record of next's (RECORD
+// numbers) whose number, plus 1, is the pair's verdict in pairs.verdict. Every
+// one of these depends only on its two bodies, as the step left them before
+// the narrowphase, and nothing this thread does while taking the pairs in
+// order changes those: a pair that wakes a sleeping body changes only that
+// body and its island's, which no looked-at pair has, and a removed pair's
+// verdict moves with it (Pairs._move). So the manifolds, the order they are
+// emitted in and the impulses carried onto them are those one thread finds.
+// A pair the workers left (any other kind, or no record free) is found here,
+// as before. Meshes, heightfields, hulls and parts are objects in this
+// thread's memory only, so are always found here.
+const UNSEEN = 0, APART = -1, MISSED = -2, ASKED = -3;
+/** A record: whether a time of impact was asked for, point count, normal, ids, separations, points, whether shifted, the shifts. */
+export const RECORD = 1 + 1 + 3 + P + P + 3 * P + 1 + 3 * P;
 
 /**
  * Pair p, one of whose bodies is a mesh or a heightfield (never both: neither
@@ -757,6 +825,8 @@ function emit(world, next, p, a, b, mf, sign, tolerance, sub, partA, partB, key)
   next.ensure(next.count);
   next.a[m] = a; next.b[m] = b; next.pair[m] = p; next.sub[m] = sub;
   next.partA[m] = partA; next.partB[m] = partB; next.key[m] = key;
+  if (partA >= 0 || partB >= 0) next.onParts++;
+  else if (world._shape[a] <= CAPSULE_SHAPE && world._shape[b] <= CAPSULE_SHAPE) next.plain++;
   next.points[m] = mf.count;
   for (let k = 0; k < 3; k++) next.normal[3 * m + k] = sign * mf.normal[k];
   // Friction mixes as a geometric mean, so ice is slippery against
@@ -782,6 +852,68 @@ function emit(world, next, p, a, b, mf, sign, tolerance, sub, partA, partB, key)
   }
   basis(next, m);
   return m;
+}
+
+/** Record r of c (see LOOKED) back into `manifold`, SHIFT and `shifted`, as meet() left them. */
+function restore(c, r) {
+  const R = c.records, o = RECORD * r, n = R[o + 1];
+  manifold.count = n;
+  manifold.normal[0] = R[o + 2]; manifold.normal[1] = R[o + 3]; manifold.normal[2] = R[o + 4];
+  for (let k = 0; k < n; k++) {
+    manifold.ids[k] = R[o + 5 + k];
+    manifold.separations[k] = R[o + 5 + P + k];
+    for (let i = 0; i < 3; i++) manifold.points[3 * k + i] = R[o + 5 + 2 * P + 3 * k + i];
+  }
+  shifted = R[o + 5 + 5 * P] === 1;
+  if (shifted) for (let i = 0; i < 3 * n; i++) SHIFT[i] = R[o + 6 + 5 * P + i];
+}
+
+/** Pairs from..to-1 looked at (see LOOKED): each one's verdict into pairs.verdict. */
+function lookRows(world, c, args, from, to) {
+  // A worker's world is a plain object of the shared columns: the step's
+  // own numbers come in args, and go where the narrowphase reads them (on
+  // the stepping thread, where they already are).
+  world._stepDt = args[5];
+  const g = world._gravity;
+  g[0] = args[6]; g[1] = args[7]; g[2] = args[8];
+  const pairs = world._pairs, epoch = args[9], verdict = pairs.verdict;
+  for (let p = from; p < to; p++) verdict[p] = look(world, pairs, c, p, epoch);
+}
+
+/** Whether slot s is a plain body, as LOOKED says. */
+function plain(world, s) {
+  return world._shape[s] <= CAPSULE_SHAPE && world._framed[s] === 0 && world._sensor[s] === 0
+    && (world._awake[s] === 1 || world._type[s] === STATIC);
+}
+
+/** Pair p's verdict (see LOOKED). */
+function look(world, pairs, c, p, epoch) {
+  if (pairs.checked[p] !== epoch) return UNSEEN;
+  const a = pairs.a[p], b = pairs.b[p];
+  if (!plain(world, a) || !plain(world, b)) return UNSEEN;
+  const box = world._box, a6 = a * 6, b6 = b * 6;
+  if (box[a6] > box[b6 + 3] || box[b6] > box[a6 + 3] || box[a6 + 1] > box[b6 + 4]
+    || box[b6 + 1] > box[a6 + 4] || box[a6 + 2] > box[b6 + 5] || box[b6 + 2] > box[a6 + 5]) return APART;
+  const tolerance = Math.min(world._size[a], world._size[b]) * PIXEL;
+  const margin = world._motion[a] + world._motion[b] + tolerance;
+  load(world, a, shapeA);
+  load(world, b, shapeB);
+  if (!meet(world, a, b, null, null, tolerance, margin)) return asked ? ASKED : MISSED;
+  // A worker's c has no capacity of its own: its records' length says it.
+  const r = Atomics.add(c.taken, 0, 1);
+  if (r >= c.records.length / RECORD) return UNSEEN;
+  const R = c.records, o = RECORD * r, n = manifold.count;
+  R[o] = asked ? 1 : 0;
+  R[o + 1] = n;
+  R[o + 2] = manifold.normal[0]; R[o + 3] = manifold.normal[1]; R[o + 4] = manifold.normal[2];
+  for (let k = 0; k < n; k++) {
+    R[o + 5 + k] = manifold.ids[k];
+    R[o + 5 + P + k] = manifold.separations[k];
+    for (let i = 0; i < 3; i++) R[o + 5 + 2 * P + 3 * k + i] = manifold.points[3 * k + i];
+  }
+  R[o + 5 + 5 * P] = shifted ? 1 : 0;
+  if (shifted) for (let i = 0; i < 3 * n; i++) R[o + 6 + 5 * P + i] = SHIFT[i];
+  return r + 1;
 }
 
 /**
@@ -1107,9 +1239,18 @@ export function inertias(world) {
  * bodies were closing at. Reads the inverse inertias inertias() worked out.
  */
 export function prepare(world, c) {
+  const jobs = world._jobs;
+  // A manifold on a part reads the Part (core()), an object in this thread's
+  // memory only, so a step with one prepares on this thread.
+  if (jobs !== null && c.onParts === 0) jobs.run(PREPARE, world, c, 0, c.count);
+  else prepareRows(world, c, 0, c.count);
+}
+
+/** prepare() for rows from..to-1: each row's own, reading only what the step has fixed. */
+function prepareRows(world, c, from, to) {
   const invI = world._invI, invMass = world._invMass;
   const p = world._position, q = world._rotation, v = world._velocity, w = world._angular;
-  for (let m = 0; m < c.count; m++) {
+  for (let m = from; m < to; m++) {
     const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3;
     const ima = invMass[a], imb = invMass[b];
     const nx = c.normal[3 * m], ny = c.normal[3 * m + 1], nz = c.normal[3 * m + 2];
@@ -1313,8 +1454,20 @@ export function makeSoft(hertz, zeta, h, out = soft) {
  * colour, as solve() goes, so it splits across threads the same way.
  */
 export function warmStart(world, c) {
+  const jobs = world._jobs;
+  if (jobs === null || !jobs.live) {
+    warmRows(world, c, 0, c.count);
+    return;
+  }
+  const starts = c.starts;
+  for (let k = 0; k < COLOURS; k++) if (starts[k + 1] > starts[k]) jobs.run(WARM, world, c, starts[k], starts[k + 1]);
+  warmRows(world, c, starts[OVERFLOW], starts[OVERFLOW + 1]);
+}
+
+/** warmStart() for rows from..to-1, all of one colour or taken in order. */
+function warmRows(world, c, from, to) {
   const v = world._velocity, w = world._angular, invI = world._invI, invMass = world._invMass, jac = c.jac;
-  for (let m = 0; m < c.count; m++) {
+  for (let m = from; m < to; m++) {
     const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3, m3 = 3 * m;
     const ima = invMass[a], imb = invMass[b];
     const nx = c.normal[m3], ny = c.normal[m3 + 1], nz = c.normal[m3 + 2];
@@ -1352,8 +1505,8 @@ export function warmStart(world, c) {
       wby += invI[ob + 1] * lx + invI[ob + 3] * ly + invI[ob + 4] * lz;
       wbz += invI[ob + 2] * lx + invI[ob + 4] * ly + invI[ob + 5] * lz;
     }
-    v[a3] = vax; v[a3 + 1] = vay; v[a3 + 2] = vaz; w[a3] = wax; w[a3 + 1] = way; w[a3 + 2] = waz;
-    v[b3] = vbx; v[b3 + 1] = vby; v[b3 + 2] = vbz; w[b3] = wbx; w[b3 + 1] = wby; w[b3 + 2] = wbz;
+    writeBack(v, w, ima, a3, vax, vay, vaz, wax, way, waz);
+    writeBack(v, w, imb, b3, vbx, vby, vbz, wbx, wby, wbz);
   }
 }
 
@@ -1445,14 +1598,34 @@ export function gapOf(world, c, m) {
  * `bias` is true while solving, false while relaxing. h is the substep.
  */
 export function solve(world, c, h, bias) {
+  const jobs = world._jobs;
+  if (jobs === null || !jobs.live) {
+    solveRows(world, c, h, bias, 0, c.count);
+    return;
+  }
+  // What solveRows reads besides the rows and columns, for the workers' own
+  // copy of this module (see solveJob).
+  const args = jobs.args;
+  args[0] = h; args[1] = bias ? 1 : 0; args[2] = soft.biasRate; args[3] = soft.massScale; args[4] = soft.impulseScale;
+  const starts = c.starts;
+  for (let k = 0; k < COLOURS; k++) if (starts[k + 1] > starts[k]) jobs.run(SOLVE, world, c, starts[k], starts[k + 1]);
+  // The overflow's manifolds may share bodies: one thread, in order (graph.js).
+  solveRows(world, c, h, bias, starts[OVERFLOW], starts[OVERFLOW + 1]);
+}
+
+/**
+ * solve() for rows from..to-1. The rows lie colour by colour (graph.js): no
+ * two manifolds of one colour share a body the solve moves, so within a
+ * colour the order, and how the rows are split between threads, changes
+ * nothing.
+ */
+function solveRows(world, c, h, bias, from, to) {
   const v = world._velocity, w = world._angular, invI = world._invI, invMass = world._invMass;
   const p = world._position, start = world._start, q = world._rotation;
   const inv = 1 / h;
   // A soft point's give over its own K_kk (see BLOCK): is/ms, and COMPLIANCE.
   const springy = soft.impulseScale / soft.massScale + COMPLIANCE;
-  // The rows lie colour by colour (graph.js): no two manifolds of one colour
-  // share a body the solve moves, so within a colour the order changes nothing.
-  for (let m = 0; m < c.count; m++) {
+  for (let m = from; m < to; m++) {
     const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3, m3 = 3 * m;
     const nx = c.normal[m3], ny = c.normal[m3 + 1], nz = c.normal[m3 + 2];
     // How far each body has moved since the step began.
@@ -1700,9 +1873,84 @@ export function solve(world, c, h, bias) {
       wby += invI[ob + 1] * lx + invI[ob + 3] * ly + invI[ob + 4] * lz;
       wbz += invI[ob + 2] * lx + invI[ob + 4] * ly + invI[ob + 5] * lz;
     }
-    v[a3] = vax; v[a3 + 1] = vay; v[a3 + 2] = vaz; w[a3] = wax; w[a3 + 1] = way; w[a3 + 2] = waz;
-    v[b3] = vbx; v[b3 + 1] = vby; v[b3 + 2] = vbz; w[b3] = wbx; w[b3 + 1] = wby; w[b3 + 2] = wbz;
+    writeBack(v, w, ima, a3, vax, vay, vaz, wax, way, waz);
+    writeBack(v, w, imb, b3, vbx, vby, vbz, wbx, wby, wbz);
   }
+}
+
+/**
+ * A body's velocities, held in locals for a manifold, written back to slot
+ * s3 / 3 if it can move (inverse mass im not 0). A static, kinematic or
+ * character body's are left alone: the solve only ever adds nothing to them,
+ * and one colour's manifolds may share such a body (graph.js), so with
+ * workers several threads would write it at once. Writing nothing also keeps
+ * a -0 velocity -0, where adding 0 times a negative impulse made it +0, so
+ * its sign hung on which manifold went last.
+ */
+function writeBack(v, w, im, s3, vx, vy, vz, wx, wy, wz) {
+  if (im === 0) return;
+  v[s3] = vx; v[s3 + 1] = vy; v[s3 + 2] = vz; w[s3] = wx; w[s3 + 1] = wy; w[s3 + 2] = wz;
+}
+
+// ---- workers ----
+
+// The step's jobs (core/jobs.js): each a function over a range of rows,
+// which a worker runs on its share of a dispatch and this thread on the rest,
+// or on all of it. `args` holds what a job reads besides the rows and the
+// columns (see solve). Each job's rows are independent: a prepared row is the
+// row's own, and a colour's rows share no body they move.
+const WARM = 0, SOLVE = 1, PREPARE = 2, MEET = 3;
+
+function warmJob(world, c, args, from, to) {
+  warmRows(world, c, from, to);
+}
+
+function solveJob(world, c, args, from, to) {
+  soft.biasRate = args[2]; soft.massScale = args[3]; soft.impulseScale = args[4];
+  solveRows(world, c, args[0], args[1] === 1, from, to);
+}
+
+function prepareJob(world, c, args, from, to) {
+  prepareRows(world, c, from, to);
+}
+
+/** The jobs by kind, as a worker (worker.js) and core/jobs.js know them. */
+export const JOBS = [warmJob, solveJob, prepareJob, lookRows];
+
+/**
+ * The fewest rows (or pairs, for a look) each job is worth handing to the
+ * workers: below it, waking them and waiting for the slowest costs more than
+ * the rows themselves. Measured on the i7-1260P with 1 to 4 workers, one
+ * dispatch of n rows of the 8,000-box pile's first colour against the same
+ * on this thread alone, the workers spinning as they do in a step: the least
+ * n at which every count of workers was no slower. A warm start row is a few
+ * multiply-adds (0.15 us), so 16; a solve row 0.7 to 1.5 us, and a prepared
+ * row 2 us, so 4 and 2 (a dispatch costs about 1 us). A look is counted
+ * differently, by the plain contacts the last step found (see narrow), and
+ * starts with the workers asleep, tens of microseconds to wake, so it was
+ * measured on whole steps of awake piles with 3 workers: with 22 such
+ * contacts (20 boxes) a step took the same time looked at by the workers or
+ * not, with 33 (30 boxes) 3% less, 44 7% and 109 17%; so 32.
+ */
+export const LEAST = [16, 4, 2, 32];
+
+/** What a world's Jobs needs from here: the jobs, their least, and the world's columns they read. */
+export const WORK = {
+  jobs: JOBS,
+  least: LEAST,
+  columns: [
+    '_position', '_rotation', '_velocity', '_angular', '_start', '_dims', '_shape', '_invMass', '_invI',
+    '_box', '_motion', '_size', '_reach', '_awake', '_type', '_framed', '_sensor', '_gravityScale', '_axes',
+  ],
+  /** The pair list's columns a look reads, and its verdicts (see LOOKED). */
+  pairs: ['a', 'b', 'checked', 'verdict'],
+};
+
+/** Whether this step has a colour worth the workers, by their `least` (see Jobs.begin). */
+export function crowded(c, least) {
+  const starts = c.starts;
+  for (let k = 0; k < COLOURS; k++) if (starts[k + 1] - starts[k] >= least[SOLVE]) return true;
+  return false;
 }
 
 /**

@@ -19,7 +19,8 @@ export function examples(): void {
   const bits: number = world.bodyOf(debris).layers & world.bodyOf(debris).mask;
   world.substeps = 16;
   world.sleeping = false;
-  const quiet = new World({ sleeping: true });
+  const quiet = new World({ sleeping: true, workers: 'auto' });
+  world.workers = 2;
   const settled: boolean = debris.asleep;
   let drawn: number = quiet.stepCount;
   for (const slot of world.moved(drawn)) drawn += slot;
@@ -96,6 +97,8 @@ export function mistakes(world: World, body: Body): void {
   world.addBody({ resitution: 0.5 });
   // @ts-expect-error substeps is a number
   world.substeps = '8';
+  // @ts-expect-error workers is 'auto' or a number
+  world.workers = 'all';
   // @ts-expect-error a force is a vector, not three numbers
   body.applyForce(0, 100, 0);
   // @ts-expect-error inertia is read only: use setBody

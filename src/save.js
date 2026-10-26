@@ -32,7 +32,7 @@ import { Slots } from './core/slots.js';
 import { Broadphase } from './broadphase.js';
 import { Tree } from './tree.js';
 import { Pairs, Memory } from './pairs.js';
-import { Contacts } from './contact.js';
+import { Contacts, RECORD } from './contact.js';
 import { Joints } from './joints.js';
 import { Forest } from './forest.js';
 import { Events } from './events.js';
@@ -66,11 +66,16 @@ const TYPED_NAME = new Map(Object.entries(TYPED).map(([k, v]) => [v, k]));
  * the next call, and the contacts' turning terms (contact.js, J), worked out
  * afresh before each step reads them, 36 numbers a point, which would nearly
  * double a pile's save; and the step's colours and solve order, and each
- * body's colour mask (graph.js), made afresh by each step.
+ * body's colour mask (graph.js), made afresh by each step; and what the
+ * workers found for each pair and its records (contact.js, LOOKED), which
+ * last one narrowphase pass. The workers themselves (core/jobs.js) change
+ * how fast a world steps, never what it does: a world loaded has the
+ * default, 'auto', as a new one does.
  */
 const SCRATCH = {
-  World: new Set(['_lines', '_placed', '_colours']),
-  Contacts: new Set(['jac', 'fjac', 'block', 'colour', 'order', 'row', 'scratch', 'starts', 'digits']),
+  World: new Set(['_lines', '_placed', '_colours', '_workers', '_jobs']),
+  Contacts: new Set(['jac', 'fjac', 'block', 'colour', 'order', 'row', 'scratch', 'starts', 'digits', 'onParts', 'plain', 'wasPlain', 'records', 'taken']),
+  Pairs: new Set(['verdict']),
 };
 
 /** The world as plain, JSON-safe data. */
@@ -154,12 +159,16 @@ export function load(data, World) {
     made[0]._lines = new Float32Array(0);
     made[0]._placed = [];
     made[0]._colours = new Int32Array(made[0]._type.length);
+    made[0]._setWorkers(null, 'workers', 'auto');
     for (const o of made) {
       if (!(o instanceof Contacts)) continue;
       o.jac = new Float64Array(o.normalMass.length * 12); o.fjac = new Float64Array(o.friction.length * 24); o.block = new Float64Array(o.normalMass.length * 4);
       o.colour = new Int32Array(o.a.length); o.order = new Int32Array(o.a.length); o.row = new Int32Array(o.a.length);
       o.scratch = new Float64Array(o.point.length); o.starts = new Int32Array(COLOURS + 2); o.digits = new Int32Array(DIGITS + 1);
+      o.onParts = 0; o.plain = 0; o.wasPlain = 0;
+      o.records = new Float64Array(o.a.length * RECORD); o.taken = new Int32Array(1);
     }
+    for (const o of made) if (o instanceof Pairs) o.verdict = new Int32Array(o.a.length);
     return made[0];
   } catch (e) {
     return fail('load', `data is damaged: ${e.message}`);

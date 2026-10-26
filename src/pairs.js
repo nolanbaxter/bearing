@@ -55,6 +55,7 @@ export class Pairs {
     this.twist = new Float64Array(0);      // the manifold's rolling and twist friction, an angular impulse, world vector
     this.touching = new Uint8Array(0);     // 1 while its bodies touch, as of the last step that looked
     this.checked = new Float64Array(0);    // World._pairEpoch when it was last found pairable, its bodies the same (holds)
+    this.verdict = new Int32Array(0);      // within a narrowphase pass, what the workers found for it (contact.js, LOOKED)
     // A hull pair's kept manifold (contact.js, reused), by pair: 1 + its row
     // in the cache below, or 0 for none. Only pairs with a hull keep one, so
     // a pile of boxes or balls pays these four bytes a pair and nothing more.
@@ -100,6 +101,7 @@ export class Pairs {
     this.points = resized(this.points, c);
     this.touching = resized(this.touching, c);
     this.checked = resized(this.checked, c);
+    this.verdict = resized(this.verdict, c);
     this.cache = resized(this.cache, c);
     this.pid = resized(this.pid, c * P);
     this.normalImpulse = resized(this.normalImpulse, c * P);
@@ -303,6 +305,7 @@ export class Pairs {
     this.points[to] = this.points[from];
     this.touching[to] = this.touching[from];
     this.checked[to] = this.checked[from];
+    this.verdict[to] = this.verdict[from];
     this.cache[to] = this.cache[from];
     if (this.cache[to] !== 0) this.cacheOwner[this.cache[to] - 1] = to;
     this.pid.copyWithin(to * P, from * P, from * P + P);

@@ -502,7 +502,7 @@ later is saved too; a test holds the world's field names to a list, so a change 
 Debug lines count right for every shape kind, contacts and joints, reuse one array, and cost
 nothing until called; the soak saves, loads and draws 30 times and keeps nothing.
 
-**16. Performance pass and workers ⬜**
+**16. Performance pass and workers ✅** *(approved; done 2026-10-26; the Ryzen run is still to do)*
 *Concepts:* profiling; cache behaviour; writing JavaScript the JIT optimises well; graph colouring;
 shared memory and a parallel-for.
 Profile every benchmark scene on both machines; every change made for speed comes with its A/B
@@ -619,6 +619,24 @@ left out: visiting the rows through a list in colour order (2-6% on the pyramid 
 12-14% at 8,000 boxes); one generic copy over every column (10% of a step, megamorphic); the
 solver-body gather into compact records (4-15% slower at 1,000 bodies, 2% at 8,000: the body
 columns already sit in L2, and workers can solve from them by slot).
+(8) done (2026-10-26). `src/core/jobs.js`, Winding's job system ported (one atomic cursor tagged
+with the dispatch's epoch, the stepping thread claiming chunks too, a 2 s hang bound after which
+the world runs on one thread), and `src/worker.js`, which runs `contact.js`'s own `JOBS`. Split:
+the warm start, solve and relax colour by colour; `prepare()`; and the narrowphase of plain pairs
+(box, ball, capsule), whose verdicts and records the stepping thread then emits in pair order.
+Hulls, meshes, heightfields, compounds, joints, the overflow, restitution and sleep stay on one
+thread; per-body integration measured 0.6 to 1.1% of a step, not split. Shared memory: the
+arrays the jobs read made shared once, kept shared as they grow and shrink, and re-sent to the
+workers only when one moved (growable SharedArrayBuffers can't shrink). Workers start on the
+first step with enough work, report ready through an Atomics counter, sleep between steps and
+end with `destroy()` or garbage collection; a Node process exits by itself. `new World({ workers
+})` and `world.workers`: `'auto'` (half the threads less one: 7 on the i7-1260P, within 2% of the
+best count), `0`, or a cap. Every threshold measured (warm 16, solve 4, prepare 2 rows; the
+narrowphase from 32 plain contacts; 4 chunks a thread). Same bits with 0, 2 and 4 workers, tested.
+i7-1260P, ms a step, one thread -> auto: landing 1,000-box pile 24.1 -> 7.4, pyramid 10.7 -> 3.4,
+8,000 boxes 253 -> 73, 1,000 hulls 32.2 -> 14.8, terrain 24.4 -> 11.2; chains (joint-bound) and
+small worlds unchanged. In the browser pane, cross-origin isolated, an awake pile 11.3 -> 4.1 ms.
+Not yet run: Deno, Bun, and the Ryzen 5 5500 (Nolan's).
 
 **17. Documentation ⬜**
 *Concepts:* writing reference documentation people can learn from.

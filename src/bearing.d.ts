@@ -460,6 +460,8 @@ export interface WorldOptions {
   substeps?: number;
   /** Whether bodies at rest go to sleep, default true. */
   sleeping?: boolean;
+  /** Threads besides yours that may share each step's work: 'auto' (default), 0 for none, or at most this many. */
+  workers?: 'auto' | number;
 }
 
 export class World {
@@ -472,6 +474,8 @@ export class World {
   substeps: number;
   /** Whether bodies at rest go to sleep. Switching it off wakes every sleeping body. */
   sleeping: boolean;
+  /** Threads besides yours that may share each step's work: 'auto', 0 for none, or at most this many. Same results either way. */
+  workers: 'auto' | number;
   /** How many bodies the world holds. */
   readonly bodyCount: number;
   /** How many joints the world holds. */

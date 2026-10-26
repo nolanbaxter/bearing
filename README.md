@@ -50,6 +50,10 @@ density unless you give one), no tolerances to tune, and nothing to size in adva
   [Meshes and heightfields](docs/API.md#meshes).
 - **Tolerances that scale**: every tolerance comes from the size of what touches, so a 1 cm marble
   and a 50 m building behave with nothing retuned. See [Contacts](docs/API.md#contacts).
+- **Workers**: a world shares the contact solve with threads of its own once it has enough
+  contacts to be worth it, with results identical to the bit to one thread's. Nothing to set up;
+  in a browser it needs a cross-origin isolated page, and without one runs on one thread. See
+  [`world.workers`](docs/API.md#world-workers).
 
 **Every call, option and setting is in the [API reference](docs/API.md)**: what it does, what it
 takes, what it returns and what it throws.
@@ -90,8 +94,8 @@ npm test
 
 Plain Node scripts, no framework, Node 20 or newer. They check every documented error word for
 word, that the [API reference](docs/API.md) covers every call and that its examples run, that no
-id can reach the wrong body, and that a world adding and removing 10,000 bodies 300 times leaks
-nothing.
+id can reach the wrong body, that any number of workers gives the same bits as none, and that a
+world adding and removing 10,000 bodies 300 times leaks nothing.
 
 ## License
 
