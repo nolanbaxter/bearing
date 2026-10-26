@@ -881,3 +881,13 @@ Winding's way, copied before the first one:
   turned back onto it, keeping its momentum exact. The off-axis cases now hold their energy to
   1e-15 over 120 s; the middle-axis cases come out exactly as before. Checked against each
   substep's own start instead, it ratcheted energy away (14% in 120 s at 50 rad/s).
+- **2026-10-26.** Certified sleeping measured again, at Nolan's request, after the rocking fixes,
+  the block solve and colouring (the pile now sleeps at about 13 s), and again not built. Every
+  settled island still has 1 to 17% of its pressed manifolds held exactly at friction's limit with
+  no slip (lightly loaded leans, 1 to 13% of a box's weight: the solver loads one lean to its limit
+  while the others hold the body, as a real heap ends), and that looks the same on its first step
+  as a box 0.1 degrees past friction's hold. So a safe certificate fired no earlier than the time
+  rule on any of the 58 islands of 20 or more bodies measured (piles, heaps, rocks, heightfield,
+  mesh). Counting a lean at its limit as stuck unless it slips over a tolerance a second would
+  gain 0.02 to 0.98 s, at most 7% of the pile's 13, but freezes that slope box; telling the two
+  apart means watching whether the slip grows, which is the time rule.
