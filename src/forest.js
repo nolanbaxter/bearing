@@ -63,7 +63,7 @@ const DYNAMIC = 0;
  * Measured against a dense solve: within 2^-20 of exact where the exact
  * solution exists.
  */
-const COMPLIANCE = 9.5367431640625e-7;   // 2^-20
+export const COMPLIANCE = 9.5367431640625e-7;   // 2^-20
 
 /** Numbers per node in Forest.vector: 6 for a body, up to 6 for a joint. */
 export const NODE = 6;

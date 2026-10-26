@@ -202,5 +202,8 @@ All notable changes to Bearing are recorded here. The format follows
 - Friction at its limit pushes straight against the slide. A corner resting alone turns as it is
   pushed, and friction scaled straight down to its limit leaned up to 22° off the slide, so a box
   on rippled ground half a degree short of friction's hold crept on for good; now it stays put.
+- A contact's points are pushed apart together, as one small problem solved exactly, instead of
+  one after another four times over: the 1,000-box pile steps 5 to 6% faster and the pyramid 13 to
+  17%, with stacks, slopes and sleeping as before.
 - The `centerOfMass` option, `[x, y, z]` in the body's own frame or `null` for the shape's, moves
   any body's centre of mass, as a car's is lowered so it doesn't roll over.

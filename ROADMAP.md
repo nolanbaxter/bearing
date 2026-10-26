@@ -806,7 +806,8 @@ Winding's way, copied before the first one:
   barely changed (the hull pile 27% faster, boxes no faster; landed 2026-10-23 for hull pairs only,
   30% faster, kept only within the tolerance a fresh manifold is found to), and a
   manifold's normal points solved together as one small LCP (pile 8-10%, pyramid 10-12%, but it
-  exposed contact ids flickering on exactly aligned stacks; to measure again once that is fixed).
+  exposed contact ids flickering on exactly aligned stacks; to measure again once that is fixed;
+  landed 2026-10-26 once the ids and the rocking bugs were fixed: pile 5-6%, pyramid 13-17%).
   Sleeping sooner measured and not taken: 0.5 s froze slow starters (a box 0.1 deg past friction's
   hold, cubes 0.45-0.5 deg past balance) and didn't make heaps sleep sooner, since a heap is still
   genuinely settling until about then; a `sleepTime` setting is not added (Nolan agreed).

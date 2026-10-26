@@ -107,6 +107,7 @@ import { touchLevel, Touches } from './triangle.js';
 import { rotate, atan2 } from './core/math.js';
 import { resized } from './core/slots.js';
 import { impact, posed, UNSURE } from './impact.js';
+import { COMPLIANCE } from './forest.js';
 
 const DYNAMIC = 0, STATIC = 1;
 const BOX = 0, SPHERE_SHAPE = 1, CAPSULE_SHAPE = 2, HULL_SHAPE = 3, MESH = 5;   // World's shape codes; a heightfield is 6
@@ -131,7 +132,7 @@ const P = 4;
 // it three multiply-adds per body, where working them out from the levers and
 // the inverse inertias at every push cost 15 multiplies a body. Levers and
 // inverse inertias hold for the whole step, so these do too. Measured in the
-// solver, which a box face sweeps four points four times a pass: see
+// solver, when it swept a box face's four points four times a pass: see
 // ROADMAP.md, milestone 16. A manifold keeps the same 12 for each of its two
 // tangents at its friction anchor (FJ; see FRICTION).
 const J = 12, FJ = 24;
@@ -193,6 +194,9 @@ export class Contacts {
     grow('gap', Float64Array, m);   // its points' least separation as the last pass saw it: at the step's end
     grow('normalMass', Float64Array, p);
     grow('jac', Float64Array, J * p);   // each point's turning terms, worked out once a step (see J)
+    // A manifold's points' couplings along the normal, P x P (see solve's BLOCK):
+    // entry (k, l) is how fast point k closes per unit of impulse at point l.
+    grow('block', Float64Array, P * p);
     grow('normalImpulse', Float64Array, p);
     grow('maxNormalImpulse', Float64Array, p); grow('relativeVelocity', Float64Array, p);
     grow('lever', Float64Array, p);   // the point's distance from the friction anchor, across the normal: its twist lever
@@ -221,8 +225,10 @@ export class Contacts {
 }
 
 // Each point's closing-speed target and softness for one pass, worked out
-// once before the sweeps over it.
-const target = new Float64Array(P), massScale = new Float64Array(P), impulseScale = new Float64Array(P);
+// once before solving it; then the block solve's own scratch (see solve).
+const target = new Float64Array(P), massScale = new Float64Array(P), impulseScale = new Float64Array(P), give = new Float64Array(P);
+const closingNow = new Float64Array(P), wanted = new Float64Array(P), solved = new Float64Array(P);
+const AS = new Float64Array(P * P), RS = new Float64Array(P), XS = new Float64Array(P), IN = new Int8Array(P);
 
 // ---- find ----
 
@@ -1132,6 +1138,21 @@ export function prepare(world, c) {
       const dvz = v[b3 + 2] + w[b3] * rby - w[b3 + 1] * rbx - v[a3 + 2] - w[a3] * ray + w[a3 + 1] * rax;
       c.relativeVelocity[i] = dvx * nx + dvy * ny + dvz * nz;
     }
+    const n = c.points[m];
+    if (n >= 2) {
+      // The block (see solve): each entry from the turning terms just made,
+      // so its diagonal is exactly what normalMass inverts.
+      const jac = c.jac, kb = m * P * P, s = ima + imb;
+      for (let k = 0; k < n; k++) {
+        const jk = J * (m * P + k);
+        for (let l = 0; l <= k; l++) {
+          const jl = J * (m * P + l);
+          const e = s + jac[jk] * jac[jl + 6] + jac[jk + 1] * jac[jl + 7] + jac[jk + 2] * jac[jl + 8]
+            + jac[jk + 3] * jac[jl + 9] + jac[jk + 4] * jac[jl + 10] + jac[jk + 5] * jac[jl + 11];
+          c.block[kb + P * k + l] = e; c.block[kb + P * l + k] = e;
+        }
+      }
+    }
     if (weight === 0) { weight = c.points[m]; ax = ex; ay = ey; az = ez; bx = fx; by = fy; bz = fz; }
     ax /= weight; ay /= weight; az /= weight; bx /= weight; by /= weight; bz /= weight;
     c.anchorA[m3] = ax; c.anchorA[m3 + 1] = ay; c.anchorA[m3 + 2] = az;
@@ -1321,6 +1342,42 @@ export function warmStart(world, c) {
   }
 }
 
+/**
+ * The block solve's impulses for the points in `set` (bit k for point k),
+ * the rest 0, into `solved`: (K + give) l = wanted on those points, with
+ * K at K[kb..] (P x P) and each point's give from this pass's softness (see
+ * solve's BLOCK). Gaussian elimination without pivoting, which a positive
+ * definite matrix never needs; at most four points.
+ */
+function pushes(K, kb, count, set) {
+  let n = 0;
+  for (let k = 0; k < count; k++) {
+    solved[k] = 0;
+    if (set >> k & 1) IN[n++] = k;
+  }
+  for (let r = 0; r < n; r++) {
+    const kr = IN[r];
+    for (let s = 0; s < n; s++) AS[r * P + s] = K[kb + P * kr + IN[s]];
+    AS[r * P + r] *= 1 + give[kr];
+    RS[r] = wanted[kr];
+  }
+  for (let col = 0; col < n; col++) {
+    const pivot = AS[col * P + col];
+    for (let r = col + 1; r < n; r++) {
+      const f = AS[r * P + col] / pivot;
+      for (let s = col + 1; s < n; s++) AS[r * P + s] -= f * AS[col * P + s];
+      RS[r] -= f * RS[col];
+    }
+  }
+  for (let r = n - 1; r >= 0; r--) {
+    let x = RS[r];
+    for (let s = r + 1; s < n; s++) x -= AS[r * P + s] * XS[s];
+    XS[r] = x / AS[r * P + r];
+    solved[IN[r]] = XS[r];
+  }
+}
+
+
 /** 1 / (axis · (Ia⁻¹ + Ib⁻¹) axis): how hard the pair is to turn against each other about a unit axis. */
 function turning(invI, a, b, x, y, z) {
   const k = along(invI, a * 6, x, y, z) + along(invI, b * 6, x, y, z);
@@ -1376,6 +1433,8 @@ export function solve(world, c, h, bias) {
   const v = world._velocity, w = world._angular, invI = world._invI, invMass = world._invMass;
   const p = world._position, start = world._start, q = world._rotation;
   const inv = 1 / h;
+  // A soft point's give over its own K_kk (see BLOCK): is/ms, and COMPLIANCE.
+  const springy = soft.impulseScale / soft.massScale + COMPLIANCE;
   for (let m = 0; m < c.count; m++) {
     const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3, m3 = 3 * m;
     const nx = c.normal[m3], ny = c.normal[m3 + 1], nz = c.normal[m3 + 2];
@@ -1398,36 +1457,57 @@ export function solve(world, c, h, bias) {
       if (s < least) least = s;
       if (s > 0) {
         // Not touching yet: allowed to close exactly the gap this substep, no more.
-        target[k] = s * inv; massScale[k] = 1; impulseScale[k] = 0;
+        target[k] = s * inv; massScale[k] = 1; impulseScale[k] = 0; give[k] = COMPLIANCE;
       } else if (bias) {
         target[k] = Math.max(soft.biasRate * s, -maxBias);
-        massScale[k] = soft.massScale; impulseScale[k] = soft.impulseScale;
+        massScale[k] = soft.massScale; impulseScale[k] = soft.impulseScale; give[k] = springy;
       } else {
-        target[k] = 0; massScale[k] = 1; impulseScale[k] = 0;
+        target[k] = 0; massScale[k] = 1; impulseScale[k] = 0; give[k] = COMPLIANCE;
       }
     }
     // The last relaxing pass comes after the last move, so this is where the step leaves them.
     c.gap[m] = least;
-    // The pair's velocities, held here for the whole manifold and written back
-    // once at its end: every sweep and friction reads and writes them, and
-    // reading and writing the shared columns at each push cost more than the
-    // arithmetic. Measured: see ROADMAP.md, milestone 16.
-    const jac = c.jac, ima = invMass[a], imb = invMass[b];
+    // The pair's velocities are held in locals for the whole manifold and
+    // written back once at its end: the normal and friction read and write
+    // them, and reading and writing the shared columns at each push cost more
+    // than the arithmetic. Measured: see ROADMAP.md, milestone 16.
+    //
+    // BLOCK. The points of a face contact are coupled: four points on a box's
+    // face hold only three things (its height and its two tilts), so a push
+    // at one changes how fast every other closes. Solved one point at a time,
+    // the first stops the whole fall on its own and tips the box, and friction
+    // turns the tip into a slide (7.6 mm at 4 substeps with one sweep; the
+    // sweeps this replaced, one per point, cut it to nothing). So a manifold's
+    // normal impulses are solved together, exactly, as Box2D 2.4's two-point
+    // block solver does, for up to four points (Catto, GDC 2009).
+    //
+    // K, the block prepare() made, takes impulses to closing speeds: v' = v +
+    // K (l' - l). Each point k wants v'_k + target_k + give_k K_kk l'_k = 0
+    // where it pushes (l'_k > 0), and v'_k + target_k >= 0 where it doesn't.
+    // The give is the soft contact's own: the one-point update below, l' = l -
+    // m ms (v + t) - is l, is exactly that equation with give = is/ms (Box2D's
+    // ms + is = 1), so a manifold of one point solved this way would be the
+    // update below but for COMPLIANCE. A speculative point and the relaxing
+    // pass give nothing (is = 0), and every point gives COMPLIANCE of its own
+    // K_kk as joints do (forest.js): four points on one face hold only three
+    // things, so K alone is singular, and the give is what picks the impulses
+    // among the many that stop the face, the evenest, pulled to it by a
+    // millionth. The speed it lets through is a millionth of the push.
+    //
+    // That is a linear complementarity problem, (K + give) l' = K l - v - t
+    // on the points that push, l' = 0 and closing no faster than the target
+    // on the rest. K + give is positive definite, so it has exactly one
+    // answer, found by Murty's least-index pivoting (1974): guess which points
+    // push (those the equations alone would push), solve them, and flip the
+    // first point that pulls or closes too fast, until none does. It meets each
+    // of the 2^count sets at most once, so that bounds it; a resting box's
+    // first guess is the answer.
+    const jac = c.jac, ima = invMass[a], imb = invMass[b], kb = m * P * P, K = c.block;
     let vax = v[a3], vay = v[a3 + 1], vaz = v[a3 + 2], wax = w[a3], way = w[a3 + 1], waz = w[a3 + 2];
     let vbx = v[b3], vby = v[b3 + 1], vbz = v[b3 + 2], wbx = w[b3], wby = w[b3 + 1], wbz = w[b3 + 2];
-    // One sweep per point. The points of a face contact are coupled: four
-    // points on a box's face hold only three things (its height and its two
-    // tilts), and a single sweep visits them in an order, so the first stops
-    // the whole fall on its own and tips the box, and friction turns the tip
-    // into a slide. Sweeping the manifold's own points as many times as it
-    // has points lets each one's correction reach every other. Measured, a 1 m
-    // box dropped flat 2.5 m at 4 substeps: 7.6 mm of slide with one sweep,
-    // 0.04 mm with two, none to a micrometre with four. A one-point contact
-    // gets one sweep, which already solves it exactly. Measured again at 8
-    // substeps (milestone 16): one sweep slid it 1.5 mm, two 0.01 mm and let
-    // the pyramid stray 2.4 mm where four keep it to 1.0, for 9 to 16% of a
-    // step saved; kept at four.
-    for (let sweep = 0; sweep < count; sweep++) {
+    if (count === 1 || !(K[kb] > 0)) {
+      // One point, or bodies neither of which can move (K is all zero): the
+      // one-point update, which already solves a point alone exactly.
       for (let k = 0; k < count; k++) {
         const i = m * P + k, j = J * i;
         const vn = (vbx - vax) * nx + (vby - vay) * ny + (vbz - vaz) * nz
@@ -1435,20 +1515,56 @@ export function solve(world, c, h, bias) {
         const old = c.normalImpulse[i];
         let next = old - c.normalMass[i] * massScale[k] * (vn + target[k]) - impulseScale[k] * old;
         if (next < 0) next = 0;
-        const d = next - old;
-        c.normalImpulse[i] = next;
-        // The first push at a point this step is the moment of impact: the
-        // speed it closes at now is what a bounce sends back. Taken at the
-        // start of the step instead, it would miss what gravity added before
-        // the bodies met, a twentieth of a slow bounce at 60 Hz.
-        if (d > 0 && c.maxNormalImpulse[i] === 0) c.relativeVelocity[i] = vn;
-        if (d > c.maxNormalImpulse[i]) c.maxNormalImpulse[i] = d;
-        const px = nx * d, py = ny * d, pz = nz * d;
-        vax -= ima * px; vay -= ima * py; vaz -= ima * pz;
-        vbx += imb * px; vby += imb * py; vbz += imb * pz;
-        wax -= jac[j + 6] * d; way -= jac[j + 7] * d; waz -= jac[j + 8] * d;
-        wbx += jac[j + 9] * d; wby += jac[j + 10] * d; wbz += jac[j + 11] * d;
+        closingNow[k] = vn; solved[k] = next;
       }
+    } else {
+      for (let k = 0; k < count; k++) {
+        const j = J * (m * P + k);
+        closingNow[k] = (vbx - vax) * nx + (vby - vay) * ny + (vbz - vaz) * nz
+          + wbx * jac[j + 3] + wby * jac[j + 4] + wbz * jac[j + 5] - wax * jac[j] - way * jac[j + 1] - waz * jac[j + 2];
+      }
+      // The right-hand side, K l - v - t, and the first guess: the points it pushes.
+      let set = 0;
+      for (let k = 0; k < count; k++) {
+        let r = -closingNow[k] - target[k];
+        for (let l = 0; l < count; l++) r += K[kb + P * k + l] * c.normalImpulse[m * P + l];
+        wanted[k] = r;
+        if (r > 0) set |= 1 << k;
+      }
+      for (let round = 0; ; round++) {
+        pushes(K, kb, count, set);
+        let flip = -1;
+        for (let k = 0; k < count && flip < 0; k++) {
+          if (set >> k & 1) {
+            if (solved[k] < 0) flip = k;
+          } else {
+            let r = -wanted[k];
+            for (let l = 0; l < count; l++) r += K[kb + P * k + l] * solved[l];
+            if (r < 0) flip = k;
+          }
+        }
+        // Rounding could in principle send it round the sets; past 2^count
+        // pivots it stops where it is, holding no point to a pull.
+        if (flip < 0 || round === 1 << count) break;
+        set ^= 1 << flip;
+      }
+    }
+    for (let k = 0; k < count; k++) {
+      const i = m * P + k, j = J * i;
+      const old = c.normalImpulse[i], next = solved[k] > 0 ? solved[k] : 0;
+      const d = next - old;
+      c.normalImpulse[i] = next;
+      // The first push at a point this step is the moment of impact: the
+      // speed it closes at now is what a bounce sends back. Taken at the
+      // start of the step instead, it would miss what gravity added before
+      // the bodies met, a twentieth of a slow bounce at 60 Hz.
+      if (d > 0 && c.maxNormalImpulse[i] === 0) c.relativeVelocity[i] = closingNow[k];
+      if (d > c.maxNormalImpulse[i]) c.maxNormalImpulse[i] = d;
+      const px = nx * d, py = ny * d, pz = nz * d;
+      vax -= ima * px; vay -= ima * py; vaz -= ima * pz;
+      vbx += imb * px; vby += imb * py; vbz += imb * pz;
+      wax -= jac[j + 6] * d; way -= jac[j + 7] * d; waz -= jac[j + 8] * d;
+      wbx += jac[j + 9] * d; wby += jac[j + 10] * d; wbz += jac[j + 11] * d;
     }
     // Friction, once for the manifold at its anchor (see FRICTION): both
     // tangents as one 2x2 block, held within a circle of mu times the whole

@@ -138,6 +138,7 @@ test('the pairs a step touches are exactly those checking every pair would find'
   let checked = 0, touched = 0;
   scene(2, 120, (world) => {
     const all = brute(world, 1 / 60);
+    const before = Uint8Array.from(world._awake);
     world.step(1 / 60);
     // Pairs of sleeping bodies are left out of a step on purpose; a pair counts
     // if a body in it was awake while the step narrowed, which takes in any
@@ -155,7 +156,15 @@ test('the pairs a step touches are exactly those checking every pair would find'
     const missing = expected.filter((key) => !listed.has(key));
     assert.deepEqual(missing, [], `step ${checked}: pairs the broadphase missed`);
     const found = touching(world);
-    const stray = found.filter((key) => !expected.includes(key));
+    // A pair of two bodies asleep when brute() ran can be woken in the step
+    // and narrowed then with the margin a woken body gets (World._wake gives
+    // it this step's bounds); brute() saw them still, with none. Found at
+    // step 100 once the block normal solve changed the scene's course: two
+    // boxes 4 mm apart, a tolerance of 2.7 mm, woken by a touch.
+    const stray = found.filter((key) => {
+      const [a, b] = key.split('-').map(Number);
+      return !expected.includes(key) && (before[a] === 1 || before[b] === 1);
+    });
     assert.deepEqual(stray, [], `step ${checked}: contacts no pair within reach accounts for`);
     checked++;
     touched += found.length;

@@ -59,8 +59,9 @@ These were made with Nolan and override the rules below where they differ.
 - **The solver is the soft step, 8 substeps** (2026-10-13, milestone 4, measured in
   `bench/solver.js`). Sequential impulses (one substep, many passes) couldn't hold a 10-box stack.
   Each substep: one solving pass, one relaxing pass; contact stiffness 1/8 of the substep rate,
-  damping ratio 10. A manifold's normal points are swept once per point (four for a box face),
-  which is what stops a flat-landing box tipping and sliding. Every contact tolerance is
+  damping ratio 10. A manifold's normal points are solved together, one small LCP a manifold a
+  pass (2026-10-26, the block solve, below); before, swept once per point, four for a box face,
+  which was what stopped a flat-landing box tipping and sliding. Every contact tolerance is
   `PIXEL` (1/200) of the smaller body's thinnest size. `world.substeps` is the one public knob.
   Pairs come from the broadphase (below).
 - **The broadphase is a dynamic AABB tree** (2026-10-13, milestone 5, measured in
@@ -214,7 +215,16 @@ These were made with Nolan and override the rules below where they differ.
   in the 2x2 block's metric (Newton on α in (I + αM)λ = λu, Moré-Sorensen; 3-4 steps, at most
   13 fuzzed), maximum dissipation; scaling down leaned up to 22° off at a lone corner. Rolling
   friction still scales. FORMAT 4. Box pile and hulls on terrain about 4% slower, pinned.
-- **Four points, nearest first** (2026-10-23, the rocking bugs): `reducePoints` in `collide.js`
+- **The block normal solve** (2026-10-26, Nolan: "I want to see if we can make that work", held
+  until the rocking bugs were fixed): `prepare()` builds each manifold's P x P coupling `block`
+  from `jac` (two or more points); `solve()` solves the manifold's normal as one LCP a pass,
+  Murty least-index pivoting, `pushes()` by elimination without pivoting (K plus the give is
+  positive definite); every point gives `COMPLIANCE` (forest.js, 2^-20) of its own K_kk so a box
+  face's four points don't make K singular, and a soft point also is/ms, so one point is exactly
+  the old update; pivoting capped at 2^count rounds. One-point manifolds keep the old update.
+  `block` is scratch to `save()`. 16 normal solves a point a step against 36-52 swept. Pinned:
+  pile 5-6% faster, pyramid 13-17%, hulls 2% slower, terrain even; sleep and qualx as before.
+ (2026-10-23, the rocking bugs): `reducePoints` in `collide.js`
   and `reduce()` in `triangle.js` make each pick (farthest, then the largest triangle on each
   side) among pressed points (separation <= 0) first, then touching (within the tolerance), then
   the rest; with nothing overlapping, the points equal to the deepest stand in for pressed.

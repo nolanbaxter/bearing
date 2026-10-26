@@ -66,7 +66,7 @@ const TYPED_NAME = new Map(Object.entries(TYPED).map(([k, v]) => [v, k]));
  * afresh before each step reads them, 36 numbers a point, which would nearly
  * double a pile's save.
  */
-const SCRATCH = { World: new Set(['_lines', '_placed']), Contacts: new Set(['jac', 'fjac']) };
+const SCRATCH = { World: new Set(['_lines', '_placed']), Contacts: new Set(['jac', 'fjac', 'block']) };
 
 /** The world as plain, JSON-safe data. */
 export function save(world, World) {
@@ -148,7 +148,7 @@ export function load(data, World) {
     if (!(made[0] instanceof World)) throw new Error('no world first');
     made[0]._lines = new Float32Array(0);
     made[0]._placed = [];
-    for (const o of made) if (o instanceof Contacts) { o.jac = new Float64Array(o.normalMass.length * 12); o.fjac = new Float64Array(o.friction.length * 24); }
+    for (const o of made) if (o instanceof Contacts) { o.jac = new Float64Array(o.normalMass.length * 12); o.fjac = new Float64Array(o.friction.length * 24); o.block = new Float64Array(o.normalMass.length * 4); }
     return made[0];
   } catch (e) {
     return fail('load', `data is damaged: ${e.message}`);
