@@ -725,9 +725,10 @@ Winding's way, copied before the first one:
 - **Branding, made with Nolan just before the release** (Nolan, 2026-10-26): a logo and wordmarks
   like Winding's (`docs/logo.svg`, `wordmark-light.svg`, `wordmark-dark.svg` in its repo: a small
   flat SVG mark whose shape is the name's technical meaning, mid-tone colours that read on white
-  and on dark, the README's `<picture>` header), bear-themed. Ideas so far: a fish (Bearing, bear,
-  bear eats fish); a ball bearing; a bear's paw, whose pad and toes are circles like a bearing's
-  balls. Nolan is still thinking it over.
+  and on dark, the README's `<picture>` header), bear-themed. Chosen (2026-10-26): a
+  bear's paw drawn as a bearing, its pad and toes the balls, with a bear's real five toes (Nolan:
+  "the exact number of toes a bear has"). Turned down: a ring of balls alone ("a circle of
+  circles", bland) and a fish (Bearing, bear, bear eats fish).
 
 ---
 
