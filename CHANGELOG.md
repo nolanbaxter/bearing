@@ -212,6 +212,8 @@ All notable changes to Bearing are recorded here. The format follows
   landing pile of 1,000 boxes steps 3.2 times as fast on an i7-1260P laptop, 8,000 boxes 3.4
   times. They start by themselves once a world has enough contacts, sleep between steps, and end
   with `destroy()`. In a browser they need a cross-origin isolated page; without one, or with
-  `workers: 0`, everything runs on one thread as before.
+  `workers: 0`, everything runs on one thread as before. Joints are solved on one thread, and the workers
+  sleep through them rather than spin: 32 ragdolls stepped 1.6 times as slow with workers as
+  without before that, and now 1.15 times.
 - The `centerOfMass` option, `[x, y, z]` in the body's own frame or `null` for the shape's, moves
   any body's centre of mass, as a car's is lowered so it doesn't roll over.

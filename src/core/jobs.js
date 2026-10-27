@@ -36,10 +36,16 @@
 // - Workers spin between dispatches while a step's dispatches come close
 //   together (STAY, from begin() to end()), and sleep in Atomics.wait the
 //   rest of the time. The solve dispatches once per colour per pass, 150 to
-//   200 times a step, and a worker woken from Atomics.wait each time takes
-//   tens of microseconds to answer: more than a small colour's whole pass.
-//   Between steps, and while the stepping thread works alone, they cost
-//   nothing.
+//   200 times a step, and a worker woken from Atomics.wait takes about 9 us to
+//   answer: more than a small colour's whole pass. But the joints run on the
+//   stepping thread alone, between the contact passes, and workers spinning
+//   through them slowed it though they touched none of it: 32 ragdolls, whose
+//   joints are half the step, took up to 1.45 times as long a step with 7
+//   workers as with none, their joints twice as long (Node, i7-1260P).
+//   Spinning cores share the chip's power and turbo with the stepping thread,
+//   and may share its core. So the stepping thread says when it goes to work
+//   alone (lull), and if that stretch last took longer than a wake costs, the
+//   workers sleep through it; the next dispatch wakes them.
 // - Workers start only when a step first has enough work for them (see
 //   begin), not when the world is made: a world of a few bodies never needs
 //   them, and a test suite making hundreds of small worlds would otherwise
@@ -57,9 +63,11 @@ const CHUNK = 5;       // items a chunk
 const KIND = 6;        // which job
 const SHUTDOWN = 7;    // 1 once the world is done with its workers
 const DATA = 8;        // moved on each time the buffers are sent: which ones are current
-const STAY = 9;        // 1 between begin() and end(): workers spin instead of sleeping
+const STAY = 9;        // 1 between begin() and end(), but for lulls: workers spin instead of sleeping
 const READY = 10;      // workers that have their buffers and are listening
-const SLOTS = 11;
+/** Workers in Atomics.wait, or about to be: a dispatch notifies only if there are any (see run). */
+export const SLEEPING = 11;
+const SLOTS = 12;
 
 /**
  * The cursor's low 10 bits are the next chunk's index, and the 21 above them
@@ -94,6 +102,35 @@ const PER_THREAD = 4;
  * or never loaded, takes this long.
  */
 const HANG_MS = 2000;
+
+/**
+ * How long a stretch of the stepping thread's work alone has to have lasted,
+ * in ms, for the workers to sleep through it the next time (see lull): about
+ * what a wake costs. Spinning through a stretch can cost the stepping thread
+ * up to its whole length (the ragdolls' joints took twice as long beside
+ * spinning workers), a wake about the same whatever the stretch. On the
+ * i7-1260P in Node, 7 workers, a worker asleep in Atomics.wait answered in
+ * 9 us (median; 12 us at the 90th percentile) against 0.5 us spinning, but a
+ * wake cost a step 28 to 45 us all told, waiting on the late worker included
+ * (the 1,000-box pile woken 25 times a step, 10% slower; 32 ragdolls' contact
+ * passes 0.85 to 1.1 ms slower for 24 wakes). The ragdolls' joint passes are
+ * 195 to 913 us (10th to 90th percentile), so they sleep through them; a
+ * world of a few joints, whose passes take microseconds, keeps its workers
+ * spinning.
+ *
+ * Why the stepping thread decides, and not a bound on how long a worker
+ * spins idle: the other gaps, where the stepping thread moves the bodies,
+ * grow with their number, 24 to 33 us on the 1,000-box pile and over 100 us
+ * at 8,000, and a bound short enough to free the joints sent the 8,000-box
+ * pile's workers to sleep at every substep, 25% slower.
+ */
+const LULL_MS = 0.05;
+
+/**
+ * How many stretches lull() keeps a length for: world.js's three joint
+ * passes (warm start, solve, relax), whose lengths differ several times over.
+ */
+const LULLS = 3;
 
 // Absent on a browser page that isn't cross-origin isolated (COOP and COEP
 // headers): without it, workers can't share a world's memory, and everything
@@ -178,6 +215,10 @@ export class Jobs {
     this.keys = null;
     /** True between begin() and end() when the step's dispatches may run on several threads. */
     this.live = false;
+    /** The stretch lull() began, until the next dispatch, or -1; when it began; how long each last took, in ms. */
+    this.lulled = -1;
+    this.lullAt = 0;
+    this.solo = new Float64Array(LULLS);
     this.broken = false;
     /**
      * Dispatches that ran on several threads. The plain loop gives the same
@@ -214,7 +255,21 @@ export class Jobs {
   end() {
     if (!this.live) return;
     this.live = false;
+    this.lulled = -1;
     Atomics.store(this.control, STAY, 0);
+  }
+
+  /**
+   * The stepping thread goes to work alone, on stretch `k` (one of LULLS):
+   * the workers sleep through it if it last took longer than LULL_MS, and
+   * the next dispatch (run) wakes them, and times it. The time decides only
+   * who waits how, never a result.
+   */
+  lull(k) {
+    if (!this.live) return;
+    this.lulled = k;
+    this.lullAt = performance.now();
+    if (this.solo[k] > LULL_MS) Atomics.store(this.control, STAY, 0);
   }
 
   /**
@@ -296,6 +351,11 @@ export class Jobs {
     const control = this.control;
     const chunks = Math.min((this.count + 1) * PER_THREAD, INDEX);
     const chunk = Math.ceil(n / chunks);
+    if (this.lulled >= 0) {
+      this.solo[this.lulled] = performance.now() - this.lullAt;
+      this.lulled = -1;
+      Atomics.store(control, STAY, 1);
+    }
     const epoch = (Atomics.load(control, EPOCH) + 1) | 0;
     Atomics.store(control, CURSOR, tagOf(epoch));
     Atomics.store(control, COMPLETED, 0);
@@ -306,7 +366,11 @@ export class Jobs {
     // The epoch last: a worker reads the rest only once it sees a new epoch,
     // and the Atomics order the two.
     Atomics.store(control, EPOCH, epoch);
-    Atomics.notify(control, EPOCH);
+    // A notify takes a lock even with no one waiting, and most dispatches
+    // find every worker spinning. A worker counts itself asleep before it
+    // waits, and the wait returns at once if the epoch has moved on, so with
+    // the Atomics' one order either this sees it counted or it sees the epoch.
+    if (Atomics.load(control, SLEEPING) > 0) Atomics.notify(control, EPOCH);
     claim(control, job, world, c, this.args, epoch);
     if (Atomics.load(control, COMPLETED) < n) {
       const deadline = performance.now() + HANG_MS;
@@ -391,7 +455,10 @@ export function work(message, jobs) {
     const epoch = Atomics.load(control, EPOCH);
     if (epoch === seen) {
       if (Atomics.load(control, STAY) === 1) continue;
+      // Counted first, so a dispatch knows to wake it (see run).
+      Atomics.add(control, SLEEPING, 1);
       Atomics.wait(control, EPOCH, seen);
+      Atomics.sub(control, SLEEPING, 1);
       continue;
     }
     seen = epoch;

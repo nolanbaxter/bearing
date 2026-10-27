@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { World } from '../src/bearing.js';
-import { cores, sharedMemory } from '../src/core/jobs.js';
+import { cores, sharedMemory, SLEEPING } from '../src/core/jobs.js';
 import { suite, testAsync as test } from './test.js';
 import { mixed } from './scenes.js';
 
@@ -92,6 +92,34 @@ await withWorkers('so does a landing pile of 1,000 boxes, at the thresholds as t
   assert.ok(four._jobs.parallel > 1000, `only ${four._jobs.parallel} dispatches went to the workers`);
   one.destroy();
   four.destroy();
+});
+
+await withWorkers('workers sleep through the joints, which run on one thread', async () => {
+  // Left spinning through a long joint pass, they slowed the stepping thread
+  // (core/jobs.js, LULL_MS): a step's window opened, and a lull begun on a
+  // stretch that last took 1 ms, twenty times the bound; no dispatch for 50 ms.
+  const world = pile(2);
+  assert.ok(await started(world));
+  const jobs = world._jobs;
+  assert.ok(jobs.begin(world, world._contacts, true), 'the window did not open');
+  jobs.solo[0] = 1;
+  jobs.lull(0);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const asleep = Atomics.load(jobs.control, SLEEPING);
+  jobs.end();
+  assert.equal(asleep, jobs.workers.length, 'a worker was still spinning');
+  // And a dispatch wakes them: the next steps still go to the workers, to the same bits.
+  const one = pile(0);
+  while (one.stepCount < world.stepCount) one.step(DT);
+  const before = jobs.parallel;
+  for (let n = 0; n < 30; n++) {
+    one.step(DT);
+    world.step(DT);
+  }
+  assert.ok(jobs.parallel > before, 'nothing went to the workers after they slept');
+  assert.equal(state(world), state(one));
+  one.destroy();
+  world.destroy();
 });
 
 await withWorkers('a world too small to be worth them never starts any', async () => {

@@ -211,7 +211,9 @@ heightfields and compounds are found, and joints, sleep and the rest run, on the
   (`crossOriginIsolated` is then `true`). Without it, or in Node before 20.16, the world runs on
   one thread, with the same results.
 - **Between steps they sleep**, using nothing. While a step runs they wait for the next group by
-  spinning, so a step uses up to that many more cores while it lasts.
+  spinning, so a step uses up to that many more cores while it lasts; but not through its joints,
+  which run on one thread: through a joint pass that last took over 50 µs they sleep, and the
+  next group wakes them.
 - **[`destroy()`](#world-destroy) ends them**, and so does the world being garbage collected. They
   never keep a Node process from exiting.
 - **They aren't saved.** A world from [`World.load`](#world-load) has `'auto'`, as a new one does.

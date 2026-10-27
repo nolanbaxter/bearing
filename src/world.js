@@ -948,14 +948,20 @@ export class World {
         makeSoft(JOINT_STIFFNESS / h, JOINT_DAMPING_RATIO, h, jointSoft);
       }
       // Joints before contacts, in each pass, as Box2D 3 orders them: a joint
-      // can't give, and a contact solved after it sees where it holds.
+      // can't give, and a contact solved after it sees where it holds. The
+      // joints run on this thread alone, so the workers are told (lull): left
+      // spinning through a long joint pass, they slowed it (core/jobs.js).
+      const lull = parallel && held > 0;
       for (let sub = 0; sub < substeps; sub++) {
         this._accelerate(h);
+        if (lull) jobs.lull(0);
         if (held > 0) warmStartJoints(this);
         if (touching > 0) warmStart(this, next);
+        if (lull) jobs.lull(1);
         if (held > 0) solveJoints(this, h, true);
         if (touching > 0) solve(this, next, h, true);
         this._move(h);
+        if (lull) jobs.lull(2);
         if (held > 0) solveJoints(this, h, false);
         if (touching > 0) solve(this, next, h, false);
       }

@@ -243,6 +243,10 @@ These were made with Nolan and override the rules below where they differ.
   `destroy()`/GC, unref'd in Node. `workers`: `'auto'` = max(1, floor(threads/2) - 1), `0`, or a
   cap; not saved. Velocities written back only for bodies with inverse mass (shared statics).
   Every threshold measured. Same bits with any count, tested (`test/workers.test.js`).
+  Joint passes lulled (2026-10-27): `world.js` calls `jobs.lull(k)` before each, and workers
+  sleep through one that last took over `LULL_MS` (50 us, about a wake's cost); a dispatch
+  notifies only when `SLEEPING` > 0. Ragdolls 14.0 -> 10.5 ms with 'auto', one thread 9.0:
+  the rest is likely contact-pass wakes and cache traffic. Small worlds still ~1.3x slower.
 - **Four points, nearest first** (2026-10-23, the rocking bugs): `reducePoints` in `collide.js`
   and `reduce()` in `triangle.js` make each pick (farthest, then the largest triangle on each
   side) among pressed points (separation <= 0) first, then touching (within the tolerance), then
