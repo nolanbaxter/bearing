@@ -125,6 +125,10 @@ All notable changes to Bearing are recorded here. The format follows
   all together every pass (Baraff's linear-time method), so a 100-link chain hangs at its built
   length from the first step and a weight 100 times a link's mass doesn't stretch it. Limits are
   solved against their own joint's pin, so a slammed door stops on its stop.
+- Joints have the last word in each pass, after the contacts, so a contact's push on one limb is
+  shared with the whole body the joints tie it to. Solved the other way, limbs at rest rattled and
+  32 ragdolls never slept; now their joints hold within a tenth of a millimetre and they sleep
+  once nothing in them still swings.
 - `world.remove(handle)` takes a body or a joint; its error is now `remove: handle must be a Body or
   a Joint, got …`.
 - Bearing's own `atan` and `atan2` in `core/math.js`, exact operations only, within 1 ulp of

@@ -947,23 +947,35 @@ export class World {
         this._jointSteps++;
         makeSoft(JOINT_STIFFNESS / h, JOINT_DAMPING_RATIO, h, jointSoft);
       }
-      // Joints before contacts, in each pass, as Box2D 3 orders them: a joint
-      // can't give, and a contact solved after it sees where it holds. The
-      // joints run on this thread alone, so the workers are told (lull): left
-      // spinning through a long joint pass, they slowed it (core/jobs.js).
+      // Contacts before joints, in each pass: what is solved last has the last
+      // word on the velocities, and it has to be the joints. A contact sees
+      // each body alone, a 0.5 kg forearm as 0.5 kg, though the joints tie it
+      // to a whole ragdoll; the tree solve (forest.js) sees them all, and
+      // hands a contact's push on to everything the joints tie it to. Solved
+      // the other way, as Box2D 3 orders its soft joints, a contact's push
+      // opened the joints, the next substep's solve pulled them shut in one go
+      // (JOINT_BIAS) and drove the limb back into the contact: limbs at rest
+      // rattled at 1 to 5 cm/s step to step, crept, and 32 ragdolls never
+      // slept, their joints opening up to 13 cm (s17 in the settling audit).
+      // This way none rattle, the joints hold within half a millimetre, and a
+      // limb pressed into the floor by what lies on it sinks no deeper.
+      // The joints run on this thread alone, so the workers are told (lull),
+      // each time just after the contact work that went before: left spinning
+      // through a long joint pass, they slowed it (core/jobs.js). The relax
+      // pass's stretch runs on into the next substep's warm start.
       const lull = parallel && held > 0;
       for (let sub = 0; sub < substeps; sub++) {
         this._accelerate(h);
+        if (touching > 0) warmStart(this, next);
         if (lull) jobs.lull(0);
         if (held > 0) warmStartJoints(this);
-        if (touching > 0) warmStart(this, next);
+        if (touching > 0) solve(this, next, h, true);
         if (lull) jobs.lull(1);
         if (held > 0) solveJoints(this, h, true);
-        if (touching > 0) solve(this, next, h, true);
         this._move(h);
+        if (touching > 0) solve(this, next, h, false);
         if (lull) jobs.lull(2);
         if (held > 0) solveJoints(this, h, false);
-        if (touching > 0) solve(this, next, h, false);
       }
     } finally {
       if (parallel) jobs.end();

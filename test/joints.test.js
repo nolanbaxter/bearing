@@ -386,6 +386,44 @@ test('a sleeping chain wakes as one when its joint changes, or anything touches 
   assert.ok(links.every((b) => !b.asleep), 'hit, all of it wakes');
 });
 
+test('a ragdoll dropped on the floor comes to rest with its joints shut, and sleeps', () => {
+  // bench/compare.html's ragdoll, 11 boxes and 10 joints, dropped from 0.2 m
+  // and 1 m, turned 0 to 1.2 rad about x. With the joints solved before the
+  // contacts in each pass, limbs lying on limbs rattled at 1 to 5 cm/s, step
+  // to step: two of these never slept in 30 s, one took 20 s, and joints
+  // opened up to 12 mm. Joints last, all slept within 10.9 s (most in 2 to
+  // 4 s; the slowest waits on a forearm swinging on its hinge, which nothing
+  // damps), and no joint opened more than 0.19 mm after the first 2 s.
+  const PARTS = [[[0.32, 0.2, 0.2], [0, 1, 0]], [[0.36, 0.45, 0.22], [0, 1.325, 0]], [[0.2, 0.24, 0.22], [0, 1.67, 0]],
+    [[0.28, 0.1, 0.1], [-0.32, 1.5, 0]], [[0.26, 0.08, 0.08], [-0.59, 1.5, 0]], [[0.28, 0.1, 0.1], [0.32, 1.5, 0]],
+    [[0.26, 0.08, 0.08], [0.59, 1.5, 0]], [[0.14, 0.44, 0.14], [-0.09, 0.68, 0]], [[0.12, 0.44, 0.12], [-0.09, 0.24, 0]],
+    [[0.14, 0.44, 0.14], [0.09, 0.68, 0]], [[0.12, 0.44, 0.12], [0.09, 0.24, 0]]];
+  const JOINTS = [['ball', 1, 0, [0, 1.1, 0]], ['ball', 2, 1, [0, 1.55, 0]], ['ball', 3, 1, [-0.18, 1.5, 0]],
+    ['hinge', 4, 3, [-0.46, 1.5, 0], [0, 1, 0]], ['ball', 5, 1, [0.18, 1.5, 0]], ['hinge', 6, 5, [0.46, 1.5, 0], [0, 1, 0]],
+    ['ball', 7, 0, [-0.09, 0.9, 0]], ['hinge', 8, 7, [-0.09, 0.46, 0], [1, 0, 0]], ['ball', 9, 0, [0.09, 0.9, 0]],
+    ['hinge', 10, 9, [0.09, 0.46, 0], [1, 0, 0]]];
+  const minus = (p, q) => [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
+  for (const height of [0.2, 1]) for (const angle of [0, 0.3, 0.6, 1.2]) {
+    const q = [Math.sin(angle / 2), 0, 0, Math.cos(angle / 2)];
+    const place = (p) => { const r = turned(q, p); return [r[0], r[1] + height, r[2]]; };
+    const world = new World();
+    world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
+    const parts = PARTS.map(([size, p]) => world.addBody({ size, position: place(p), rotation: q }));
+    const ends = JOINTS.map(([type, a, b, p, axis]) => {
+      world.addJoint({ type, a: parts[a], b: parts[b], anchor: place(p), ...(axis ? { axis: turned(q, axis) } : {}) });
+      return [parts[a], minus(p, PARTS[a][1]), parts[b], minus(p, PARTS[b][1])];
+    });
+    const what = `dropped from ${height} m turned ${angle} rad`;
+    let gap = 0;
+    for (let step = 0; step < 12 * 60 && !parts.every((b) => b.asleep); step++) {
+      world.step(DT);
+      if (step >= 120) for (const [a, la, b, lb] of ends) gap = Math.max(gap, apart(at(a, la), at(b, lb)));
+    }
+    assert.ok(parts.every((b) => b.asleep), `${what}: asleep within 12 s`);
+    assert.ok(gap < 0.0005, `${what}: a joint opened ${(gap * 1000).toFixed(2)} mm`);
+  }
+});
+
 test('off means off: no joints, no joint work', () => {
   const world = new World();
   world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });

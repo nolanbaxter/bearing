@@ -137,7 +137,9 @@ These were made with Nolan and override the rules below where they differ.
   loops and rows that may give are solved one at a time, soft (JOINT_STIFFNESS 1/4,
   JOINT_DAMPING_RATIO 2). The solve pass builds and factors (JOINT_BIAS 1), the relax pass reuses
   that factor. Stops and motors are pinned to their joint's own hold rows. Jointed bodies don't
-  tumble. Joints solved before contacts in each pass; joined dynamic bodies share islands.
+  tumble. Contacts solved before joints in each pass (2026-10-27, the settling audit: joints first, a
+  contact's push on a light limb opened them, the next substep's exact solve shut them in one go
+  and drove the limb back in; limbs rattled 1-5 cm/s and 32 ragdolls never slept); joined dynamic bodies share islands.
   Bearing's own `atan`/`atan2` in `core/math.js`.
 - **Continuous collision** (2026-10-15, milestone 13, approved): speculative contacts stay; a pair
   not touching that moves against itself by more than its tolerance in the step (`moving()` in
