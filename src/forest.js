@@ -95,7 +95,7 @@ export class Forest {
     // multiplied twice: measured, see ROADMAP.md, milestone 16.
     grow('up', Float64Array, 36);
     grow('down', Float64Array, 72);
-    grow('inTree', Uint8Array, 1);     // by joint slot: 1 while the joint is in the forest this step
+    grow('inTree', Uint8Array, 1);     // by joint slot: 1 while the joint is in the forest this step; 2 or 3 in a tree held down (see plant())
     // Per body node k, at most two per joint:
     grow('body', Int32Array, 2);       // its slot
     grow('inverse', Float64Array, 2 * 36);   // its block's inverse, 6x6
@@ -163,8 +163,44 @@ export function plant(world, list, n, holds) {
     if (seen[T + k] === 0) length = branch(F, T + k, length, seen);
   }
   F.nodes = length;
+  // A tree with a joint to something the solve doesn't move (a static,
+  // kinematic or character body, or a point in the world) is held down: its
+  // joints are marked 2, and its bodies aren't caught alone (World._catch).
+  // One held down with a body in this step's contacts is marked 3, and its
+  // impulses aren't replayed (joints.js, warmStartJoints()). Flags per tree
+  // root in seen, free again now, 1 for held down and 2 for in contact;
+  // gather() lists no joint without a dynamic body, so a side of -1 has a
+  // node opposite.
+  seen.fill(0, 0, F.bodies);
+  for (let t = 0; t < T; t++) {
+    if (F.side[2 * t] < 0) seen[find(F.union, F.side[2 * t + 1])] = 1;
+    else if (F.side[2 * t + 1] < 0) seen[find(F.union, F.side[2 * t])] = 1;
+  }
+  const c = world._contacts;
+  for (let m = 0; m < c.count; m++) {
+    const a = node[c.a[m]], b = node[c.b[m]];
+    if (a !== 0) { const r = find(F.union, a - 1); if (seen[r] === 1) seen[r] = 3; }
+    if (b !== 0) { const r = find(F.union, b - 1); if (seen[r] === 1) seen[r] = 3; }
+  }
+  for (let t = 0; t < T; t++) {
+    const k = F.side[2 * t] >= 0 ? F.side[2 * t] : F.side[2 * t + 1], f = seen[find(F.union, k)];
+    if (f !== 0) F.inTree[F.joint[t]] = f === 1 ? 2 : 3;
+  }
   for (let k = 0; k < F.bodies; k++) node[F.body[k]] = 0;
   return T;
+}
+
+/**
+ * Turns 1 to 2 in `mark`, a column by body slot, for every body in a tree
+ * the last plant() found held down. Each body node has a forest joint, its
+ * first, whose mark is its tree's.
+ */
+export function anchored(world, mark) {
+  const F = world._joints.forest;
+  for (let k = 0; k < F.bodies; k++) {
+    const s = F.body[k];
+    if (mark[s] === 1 && F.inTree[F.joint[(F.first[k] - 1) >> 1]] >= 2) mark[s] = 2;
+  }
 }
 
 /** Body slot s's node, made if it has none. */

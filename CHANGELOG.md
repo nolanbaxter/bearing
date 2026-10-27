@@ -129,6 +129,14 @@ All notable changes to Bearing are recorded here. The format follows
   shared with the whole body the joints tie it to. Solved the other way, limbs at rest rattled and
   32 ragdolls never slept; now their joints hold within a tenth of a millimetre and they sleep
   once nothing in them still swings.
+- A chain hung from a turning kinematic body and swept into a post, other chains or a heap of
+  boxes passes through or pushes past them instead of being flung: a tree of joints held to
+  something that can't move, while it touches anything, starts each substep from none of last
+  substep's impulses, which no longer balanced the contacts', and its bodies are no longer caught
+  alone at a wall.
+  Eight links on a plate turning at 0.5 to 10 rad/s, among hanging chains and boxes, now go no
+  faster than 1.75 times the same chain with nothing in its way; before, they were flung past
+  1,000 m/s at 1.5 to 7 rad/s.
 - Joint friction: `friction` on ball joints, hinges and sliders, the most torque (N·m) or force
   (N) the joint resists turning or sliding with, as a stiff hinge does. A hinge's or slider's is
   its motor held at speed 0, to the bit; a ball joint's resists turning every way alike. 32 ragdolls

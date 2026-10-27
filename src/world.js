@@ -38,6 +38,7 @@ import {
   jointSoft, JOINT_STIFFNESS, JOINT_DAMPING_RATIO, plantJoints,
 } from './joints.js';
 import { Broadphase } from './broadphase.js';
+import { anchored } from './forest.js';
 import { colour } from './graph.js';
 import { Pairs } from './pairs.js';
 import { Body } from './body.js';
@@ -258,7 +259,7 @@ const COLUMNS = [
   ['_invI', Float64Array, 6],        // world-space inverse inertia, xx xy xz yy yz zz
   ['_start', Float64Array, 3],       // its position when the step began
   ['_startQ', Float64Array, 4],      // and its rotation, for a fast body caught after the solve (_catch)
-  ['_fast', Uint8Array, 1],          // during _catch: 1 for a fast body, which is never another's target
+  ['_fast', Uint8Array, 1],          // during _catch: 1 for a fast body, which is never another's target; 2 for one not swept
   ['_caught', Uint8Array, 1],        // during _catch: 1 for a body put back
   ['_type', Uint8Array, 1],
   ['_shape', Uint8Array, 1],
@@ -1498,6 +1499,22 @@ export class World {
    * spinning or not, 0 through in 100 each, and a rod into a 1 cm steel plate
    * floating free 0 in 100 (47 before).
    *
+   * Not a body whose joints hold it, through its tree, to something that
+   * doesn't move as the solve moves it: a kinematic or static body, or a
+   * point in the world. Put back alone, it leaves its joints open by as far
+   * as it went, and the next solve pass shuts them, all of it at once
+   * (JOINT_BIAS), from the side that can't come back: the joints drag it on
+   * into what it met, at whatever speed shuts the gap in a substep, to be
+   * caught again. Measured, eight links hung from a plate turning at 1 rad/s,
+   * swept into a post: caught there step after step, links stayed inside it
+   * for 737 link-steps and thrashed at 99.5 m/s, 20 times the plate's 5 m/s
+   * at the anchor; let go, they pass through it within 17, at 20.3 m/s,
+   * their speed with no post. A kinematic body goes where it is told, and
+   * what it holds goes with it. A free tree's bodies are still caught: what
+   * pulls one back is the rest of the tree, which gives, and two rods on a
+   * ball joint thrown at 200 m/s at a 1 cm wall went through it 18 times in
+   * 40 when no jointed body was caught, and once, as before, as it is.
+   *
    * Reads the bodies' end poses and _start/_startQ; changes only the caught.
    */
   _catch(next) {
@@ -1512,10 +1529,14 @@ export class World {
     }
     if (count === 0) return;
     this._catchSteps++;
+    // Those held to what doesn't move (see above) are marked 2: still fast,
+    // and so no target, but not swept. Only this step's forest is read.
+    const J = this._joints;
+    if (J.count > 0 && J.active > 0 && J.forest.count > 0) anchored(this, fast);
     let caught = 0;
     for (let i = 0; i < n; i++) {
       const s = list[i], s3 = 3 * s, s4 = 4 * s;
-      if (fast[s] === 0) continue;
+      if (fast[s] !== 1) continue;
       const dx = p[s3] - st[s3], dy = p[s3 + 1] - st[s3 + 1], dz = p[s3 + 2] - st[s3 + 2];
       const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
       CORE.kind = SPHERE_KIND;

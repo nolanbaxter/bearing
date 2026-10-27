@@ -147,6 +147,15 @@ These were made with Nolan and override the rules below where they differ.
   3x3 with the point pinned, clamped to a ball of friction x h, kept in the ball's unused ANG slots.
   `setJoint` zeroes a motor's impulse when motor and friction are both off. FORMAT 5. 1 N·m on
   every joint sleeps all 352 ragdoll parts by 8 s (none: 66).
+  Held-down trees (2026-10-27, the flung chain): a tree with a joint to a static, kinematic or
+  character body or the world is marked by `plant()` (`inTree` 2; 3 if a body of it is in this
+  step's contacts). Marked 3, its rows aren't replayed at the warm start (ball friction and the
+  pinned stop/motor rows still are): a chain on a turning plate jammed against a post built
+  contact and joint impulses of thousands of N·s in balance, and replayed at different levers they
+  flung it past 1,000 m/s. Zeroing every tree's rows broke ball friction and ragdoll sleep (11 of
+  352), solving the tree at the warm start cost 15% of a jointed scene; this costs nothing
+  measurable and keeps ragdolls to the bit. `_catch` doesn't sweep a held-down tree's bodies
+  (`anchored()`, `_fast` 2): put back alone, its joints dragged it on into the post.
 - **Continuous collision** (2026-10-15, milestone 13, approved): speculative contacts stay; a pair
   not touching that moves against itself by more than its tolerance in the step (`moving()` in
   `src/contact.js`) asks `impact()` (`src/impact.js`, conservative advancement over velocity,

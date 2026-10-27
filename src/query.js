@@ -629,7 +629,7 @@ export function sweep(world, cast, self, other, dx, dy, dz, maxT, out, skip = nu
 
 function sweepVisit(s) {
   const world = sweepWorld;
-  if ((sweepSkip !== null && sweepSkip[s] === 1) || !blocks(world, sweepSelf, s, sweepOther)) return sweepMax;
+  if ((sweepSkip !== null && sweepSkip[s] !== 0) || !blocks(world, sweepSelf, s, sweepOther)) return sweepMax;
   const t = world._shape[s] >= MESH ? sweepLevel(s)
     : advanceBody(world, sweepShape, s, sweepOx, sweepOy, sweepOz, sweepDx, sweepDy, sweepDz, sweepMax, true);
   if (t < 0) return sweepMax;

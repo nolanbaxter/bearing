@@ -25,9 +25,10 @@
 // along y as well, are solved together as one 3x3 system; a hinge's two
 // turning rows and a slider's two sliding rows as 2x2.
 //
-// THE SOFT STEP. Joints are solved in the same substeps as contacts, first,
-// with the same warm start, solve and relax (contact.js): each substep starts
-// from the impulses the last one ended with, the solve pass pulls the anchors
+// THE SOFT STEP. Joints are solved in the same substeps as contacts, after
+// them, with the same warm start, solve and relax (contact.js): each substep
+// starts from the impulses the last one ended with (but for some trees' rows:
+// see warmStartJoints()), the solve pass pulls the anchors
 // together, and the relax pass takes back the speed that pulling left behind,
 // so correcting a joint adds no energy. Anchors and axes are worked out afresh
 // from the bodies' rotations at every solve pass, so a joint that turns
@@ -591,11 +592,57 @@ const ZERO3 = new Float64Array(3), ZERO6 = new Float64Array(6), IDENTITY = new F
 /** A distance joint's own spring, worked out per joint. */
 const spring = { biasRate: 0, massScale: 1, impulseScale: 0 };
 
-/** Applies every solved joint's accumulated impulses, at the start of each substep. */
+/**
+ * The warm start, at the start of each substep, after the contacts': every
+ * solved joint's accumulated impulses applied again, but for the rows of a
+ * tree held down and touching something (forest.js, plant()), which start
+ * from none.
+ *
+ * WHY NOT THOSE. The tree is solved exactly in every pass, so what its rows
+ * start from changes nothing it ends with; a replay is for the contacts, so
+ * they see a body already carrying what its joints carry. That holds while
+ * the joints' impulses balance the contacts' replayed beside them, and a
+ * chain held by a kinematic body and driven against something it can't push
+ * aside (a post, a heavy box, a chain hung from the world) breaks it. The
+ * contact sees the link as a light free body, though the joints tie it to one
+ * that can't be stopped, so its push never stops the closing and grows substep
+ * after substep, the joints' growing with it: thousands of N·s each, in
+ * balance. Replayed, the contact's acts at levers taken when the step began
+ * and the joints' at anchors that have moved since, and a narrowphase that
+ * relabels the points drops the contact's altogether: on a thin link spinning
+ * at a few hundred rad/s, two such impulses a few degrees apart turned it at
+ * thousands of rad/s before the contacts were solved. The contacts can only
+ * push, and what they pushed along the way the chain is free to swing
+ * survived the tree solve, so the next replay was further out still.
+ * Measured, eight links hung from a plate turning at 0.5 to 10 rad/s, among
+ * chains hung from the world and a heap of boxes: flung past 1,000 m/s at
+ * 1.5, 2, 3, 5 and 7 rad/s, and swept into a post at 3 rad/s, 640,000 m/s.
+ *
+ * Only there does it break: a free tree (a ragdoll) gives way, so its
+ * contacts' pushes don't grow, and started from none, ragdolls on a floor
+ * rattled, 11 of 352 parts asleep at 12 s against 66; and with no contact
+ * there is nothing to fall out of balance with, while a stop, a motor or
+ * friction, solved before the tree, needs the load replayed (a ball joint's
+ * friction let a pendulum it should hold fall 22 cm). Solving the tree at the
+ * warm start instead, so the contacts start from velocities its joints
+ * accept, did as well everywhere (154 ragdoll parts asleep) but cost a build
+ * of the rows and a solve a substep, 15% of a jointed scene.
+ */
 export function warmStartJoints(world) {
-  const J = world._joints, list = J.list, n = J.active, acc = J.impulse;
+  const J = world._joints, list = J.list, n = J.active, acc = J.impulse, tree = J.forest.inTree;
   for (let i = 0; i < n; i++) {
     const j = list[i], type = J.type[j], o = j * IMPULSES;
+    // A held-down, touching tree's rows start each substep from none; the forest's
+    // solves add this substep's (settleForest), kept for save() and for a
+    // joint that leaves the tree. The pinned rows' share of a stop's or a
+    // motor's push, kept with them, goes too: the forest holds those rows
+    // whatever pushes.
+    if (tree[j] === 3) {
+      acc[o + LIN] = 0; acc[o + LIN + 1] = 0; acc[o + LIN + 2] = 0;
+      // A ball joint's ANG is its friction's, which may give, so is kept.
+      if (type !== BALL) { acc[o + ANG] = 0; acc[o + ANG + 1] = 0; acc[o + ANG + 2] = 0; }
+      if (type === DISTANCE) acc[o + AXIAL] = 0;
+    }
     load(world, j);
     geometry(world, j);
     if (type === SLIDER) {
@@ -643,7 +690,7 @@ export function warmStartJoints(world) {
 export function solveJoints(world, h, bias) {
   const J = world._joints, list = J.list, n = J.active, acc = J.impulse, tree = J.forest.inTree;
   for (let i = 0; i < n; i++) {
-    const j = list[i], o = j * IMPULSES, type = J.type[j], held = tree[j] === 1;
+    const j = list[i], o = j * IMPULSES, type = J.type[j], held = tree[j] !== 0;
     // A fixed joint in a tree has nothing that gives: the forest holds it all.
     if (held && type === FIXED) continue;
     base = o;

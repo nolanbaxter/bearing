@@ -433,6 +433,63 @@ test('a body hanging from a moving kinematic one, or from a character, is carrie
   assert.ok(lantern.position[0] > 11.5, `the lantern came along to ${lantern.position[0]}`);
 });
 
+test('a chain on a turning kinematic plate is swept through a post, never flung, and stays a chain', () => {
+  // Eight 40 cm links hung 5 m out from a plate turning about y, in the way
+  // of a static post. Nothing stops the plate and nothing moves the post, so
+  // the chain has to pass it. Struck against the post, a link can come back
+  // at most as fast as it struck, and the chain whips it on as before: no
+  // faster than twice the same chain with no post. And no joint opens wider
+  // than a link is thick, 10 cm, or the chain has come apart. Before
+  // (2026-10-27), replaying the tree's impulses at the warm start flung the
+  // hinged chain at 3 rad/s to 2 x 10^6 m/s and opened its joints by
+  // kilometres, and the catch held the ball-jointed one in the post, thrashing
+  // at 4.7 times its speed with no post. Measured since: 1.00, 1.00 and 1.04
+  // times, joints within 7.6, 3.2 and 30 mm.
+  const run = (type, spin, post) => {
+    const world = new World();
+    const plate = world.addBody({ type: 'kinematic', position: [0, 5, 0], size: [1, 0.2, 1], angularVelocity: [0, spin, 0] });
+    if (post) world.addBody({ type: 'static', size: [0.3, 10, 0.3], position: [6, 5, 0] });
+    const links = [];
+    let last = plate;
+    for (let i = 0; i < 8; i++) {
+      const link = world.addBody({ size: [0.4, 0.1, 0.1], position: [-4 + 0.4 * (i + 0.5), 4, -3] });
+      world.addJoint({ type, a: link, b: last, anchor: [-4 + 0.4 * i, 4, -3], axis: [0, 0, 1] });
+      links.push(link);
+      last = link;
+    }
+    let fastest = 0, gap = 0;
+    for (let s = 0; s < 600; s++) {
+      world.step(DT);
+      for (const link of links) fastest = Math.max(fastest, Math.hypot(...link.velocity));
+      for (let i = 1; i < 8; i++) gap = Math.max(gap, apart(at(links[i - 1], [0.2, 0, 0]), at(links[i], [-0.2, 0, 0])));
+    }
+    return { fastest, gap };
+  };
+  for (const [type, spin] of [['hinge', 3], ['ball', 1], ['hinge', 10]]) {
+    const free = run(type, spin, false), hit = run(type, spin, true), what = `a ${type} chain at ${spin} rad/s`;
+    assert.ok(hit.fastest <= 2 * free.fastest, `${what}: ${hit.fastest} m/s at the post, ${free.fastest} with none`);
+    assert.ok(hit.gap < 0.1, `${what}: a joint opened ${hit.gap} m`);
+  }
+  // A free tree's bodies, held by their joints only to each other, are still
+  // caught (World._catch): two 10 cm rods on a ball joint, thrown at 200 m/s
+  // at a 1 cm wall, turned any way. With no jointed body caught, 18 in 40
+  // went through; as it is, one, the 40th, which went through before too.
+  let seed = 5, through = 0;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 40; i++) {
+    const world = new World({ gravity: [0, 0, 0] });
+    world.addBody({ type: 'static', size: [0.01, 6, 6] });
+    const q = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5, 1], x = -3 - rnd() * 200 / 60;
+    const a = world.addBody({ size: [0.1, 0.02, 0.02], position: [x, 0, 0], rotation: q, velocity: [200, 0, 0] });
+    const end = at(a, [0.05, 0, 0]), middle = at(a, [0.1, 0, 0]);
+    const b = world.addBody({ size: [0.1, 0.02, 0.02], position: middle, rotation: a.rotation, velocity: [200, 0, 0] });
+    world.addJoint({ a: b, b: a, anchor: end });
+    for (let s = 0; s < 40; s++) world.step(DT);
+    if (!(a.position[0] < 0 && b.position[0] < 0)) through++;
+  }
+  assert.ok(through <= 1, `${through} of 40 throws through the wall`);
+});
+
 test('a joint and its bodies: removing either, the joint goes; handles, counts and alive', () => {
   const world = new World();
   const a = world.addBody({ position: [0, 5, 0] }), b = world.addBody({ position: [1, 5, 0] });
