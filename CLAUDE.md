@@ -141,6 +141,12 @@ These were made with Nolan and override the rules below where they differ.
   contact's push on a light limb opened them, the next substep's exact solve shut them in one go
   and drove the limb back in; limbs rattled 1-5 cm/s and 32 ragdolls never slept); joined dynamic bodies share islands.
   Bearing's own `atan`/`atan2` in `core/math.js`.
+  Joint `friction` (2026-10-27, Nolan: "Go ahead with joint friction"): ball, hinge and slider,
+  default 0; a hinge's or slider's is its motor row at speed 0 while `motorForce` is 0 (same bits as
+  `motorSpeed: 0, motorForce: F`); a ball's is `ballFriction()`, three world-axis rows solved as one
+  3x3 with the point pinned, clamped to a ball of friction x h, kept in the ball's unused ANG slots.
+  `setJoint` zeroes a motor's impulse when motor and friction are both off. FORMAT 5. 1 N·m on
+  every joint sleeps all 352 ragdoll parts by 8 s (none: 66).
 - **Continuous collision** (2026-10-15, milestone 13, approved): speculative contacts stay; a pair
   not touching that moves against itself by more than its tolerance in the step (`moving()` in
   `src/contact.js`) asks `impact()` (`src/impact.js`, conservative advancement over velocity,

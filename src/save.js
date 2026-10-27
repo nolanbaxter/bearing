@@ -49,9 +49,11 @@ import { COLOURS, DIGITS } from './graph.js';
  * last manifold (pairs.js, cache): data of format 2 has none, and is refused
  * rather than loaded without it. 4 since a mesh keeps each edge's fold
  * (mesh.js, FOLDS): data of format 3 has none, and its meshes would stop the
- * first step that touched them.
+ * first step that touched them. 5 since joints have friction (joints.js, the
+ * friction column): data of format 4 has none, and its joints would load
+ * without a value for it.
  */
-export const FORMAT = 4;
+export const FORMAT = 5;
 
 /** The classes a world holds, by the name their objects are written under. */
 const CLASSES = { Slots, Broadphase, Tree, Pairs, Memory, Contacts, Joints, Forest, Events, Mesh, Heightfield, Hull, Parts, Part };

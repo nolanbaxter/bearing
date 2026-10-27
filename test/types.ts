@@ -174,13 +174,15 @@ export function joints(): void {
   const door = world.addBody({ size: [1, 2, 0.05], position: [0.5, 1, 0], mass: 20 });
   const hinge: Joint = world.addJoint({ type: 'hinge', a: door, b: frame, anchor: [0, 1, 0], axis: [0, 1, 0], min: 0, max: Math.PI / 2 });
   world.addJoint({ a: door, anchor: [0, 5, 0] });
-  world.addJoint({ type: 'ball', a: door, b: null, axis: [0, -1, 0], cone: 0.5, min: -0.3 });
+  world.addJoint({ type: 'ball', a: door, b: null, axis: [0, -1, 0], cone: 0.5, min: -0.3, friction: 2 });
   world.addJoint({ type: 'distance', a: door, b: frame, min: 0, frequency: 2, dampingRatio: 0.5, collide: true });
   world.addJoint({ type: 'slider', a: door, axis: new Float32Array([1, 0, 0]), motorSpeed: 1, motorForce: 50 });
   world.addJoint({ type: 'fixed', a: door, b: frame });
   world.setJoint(hinge, { motorSpeed: 2, motorForce: 500, min: null, type: 'slider' });
   const info: JointInfo = world.jointOf(hinge);
   if (info.type === 'distance') info.length.toFixed();
+  if (info.type === 'ball') info.friction.toFixed();
+  world.setJoint(hinge, { friction: 1 });
   const copy: Joint = world.addJoint(world.jointOf(hinge));
   const count: number = world.jointCount;
   const same: boolean = hinge.alive && hinge.id === copy.id && hinge.world === world;
@@ -190,6 +192,8 @@ export function joints(): void {
   world.remove(copy);
   // @ts-expect-error a hinge has no cone
   world.addJoint({ type: 'hinge', a: door, cone: 1 });
+  // @ts-expect-error a fixed joint has no friction
+  world.addJoint({ type: 'fixed', a: door, friction: 1 });
   // @ts-expect-error a joint holds a body: a is required
   world.addJoint({ type: 'ball' });
   // @ts-expect-error a and b are set when it is made

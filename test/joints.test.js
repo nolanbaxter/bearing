@@ -191,6 +191,119 @@ test('a motor reaches its speed within 1%, and stalls at its force against a hea
   near(lift._joints.impulse[11 * j + 6], 20 * DT / 8, 1e-12, 'the motor pushes, N·m·s a substep,');
 });
 
+test('a motor turned off pushes no more', () => {
+  // Its impulse, kept for the warm start, went on being applied at every
+  // substep with nothing left to solve it back: the wheel, turning at 0.38
+  // rad/s when its motor went off, was at 0.76 a second later.
+  const world = new World({ gravity: [0, 0, 0], sleeping: false });
+  const wheel = world.addBody({ shape: 'sphere', radius: 0.5 });
+  const j = world.addJoint({ type: 'hinge', a: wheel, anchor: [0, 0, 0], axis: [0, 0, 1], motorSpeed: 2, motorForce: 20 });
+  for (let s = 0; s < 60; s++) world.step(DT);
+  world.setJoint(j, { motorForce: 0 });
+  const was = wheel.angularVelocity[2];
+  assert.ok(was > 0.1, `turning at ${was}`);
+  for (let s = 0; s < 60; s++) world.step(DT);
+  assert.equal(wheel.angularVelocity[2], was);
+});
+
+test('a hinge\'s or slider\'s friction is its motor held at 0, to the bit', () => {
+  // A 10 kg rod on a level hinge, 49 N·m of gravity about it, and a 1,000 kg
+  // crate on a slider down a 45° slope, 6.9 kN along it, each with half and
+  // one and a half times that: one slips, slowed, the other holds.
+  const run = (k, given) => {
+    const world = new World({ sleeping: false });
+    const rod = world.addBody({ size: [1, 0.1, 0.1], position: [0.5, 2, 0] });
+    world.addJoint({ type: 'hinge', a: rod, anchor: [0, 2, 0], axis: [0, 0, 1], ...given(49.05 * k) });
+    const crate = world.addBody({ position: [4, 2, 0], velocity: [1, -1, 0] });
+    world.addJoint({ type: 'slider', a: crate, axis: [1, -1, 0], ...given(6936.7 * k) });
+    for (let s = 0; s < 120; s++) world.step(DT);
+    return [...world.transforms, ...world._velocity, ...world._angular, ...world._joints.impulse];
+  };
+  for (const k of [0.5, 1.5]) {
+    const friction = run(k, (f) => ({ friction: f }));
+    assert.deepEqual(friction, run(k, (f) => ({ motorSpeed: 0, motorForce: f })), `${k} times the load`);
+    assert.notDeepEqual(friction, run(k, () => ({})), `${k} times the load: friction does something`);
+  }
+});
+
+test('a ball joint\'s friction holds a pendulum above it, slows one below, and is the same turned', () => {
+  // A 5 cm ball held level 1 m out on a ball joint: gravity's torque about
+  // the joint is m g L, 5.14 N·m.
+  const pendulum = (k, turn = 0, kick = 0) => {
+    const world = new World({ sleeping: false });
+    const c = Math.cos(turn), s = Math.sin(turn);
+    // Turned about y: x goes to (c, 0, -s), z to (s, 0, c).
+    const bob = world.addBody({ shape: 'sphere', radius: 0.05, position: [c, 0, -s], velocity: [kick * s, 0, kick * c] });
+    world.addJoint({ a: bob, anchor: [0, 0, 0], friction: k * bob.mass * 9.81 });
+    return { world, bob, back: (p) => [c * p[0] - s * p[2], p[1], s * p[0] + c * p[2]] };
+  };
+  // Above: held where it was let go. It dips 0.04 mm in the first step, the
+  // joint's point taking up the load, and comes back.
+  const held = pendulum(1.2);
+  let strayed = 0;
+  for (let s = 0; s < 300; s++) {
+    held.world.step(DT);
+    strayed = Math.max(strayed, apart(held.bob.position, [1, 0, 0]));
+  }
+  assert.ok(strayed < 1e-4, `strayed ${strayed} m`);
+  assert.ok(Math.hypot(...held.bob.velocity) < 1e-9, `moving at ${held.bob.velocity}`);
+  // Below: it falls, slowed, and stops short of the bottom, where gravity's
+  // torque, m g L sin θ, is no more than the friction. Measured: still by
+  // 5 s, 25° out, where it is 0.43 of m g L.
+  const slips = pendulum(0.8);
+  for (let s = 0; s < 300; s++) slips.world.step(DT);
+  const p = slips.bob.position, out = Math.atan2(p[0], -p[1]);
+  assert.ok(p[1] < -0.5, `fell to ${p[1]}`);
+  assert.ok(Math.hypot(...slips.bob.velocity) < 1e-6, `still moving at ${slips.bob.velocity}`);
+  assert.ok(out > 0.1 && Math.sin(out) <= 0.8, `came to rest ${out} rad out`);
+  // Swung sideways as it falls, so it turns about no one world axis, and
+  // built turned about y: the same motion, turned. Measured 2e-9 m apart over
+  // 4 s; with friction clamped axis by axis, as a box, 0.24 to 0.38 m.
+  const ref = pendulum(0.5, 0, 1.5), path = [];
+  for (let s = 0; s < 240; s++) {
+    ref.world.step(DT);
+    path.push(ref.bob.position);
+  }
+  for (const turn of [0.7, 2.1]) {
+    const other = pendulum(0.5, turn, 1.5);
+    let worst = 0;
+    for (let s = 0; s < 240; s++) {
+      other.world.step(DT);
+      worst = Math.max(worst, apart(other.back(other.bob.position), path[s]));
+    }
+    assert.ok(worst < 1e-6, `turned ${turn} rad: ${worst} m apart`);
+  }
+});
+
+test('ragdolls with friction in their joints stop swinging and sleep', () => {
+  // bench/compare.html's 32 ragdolls, the upper 16 dropped on the lower. With
+  // no friction, 286 of their 352 parts still swung at 12 s, each holding its
+  // whole island awake; with 1 N·m in every joint, all slept by 5.55 s
+  // (0.5 N·m: 341 by 12 s; 0.1: 319). 1 N·m is less than gravity's torque on
+  // any limb held out level (2.1 N·m on a forearm, 19 on a thigh), so limbs
+  // still fall as they would; it stops them swinging once down.
+  const PARTS = [[[0.32, 0.2, 0.2], [0, 1, 0]], [[0.36, 0.45, 0.22], [0, 1.325, 0]], [[0.2, 0.24, 0.22], [0, 1.67, 0]],
+    [[0.28, 0.1, 0.1], [-0.32, 1.5, 0]], [[0.26, 0.08, 0.08], [-0.59, 1.5, 0]], [[0.28, 0.1, 0.1], [0.32, 1.5, 0]],
+    [[0.26, 0.08, 0.08], [0.59, 1.5, 0]], [[0.14, 0.44, 0.14], [-0.09, 0.68, 0]], [[0.12, 0.44, 0.12], [-0.09, 0.24, 0]],
+    [[0.14, 0.44, 0.14], [0.09, 0.68, 0]], [[0.12, 0.44, 0.12], [0.09, 0.24, 0]]];
+  const JOINTS = [['ball', 1, 0, [0, 1.1, 0]], ['ball', 2, 1, [0, 1.55, 0]], ['ball', 3, 1, [-0.18, 1.5, 0]],
+    ['hinge', 4, 3, [-0.46, 1.5, 0], [0, 1, 0]], ['ball', 5, 1, [0.18, 1.5, 0]], ['hinge', 6, 5, [0.46, 1.5, 0], [0, 1, 0]],
+    ['ball', 7, 0, [-0.09, 0.9, 0]], ['hinge', 8, 7, [-0.09, 0.46, 0], [1, 0, 0]], ['ball', 9, 0, [0.09, 0.9, 0]],
+    ['hinge', 10, 9, [0.09, 0.46, 0], [1, 0, 0]]];
+  const world = new World();
+  world.addBody({ type: 'static', size: [200, 1, 200], position: [0, -0.5, 0] });
+  const parts = [];
+  for (let i = 0; i < 32; i++) {
+    const layer = i >> 4, k = i & 15, at = [((k & 3) - 1.5) * 1.6 + layer * 0.5, 0.2 + layer * 2.4, ((k >> 2) - 1.5) + layer * 0.3];
+    const plus = (p) => [at[0] + p[0], at[1] + p[1], at[2] + p[2]];
+    const b = PARTS.map(([size, p]) => world.addBody({ size, position: plus(p) }));
+    parts.push(...b);
+    for (const [type, a, bb, p, axis] of JOINTS) world.addJoint({ type, a: b[a], b: b[bb], anchor: plus(p), friction: 1, ...(axis ? { axis } : {}) });
+  }
+  for (let step = 0; step < 8 * 60 && !parts.every((b) => b.asleep); step++) world.step(DT);
+  assert.ok(parts.every((b) => b.asleep), `${parts.filter((b) => b.asleep).length} of 352 asleep at 8 s`);
+});
+
 test('a spring bounces at its frequency; a rod holds its length', () => {
   const world = new World({ gravity: [0, 0, 0] });
   const mass = world.addBody({ shape: 'sphere', radius: 0.05, mass: 1, position: [1.1, 0, 0] });
@@ -447,6 +560,7 @@ test('jointOf gives back what addJoint took, and setJoint changes it', () => {
   assert.equal(o.max, 1);
   assert.equal(o.motorSpeed, 0);
   assert.equal(o.motorForce, 5);
+  assert.equal(o.friction, 0);
   assert.equal(o.collide, false);
   assert.equal('cone' in o || 'length' in o || 'anchorB' in o, false);
   // A copy, from what jointOf gave.
@@ -460,7 +574,12 @@ test('jointOf gives back what addJoint took, and setJoint changes it', () => {
   assert.deepEqual(d.anchorB, [0, 2.5, 0]);
   assert.equal(d.length, 0);
   assert.equal(d.collide, true);
-  assert.equal('min' in d || 'max' in d, false);
+  assert.equal('min' in d || 'max' in d || 'friction' in d, false);
+  // Friction, for a ball joint, a hinge and a slider, and copied with the rest.
+  const ball = world.addJoint({ a, b, friction: 3 });
+  assert.equal(world.jointOf(ball).friction, 3);
+  world.setJoint(ball, { friction: 0.5 });
+  assert.equal(world.jointOf(world.addJoint(world.jointOf(ball))).friction, 0.5);
   // null puts a limit back to its default.
   world.setJoint(twin, { min: null });
   assert.equal('min' in world.jointOf(twin), false);

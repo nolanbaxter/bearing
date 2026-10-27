@@ -129,6 +129,13 @@ All notable changes to Bearing are recorded here. The format follows
   shared with the whole body the joints tie it to. Solved the other way, limbs at rest rattled and
   32 ragdolls never slept; now their joints hold within a tenth of a millimetre and they sleep
   once nothing in them still swings.
+- Joint friction: `friction` on ball joints, hinges and sliders, the most torque (N·m) or force
+  (N) the joint resists turning or sliding with, as a stiff hinge does. A hinge's or slider's is
+  its motor held at speed 0, to the bit; a ball joint's resists turning every way alike. 32 ragdolls
+  with 1 N·m on every joint all sleep within 6 s, where without it 286 of their 352 parts still
+  swing at 12 s. None by default. Saved worlds are now format 5.
+- Fixed: a hinge's or slider's motor turned off with `setJoint(joint, { motorForce: 0 })` went on
+  pushing as hard as it last had, at every substep: a wheel kept speeding up.
 - `world.remove(handle)` takes a body or a joint; its error is now `remove: handle must be a Body or
   a Joint, got …`.
 - Bearing's own `atan` and `atan2` in `core/math.js`, exact operations only, within 1 ulp of

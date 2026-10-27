@@ -50,7 +50,7 @@ const joined = () => {
   return { world, body, joint: world.addJoint({ a: body }) };
 };
 
-const JOINT_OPTIONS = 'type, a, b, anchor, anchorB, axis, min, max, length, cone, motorSpeed, motorForce, frequency, dampingRatio, collide';
+const JOINT_OPTIONS = 'type, a, b, anchor, anchorB, axis, min, max, length, cone, motorSpeed, motorForce, friction, frequency, dampingRatio, collide';
 const OPTIONS = 'type, shape, size, radius, height, vertices, indices, heights, columns, spacing, parts, density, mass, inertia, centerOfMass, friction, restitution, damping, angularDamping, gravityScale, layers, mask, sensor, lockRotation, maxSlope, stepHeight, position, rotation, velocity, angularVelocity';
 
 /** The smallest .glb: one node, 'floor', showing one triangle; `json` adds to its JSON. */
@@ -185,8 +185,8 @@ const cases = [
 
   ['world-save', () => gone().world.save(), 'save: this world was destroyed'],
   ['world-load', () => World.load(5), 'load: data must be what world.save() returned, got 5'],
-  ['world-load', () => World.load({ ...new World().save(), format: 5 }), 'load: data is format 5; this Bearing reads format 4'],
-  ['world-load', () => World.load({ format: 4, objects: [{ c: 'Box', f: {} }] }), "load: data is damaged: an object of an unknown kind, 'Box'"],
+  ['world-load', () => World.load({ ...new World().save(), format: 4 }), 'load: data is format 4; this Bearing reads format 5'],
+  ['world-load', () => World.load({ format: 5, objects: [{ c: 'Box', f: {} }] }), "load: data is damaged: an object of an unknown kind, 'Box'"],
   ['world-debuglines', () => gone().world.debugLines(), 'debugLines: this world was destroyed'],
   ['world-debuglines', () => fresh().world.debugLines(true), 'debugLines: options must be an object, got true'],
   ['world-debuglines', () => fresh().world.debugLines({ shape: true }), "debugLines: unknown option 'shape' (did you mean 'shapes'?)"],
@@ -226,6 +226,8 @@ const cases = [
       [e, run({ cone: 4 }), `${call}: cone must be an angle from 0 to π, in radians, got 4`],
       [e, run({ type: 'hinge', motorSpeed: NaN }), `${call}: motorSpeed must be a finite number, got NaN`],
       [e, run({ type: 'slider', motorForce: -1 }), `${call}: motorForce must be 0 or more, got -1`],
+      [e, run({ type: 'hinge', friction: -0.5 }), `${call}: friction must be 0 or more, got -0.5`],
+      [e, run({ type: 'distance', friction: 1 }), `${call}: a distance joint has no friction`],
       [e, run({ type: 'distance', frequency: Infinity }), `${call}: frequency must be 0 or more, got Infinity`],
       [e, run({ type: 'distance', dampingRatio: '1' }), `${call}: dampingRatio must be 0 or more, got '1'`],
       [e, run({ type: 'hinge', min: 4 }), `${call}: min must be from -π to π, in radians, or -Infinity, got 4`],

@@ -390,6 +390,8 @@ interface Driven extends Turning {
   motorSpeed?: number;
   /** The most the motor may push: N·m, or N. 0, the default, is no motor. */
   motorForce?: number;
+  /** The most the joint resists a turning (sliding) against b while the motor is off: N·m, or N. Default 0, none. */
+  friction?: number;
 }
 
 /** Welded: nothing free. */
@@ -399,6 +401,8 @@ export interface BallJointOptions extends JointCommon, Turning {
   type?: 'ball';
   /** How far axis may swing, radians, 0 to π. Default π, none. */
   cone?: number;
+  /** The most the joint resists a turning against b, any way: N·m. Default 0, none. */
+  friction?: number;
 }
 /** Turns about axis; min and max limit its angle, radians, -π to π. */
 export interface HingeJointOptions extends JointCommon, Driven { type: 'hinge' }
@@ -433,6 +437,7 @@ export interface JointChanges {
   cone?: number;
   motorSpeed?: number;
   motorForce?: number;
+  friction?: number;
   frequency?: number;
   dampingRatio?: number;
   collide?: boolean;
@@ -449,8 +454,8 @@ interface JointInfoCommon {
 /** What world.jointOf returns: a copy, in the form addJoint takes. min and max only if given. */
 export type JointInfo =
   | (JointInfoCommon & { type: 'fixed'; anchorB?: [number, number, number] })
-  | (JointInfoCommon & { type: 'ball'; anchorB?: [number, number, number]; axis: [number, number, number]; min?: number; max?: number; cone: number })
-  | (JointInfoCommon & { type: 'hinge' | 'slider'; anchorB?: [number, number, number]; axis: [number, number, number]; min?: number; max?: number; motorSpeed: number; motorForce: number })
+  | (JointInfoCommon & { type: 'ball'; anchorB?: [number, number, number]; axis: [number, number, number]; min?: number; max?: number; cone: number; friction: number })
+  | (JointInfoCommon & { type: 'hinge' | 'slider'; anchorB?: [number, number, number]; axis: [number, number, number]; min?: number; max?: number; motorSpeed: number; motorForce: number; friction: number })
   | (JointInfoCommon & { type: 'distance'; anchorB: [number, number, number]; length: number; min?: number; max?: number; frequency: number; dampingRatio: number });
 
 export interface WorldOptions {

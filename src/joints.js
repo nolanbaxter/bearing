@@ -50,15 +50,15 @@ const DYNAMIC = 0;   // World's type code
 const USED = 1;      // Slots' state for a slot in use
 
 const OPTIONS = ['type', 'a', 'b', 'anchor', 'anchorB', 'axis', 'min', 'max', 'length', 'cone',
-  'motorSpeed', 'motorForce', 'frequency', 'dampingRatio', 'collide'];
+  'motorSpeed', 'motorForce', 'friction', 'frequency', 'dampingRatio', 'collide'];
 /** Options every joint has. */
 const SHARED = ['type', 'a', 'b', 'anchor', 'anchorB', 'collide'];
 /** And each type's own; giving one another type has throws. */
 const OWN = [
   [],
-  ['axis', 'min', 'max', 'cone'],
-  ['axis', 'min', 'max', 'motorSpeed', 'motorForce'],
-  ['axis', 'min', 'max', 'motorSpeed', 'motorForce'],
+  ['axis', 'min', 'max', 'cone', 'friction'],
+  ['axis', 'min', 'max', 'motorSpeed', 'motorForce', 'friction'],
+  ['axis', 'min', 'max', 'motorSpeed', 'motorForce', 'friction'],
   ['length', 'min', 'max', 'frequency', 'dampingRatio'],
 ];
 
@@ -67,7 +67,9 @@ const OWN = [
 const MIN = 1, MAX = 2, ANCHOR_B = 4;
 
 // Where each accumulated impulse is kept, in a joint's 11: the linear and
-// angular impulses as world vectors, then one number per scalar row.
+// angular impulses as world vectors, then one number per scalar row. A ball
+// joint holds nothing by turning, so its ANG is its friction's (ballFriction()),
+// and a hinge's or slider's friction is its MOTOR row's.
 const LIN = 0, ANG = 3, MOTOR = 6, LOWER = 7, UPPER = 8, AXIAL = 9, CONE = 10, IMPULSES = 11;
 
 /** Every per-joint column: name, array type, numbers per joint. */
@@ -86,6 +88,7 @@ const COLUMNS = [
   ['cone', Float64Array, 1],
   ['motorSpeed', Float64Array, 1],
   ['motorForce', Float64Array, 1],
+  ['friction', Float64Array, 1],
   ['frequency', Float64Array, 1],
   ['dampingRatio', Float64Array, 1],
   ['collide', Uint8Array, 1],
@@ -284,6 +287,15 @@ export function setJoint(world, joint, changes) {
   else if (limits) { const i = j * IMPULSES; J.impulse[i + LOWER] = 0; J.impulse[i + UPPER] = 0; J.impulse[i + CONE] = 0; }
   J.type[j] = type;
   write(J, j, spec);
+  // A motor or friction switched off pushes no more. Its impulse, kept for
+  // the warm start, would otherwise be applied at every substep with no row
+  // left to solve it back: a wheel whose motor was turned off went on
+  // speeding up. A fixed joint's ANG holds it together, so only a ball's goes.
+  const i = j * IMPULSES;
+  if (spec.motorForce === 0 && spec.friction === 0) {
+    J.impulse[i + MOTOR] = 0;
+    if (type === BALL) { J.impulse[i + ANG] = 0; J.impulse[i + ANG + 1] = 0; J.impulse[i + ANG + 2] = 0; }
+  }
   J.given[j] = spec.given | (J.given[j] & ANCHOR_B) | (anchorB ? ANCHOR_B : 0);
   if (anchor || anchorB) place(world, j, ends[0], ends[1], anchor !== null || anchorB === null, true);
   if (axis) orient(world, j, axis);
@@ -315,6 +327,7 @@ export function jointOf(world, j) {
   }
   if (type === BALL) out.cone = s.cone;
   if (type === HINGE || type === SLIDER) { out.motorSpeed = s.motorSpeed; out.motorForce = s.motorForce; }
+  if (type === BALL || type === HINGE || type === SLIDER) out.friction = s.friction;
   if (type === DISTANCE) { out.frequency = s.frequency; out.dampingRatio = s.dampingRatio; }
   out.collide = J.collide[j] === 1;
   return out;
@@ -356,6 +369,8 @@ const DEFAULTS = Object.freeze({
   // A ball joint swings freely unless given a cone.
   cone: Math.PI,
   motorSpeed: 0, motorForce: 0,
+  // Turning freely, as Jolt's, Rapier's and Box2D's joints do unless given it.
+  friction: 0,
   // No spring; given one, it settles without overshooting, as Bearing's
   // contacts do, unless told to bounce.
   frequency: 0, dampingRatio: 1,
@@ -365,13 +380,13 @@ const DEFAULTS = Object.freeze({
 function read(J, j) {
   return {
     min: J.min[j], max: J.max[j], given: J.given[j] & (MIN | MAX), length: J.length[j], cone: J.cone[j],
-    motorSpeed: J.motorSpeed[j], motorForce: J.motorForce[j], frequency: J.frequency[j], dampingRatio: J.dampingRatio[j],
+    motorSpeed: J.motorSpeed[j], motorForce: J.motorForce[j], friction: J.friction[j], frequency: J.frequency[j], dampingRatio: J.dampingRatio[j],
   };
 }
 
 function write(J, j, s) {
   J.min[j] = s.min; J.max[j] = s.max; J.length[j] = s.length; J.cone[j] = s.cone;
-  J.motorSpeed[j] = s.motorSpeed; J.motorForce[j] = s.motorForce;
+  J.motorSpeed[j] = s.motorSpeed; J.motorForce[j] = s.motorForce; J.friction[j] = s.friction;
   J.frequency[j] = s.frequency; J.dampingRatio[j] = s.dampingRatio;
 }
 
@@ -398,6 +413,7 @@ function settings(caller, type, o, base, gap) {
   }
   if (has('motorSpeed')) s.motorSpeed = finite(caller, 'motorSpeed', o.motorSpeed);
   if (has('motorForce')) s.motorForce = atLeastZero(caller, 'motorForce', o.motorForce);
+  if (has('friction')) s.friction = atLeastZero(caller, 'friction', o.friction);
   if (has('frequency')) s.frequency = atLeastZero(caller, 'frequency', o.frequency);
   if (has('dampingRatio')) s.dampingRatio = atLeastZero(caller, 'dampingRatio', o.dampingRatio);
   // null is a value here, as for a body's inertia: back to the default.
@@ -604,7 +620,7 @@ export function warmStartJoints(world) {
         frames(world, j);
         flatten(acc, o + ANG);
       }
-      if (type === FIXED || type === HINGE) angles(acc, o + ANG);
+      if (type === FIXED || type === HINGE || (type === BALL && J.friction[j] > 0)) angles(acc, o + ANG);
       if (type === HINGE) {
         axle(0);
         apply(0, acc[o + MOTOR] + acc[o + LOWER] - acc[o + UPPER]);
@@ -642,6 +658,7 @@ export function solveJoints(world, h, bias) {
         holdPoint(acc, o, bias);
         break;
       case BALL:
+        if (J.friction[j] > 0) ballFriction(J.friction[j] * h, acc, o);
         if (swings(J, j)) {
           frames(world, j);
           twistLimits(J, j, acc, o, h, bias);
@@ -651,9 +668,9 @@ export function solveJoints(world, h, bias) {
         break;
       case HINGE:
         frames(world, j);
-        if (J.motorForce[j] > 0) {
+        if (J.motorForce[j] > 0 || J.friction[j] > 0) {
           axle(0);
-          motor(0, J.motorSpeed[j], J.motorForce[j] * h, acc, o + MOTOR);
+          driven(J, j, h, acc, o);
         }
         hingeLimits(J, j, acc, o, h, bias);
         if (!held) {
@@ -664,9 +681,9 @@ export function solveJoints(world, h, bias) {
       case SLIDER:
         frames(world, j);
         reach();
-        if (J.motorForce[j] > 0) {
+        if (J.motorForce[j] > 0 || J.friction[j] > 0) {
           slide(0);
-          motor(0, J.motorSpeed[j], J.motorForce[j] * h, acc, o + MOTOR);
+          driven(J, j, h, acc, o);
         }
         sliderLimits(J, j, acc, o, h, bias);
         if (!held) {
@@ -1170,6 +1187,87 @@ function motor(o, target, most, acc, k) {
   acc[k] = next;
   pinned(o, next - old, acc);
 }
+
+/**
+ * A hinge's or slider's driven row, at row 0: its motor, or with the motor
+ * off, its friction, which is a motor held to speed 0 that pushes no harder
+ * than `friction`, as Jolt's mMaxFrictionTorque is. A motor already resists
+ * up to its own force, so friction adds nothing to one.
+ */
+function driven(J, j, h, acc, o) {
+  const force = J.motorForce[j];
+  if (force > 0) motor(0, J.motorSpeed[j], force * h, acc, o + MOTOR);
+  else motor(0, 0, J.friction[j] * h, acc, o + MOTOR);
+}
+
+/**
+ * A ball joint's friction: the three rows of a's turning against b, about the
+ * world's axes, solved together with the joint's point held (PINNED ROWS,
+ * below), driven to no relative turning, and clamped as one vector to a ball
+ * of radius `most` (friction times the substep). The ball, not a box per
+ * axis, so the joint resists the same way whichever way it turns, however
+ * the scene is turned: a box would let a diagonal turn push √3 times as hard.
+ * The impulse is kept in ANG as a world vector, as a fixed joint keeps its
+ * turning rows', so the warm start applies it with angles().
+ */
+function ballFriction(most, acc, o) {
+  if (pins < 0) pin(pinType);
+  for (let f = 0; f < 3; f++) {
+    const r = SPIN[f];
+    ROWS.fill(0, r, r + 9);
+    ROWS[r + 3 + f] = 1;
+    ROWS[r + 6 + f] = 1;
+  }
+  // Their coupling with the point held, K - Kfp Kpp⁻¹ Kpf, as free() works
+  // out one row's: the pinned rows' share of a push on each into SHARE.
+  for (let f = 0; f < 3; f++) {
+    for (let r = 0; r < pins; r++) KFP[3 * f + r] = coupling(SPIN[f], 9 + 9 * r);
+    for (let r = 0; r < pins; r++) {
+      let sum = 0;
+      for (let c = 0; c < pins; c++) sum += PIN[r * pins + c] * KFP[3 * f + c];
+      SHARE[3 * f + r] = -sum;
+    }
+  }
+  for (let f = 0; f < 3; f++) {
+    for (let g = f; g < 3; g++) {
+      let k = coupling(SPIN[f], SPIN[g]);
+      for (let r = 0; r < pins; r++) k += KFP[3 * f + r] * SHARE[3 * g + r];
+      K3[3 * f + g] = k;
+      K3[3 * g + f] = k;
+    }
+    RHS[f] = speed(SPIN[f]);
+  }
+  // λ = -K⁻¹ v: what stops the turning this pass. Where K can't be inverted
+  // (a body locked about some axes, held to one that can't turn), each row
+  // is solved alone instead, a row that nothing can turn along taking none.
+  // ponytail: rows alone are only Jacobi; solve the free 2x2 if partly
+  // locked ball joints with friction ever need it exact.
+  if (inverseSPD(K3, 3, K3)) {
+    for (let f = 0; f < 3; f++) SPUN[f] = -(K3[3 * f] * RHS[0] + K3[3 * f + 1] * RHS[1] + K3[3 * f + 2] * RHS[2]);
+  } else {
+    for (let f = 0; f < 3; f++) SPUN[f] = K3[4 * f] > 0 ? -RHS[f] / K3[4 * f] : 0;
+  }
+  const i = o + ANG;
+  let x = acc[i] + SPUN[0], y = acc[i + 1] + SPUN[1], z = acc[i + 2] + SPUN[2];
+  const l2 = x * x + y * y + z * z;
+  if (l2 > most * most) {
+    const s = most / Math.sqrt(l2);
+    x *= s; y *= s; z *= s;
+  }
+  SPUN[0] = x - acc[i]; SPUN[1] = y - acc[i + 1]; SPUN[2] = z - acc[i + 2];
+  acc[i] = x; acc[i + 1] = y; acc[i + 2] = z;
+  for (let f = 0; f < 3; f++) apply(SPIN[f], SPUN[f]);
+  // The point's reaction, which keeps it held, kept with its own impulses.
+  for (let r = 0; r < pins; r++) {
+    const m = SHARE[r] * SPUN[0] + SHARE[3 + r] * SPUN[1] + SHARE[6 + r] * SPUN[2];
+    if (m === 0) continue;
+    apply(9 + 9 * r, m);
+    acc[o + LIN + r] += m;
+  }
+}
+/** ballFriction()'s rows in ROWS, clear of the point's pinned rows at 1 to 3. */
+const SPIN = [0, 36, 45];
+const K3 = new Float64Array(9), KFP = new Float64Array(9), SHARE = new Float64Array(9), SPUN = new Float64Array(3);
 
 /**
  * A stop on row o: c is how far the joint is from it, positive while short of
