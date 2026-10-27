@@ -102,6 +102,13 @@ These were made with Nolan and override the rules below where they differ.
   face (that ghosted a ball 29 mm off a crest), except a ball over the triangle to the tolerance;
   clip points on seams are dropped, a box's own corners never. `readGlb` takes bytes, not a URL;
   Draco, meshopt and quantized positions throw naming the extension.
+  Which side (2026-10-27, the crest wedge): a triangle is touched from the side of its plane the
+  body's centre is on, but where a box's or hull's own face or edge wins and leaves nothing, and
+  the triangle's face stands in, `over()` in `triangle.js` turns to the other side when the
+  shape's face clipped over the triangle lies further past the plane than the centre stands off
+  it. A 2 m box on one slope of a ridge, an end past the crest, had its centre 63 mm under the far
+  slope's plane and was pressed 0.3 m into the near one, wedged up to 15 s. The winning axis's
+  side was tried and flips by rounding on edge axes along a face. Heaps keep their bits.
 - **Contact events and sensors** (2026-10-14, milestone 10, approved): `world.contacts(body)` (the
   last step's `begin`/`end`, read after the step, rule 65; with a body, its own, turned so it is
   `a`; removed bodies accepted), `world.touching(body)` in place of stay events (through the

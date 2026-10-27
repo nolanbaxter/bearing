@@ -17,7 +17,21 @@
 // point in `out`; reducing to four is done once, over the whole manifold.
 //
 // TWO-SIDED. A triangle is touched from whichever side the shape's centre
-// is on, and its face normal is turned to face that side.
+// is on, and its face normal is turned to face that side. But the centre's
+// side is measured against the plane carried on past the triangle's edges,
+// where the mesh doesn't go: a box lying on one slope of a crest with an end
+// over the other has its centre below that slope's plane, carried back under
+// it, while all of it over that slope is above. So where a box's or hull's
+// own face or edge wins and gives nothing, and the triangle's face is taken
+// in its place, the face is taken from the side the part of the shape over
+// the triangle is on (over()), as a capsule's is (capsule()). From the
+// centre's side, the box's top face was clipped 0.3 m "into" the far slope,
+// pressing it down into the one it lay on, and it lay wedged for 12 s. Where
+// the triangle's own face wins, the centre's side is the better of its two
+// (for a box exactly), so that is kept; a ball's direction is its own
+// already. The side the winning axis leaves by was tried, and fails: an edge
+// axis lying along the face, a rock beside the triangle, leaves by either
+// side as rounding has it.
 //
 // SEAMS. `flags` says which of the triangle's edges are corners from each
 // side (mesh.js); a corner of the triangle is a seam when both its edges
@@ -54,6 +68,7 @@ const near = new Closest();
 // The triangle turned to face the shape, and its corners, for the helpers below.
 const up = new Float64Array(3), P = new Float64Array(9);
 let corners = 0;   // which edges are corners from the shape's side, bit e for edge e
+let behind = 0;    // the same from the other side, for turn()
 // The triangle's front normal (ahead), and its edges' folds (mesh.js fold(): two numbers an edge), or
 // null for a triangle met alone, as queries meet them, with its seams in BARE, where nothing is asked of folds.
 const ahead = new Float64Array(3);
@@ -80,6 +95,7 @@ export function touch(s, t, flags, fold, margin, tolerance, out, tri) {
   const k = front ? 1 : -1;
   up[0] = k * nx; up[1] = k * ny; up[2] = k * nz;
   corners = front ? flags & 7 : (flags >> 3) & 7;
+  behind = front ? (flags >> 3) & 7 : flags & 7;
   if (s.kind === SPHERE) sphere(s, t, margin, tolerance, out);
   else if (s.kind === CAPSULE) capsule(s, t, margin, tolerance, out);
   else if (s.kind === HULL) hull(s, t, margin, tolerance, out);
@@ -204,6 +220,12 @@ function nearest(x, y, z) {
 
 /** Height of (x, y, z) above the triangle's plane, on the shape's side. */
 const above = (x, y, z) => (x - P[0]) * up[0] + (y - P[1]) * up[1] + (z - P[2]) * up[2];
+
+/** Turns to the triangle's other side. */
+function turn() {
+  up[0] = -up[0]; up[1] = -up[1]; up[2] = -up[2];
+  const c = corners; corners = behind; behind = c;
+}
 
 function add(out, x, y, z, separation, id) {
   if (out.count === out.separations.length) return;
@@ -423,10 +445,14 @@ function box(b, t, margin, tolerance, out) {
   // A face is kept unless an edge, or the box's own face, beats it by more than
   // the tolerance: on a tie the triangle's face, so a box resting on a floor
   // keeps the same contact from step to step.
+  let won = true;
   if (edgeK >= 0 && edgeSep > Math.max(faceT, faceB) + tolerance) edgeContact(b, edgeK, edgeE, ex, ey, ez, margin, tolerance, out);
   else if (faceB > faceT + tolerance) boxFace(b, axisB, signB, margin, tolerance, out);
+  else won = false;
   // The triangle's face, chosen, or because the box's face or an edge
-  // touched only at seams, where the face beside takes it.
+  // touched only at seams, where the face beside takes it: then from the
+  // side the part of the box over it is on (see TWO-SIDED).
+  if (won && out.count === 0) over(clipBox, b);
   const reached = out.count === 0 && triangleFace(b, margin, tolerance, out);
   // Apart, and nothing clipped within the margin: nearest at a corner or an
   // edge's end, as boxBoxClosest in collide.js finds it. Not when the face
@@ -480,6 +506,52 @@ function flip() {
  * margin, kept or left out at a seam.
  */
 function triangleFace(b, margin, tolerance, out) {
+  const n = clipBox(b);
+  let reached = false;
+  for (let i = 0; i < n; i++) {
+    const x = src[3 * i], y = src[3 * i + 1], z = src[3 * i + 2], sep = above(x, y, z);
+    if (sep > margin) continue;
+    reached = true;
+    const id = srcId[i];
+    // The box's own corners always count; a point clipping made on a seam doesn't (see SEAMS).
+    // Where on the triangle is asked of the point under it: the clipped point
+    // is on the box's face, sep above, and apart by more than the tolerance,
+    // as while falling within the margin, every point read as the face.
+    if (id >= 4 && seam(region(x - up[0] * sep, y - up[1] * sep, z - up[2] * sep, tolerance))) continue;
+    add(out, x - up[0] * sep / 2, y - up[1] * sep / 2, z - up[2] * sep / 2, sep, id < 4 ? 32 + id : mix + 32 + id);
+  }
+  if (out.count > 0) aim(out, -up[0], -up[1], -up[2]);
+  return reached;
+}
+
+/**
+ * Before the triangle's face is taken in place of the shape's own face or
+ * edge: turns to the other side when the shape's face over the triangle, from
+ * the centre's side (clipBox or clipHull, into src), lies further past its
+ * plane than the centre lies before it (see TWO-SIDED). A shape that came at
+ * the triangle from the centre's side is into it by far less than its centre
+ * stands off it: a rock sunk 2.9 mm past a slope's plane beside it, its
+ * centre 0.21 m above that plane, keeps its side. The box across the crest
+ * had its centre 63 mm under the far slope's plane and its top face 300 mm
+ * past it, the other way: most of it over that slope is on the other side.
+ * Nothing is clipped from the other side: its face there can lie beside the
+ * triangle, clipped to nothing, as a long box falling steeply onto a crest
+ * had only its top face over the far slope, and that says nothing. No face
+ * over the triangle at all keeps the centre's side.
+ */
+function over(clipped, b) {
+  if (bottom(clipped(b)) + above(b.center[0], b.center[1], b.center[2]) < 0) turn();
+}
+
+/** The least height above the triangle of the n points in src. */
+function bottom(n) {
+  let m = Infinity;
+  for (let i = 0; i < n; i++) m = Math.min(m, above(src[3 * i], src[3 * i + 1], src[3 * i + 2]));
+  return m;
+}
+
+/** The box's face most against the triangle, clipped to it, into src: returns its count. */
+function clipBox(b) {
   const c = b.center, A = b.axes, h = b.half;
   let k = 0, most = 0;
   for (let j = 0; j < 3; j++) {
@@ -504,21 +576,7 @@ function triangleFace(b, margin, tolerance, out) {
     n = clip(src, srcId, n, dst, dstId, P[a], P[a + 1], P[a + 2], mx, my, mz, e);
     flip();
   }
-  let reached = false;
-  for (let i = 0; i < n; i++) {
-    const x = src[3 * i], y = src[3 * i + 1], z = src[3 * i + 2], sep = above(x, y, z);
-    if (sep > margin) continue;
-    reached = true;
-    const id = srcId[i];
-    // The box's own corners always count; a point clipping made on a seam doesn't (see SEAMS).
-    // Where on the triangle is asked of the point under it: the clipped point
-    // is on the box's face, sep above, and apart by more than the tolerance,
-    // as while falling within the margin, every point read as the face.
-    if (id >= 4 && seam(region(x - up[0] * sep, y - up[1] * sep, z - up[2] * sep, tolerance))) continue;
-    add(out, x - up[0] * sep / 2, y - up[1] * sep / 2, z - up[2] * sep / 2, sep, id < 4 ? 32 + id : mix + 32 + id);
-  }
-  if (out.count > 0) aim(out, -up[0], -up[1], -up[2]);
-  return reached;
+  return n;
 }
 
 /** The box's face k (outward along sign · axis k) as the reference: the triangle clipped to it. */
@@ -679,8 +737,11 @@ function hull(b, t, margin, tolerance, out) {
   // As box(): a face unless an edge, or the hull's own face, beats the
   // triangle's by more than the tolerance; the triangle's face if those touch
   // only at seams; and GJK's closest points if apart with nothing clipped.
+  let won = true;
   if (edgeK >= 0 && edgeSep > Math.max(faceT, faceB) + tolerance) hullEdge(edgeK, edgeE, ex, ey, ez, margin, tolerance, out);
   else if (faceB > faceT + tolerance) hullFace(fb, margin, tolerance, out);
+  else won = false;
+  if (won && out.count === 0) over(clipHull, b);
   const reached = out.count === 0 && triangleFaceHull(margin, tolerance, out);
   if (out.count === 0 && !reached && Math.max(faceT, faceB, edgeSep) > 0) closestPoints(b, t, margin, tolerance, out);
 }
@@ -708,6 +769,24 @@ const CORNER = 1 << 30;
  * does.
  */
 function triangleFaceHull(margin, tolerance, out) {
+  const n = clipHull();
+  let reached = false;
+  for (let k = 0; k < n; k++) {
+    const x = src[3 * k], y = src[3 * k + 1], z = src[3 * k + 2], sep = above(x, y, z);
+    if (sep > margin) continue;
+    reached = true;
+    const id = srcId[k], own = id >= CORNER;
+    // The hull's own corners always count; a point clipping made on a seam
+    // doesn't (see SEAMS), asked of the point below it, as in triangleFace.
+    if (!own && seam(region(x - up[0] * sep, y - up[1] * sep, z - up[2] * sep, tolerance))) continue;
+    add(out, x - up[0] * sep / 2, y - up[1] * sep / 2, z - up[2] * sep / 2, sep, own ? id : mix + 32 + id);
+  }
+  if (out.count > 0) aim(out, -up[0], -up[1], -up[2]);
+  return reached;
+}
+
+/** The hull's incident face (below), clipped to the triangle, into src: returns its count. */
+function clipHull() {
   const h = H.hull, pl = H.planes, v = H.v, F = h.planes.length / 4, V = h.vertices.length / 3;
   // The incident face: of the faces at the hull's deepest corner, the one
   // most against the triangle, as collide.js's hullFace takes it. The one
@@ -748,19 +827,7 @@ function triangleFaceHull(margin, tolerance, out) {
     n = clip(src, srcId, n, dst, dstId, P[a], P[a + 1], P[a + 2], mx, my, mz, e);
     flip();
   }
-  let reached = false;
-  for (let k = 0; k < n; k++) {
-    const x = src[3 * k], y = src[3 * k + 1], z = src[3 * k + 2], sep = above(x, y, z);
-    if (sep > margin) continue;
-    reached = true;
-    const id = srcId[k], own = id >= CORNER;
-    // The hull's own corners always count; a point clipping made on a seam
-    // doesn't (see SEAMS), asked of the point below it, as in triangleFace.
-    if (!own && seam(region(x - up[0] * sep, y - up[1] * sep, z - up[2] * sep, tolerance))) continue;
-    add(out, x - up[0] * sep / 2, y - up[1] * sep / 2, z - up[2] * sep / 2, sep, own ? id : mix + 32 + id);
-  }
-  if (out.count > 0) aim(out, -up[0], -up[1], -up[2]);
-  return reached;
+  return n;
 }
 
 /** The hull's face f as the reference: the triangle clipped to its sides. */

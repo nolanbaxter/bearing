@@ -137,6 +137,12 @@ All notable changes to Bearing are recorded here. The format follows
   Eight links on a plate turning at 0.5 to 10 rad/s, among hanging chains and boxes, now go no
   faster than 1.75 times the same chain with nothing in its way; before, they were flung past
   1,000 m/s at 1.5 to 7 rad/s.
+- A long box lying on one slope of a ridge, an end past the crest, rests there. Its centre was
+  below the far slope's plane, carried back under it, so that slope's triangles were touched from
+  below and pressed it 0.3 m down into the slope it lay on: wedged, it took up to 15 s to sleep
+  on a mesh and a heightfield alike (22 and 21 of 300 drops of a 2 m box had such a contact; now
+  none, and the slowest sleeps in 5.4 and 7.9 s). A box's or hull's part over a triangle now
+  decides the side when the triangle's own face stands in for the shape's.
 - Joint friction: `friction` on ball joints, hinges and sliders, the most torque (N·m) or force
   (N) the joint resists turning or sliding with, as a stiff hinge does. A hinge's or slider's is
   its motor held at speed 0, to the bit; a ball joint's resists turning every way alike. 32 ragdolls

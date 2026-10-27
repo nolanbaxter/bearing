@@ -594,6 +594,43 @@ test('a box resting or rocking on a crest of a bumpy mesh comes to rest', () => 
   }
 });
 
+test('a long box lying on one slope of a ridge, an end past the crest, rests there, from either side', () => {
+  // A ridge of two slopes of 0.15 meeting at x = 0, as a mesh and as a
+  // heightfield; a 2 m box lying along the left slope, its end 0.25 m past
+  // the crest. Its centre is below the right slope's plane, carried back
+  // under it, so the right slope's triangles were touched from below: the
+  // box's top face clipped 0.3 m "into" them, pressing it down into the left
+  // slope with 500 N·s a step. It was wedged and pushed about, moved 15 to 23
+  // cm, and took 4.5 s to sleep on the mesh and never did on the
+  // heightfield. Upside down, the ridge a valley overhead and gravity up, the
+  // box meets every triangle from its other side, and must do the same.
+  const c = 1 / Math.sqrt(1 + 0.15 * 0.15), s = Math.sqrt((1 - c) / 2), w = Math.sqrt((1 + c) / 2);
+  for (const ground of ['mesh', 'heightfield']) {
+    for (const k of [1, -1]) {
+      const world = new World(), n = 16, ridge = (x) => -k * Math.abs(x - 8) * 0.15;
+      world.gravity = [0, -k * 9.81, 0];
+      if (ground === 'mesh') {
+        const vertices = [], indices = [];
+        for (let z = 0; z <= n; z++) for (let x = 0; x <= n; x++) vertices.push(x - 8, ridge(x), z - 8);
+        for (let z = 0; z < n; z++) {
+          for (let x = 0; x < n; x++) { const a = z * (n + 1) + x; indices.push(a, a + n + 1, a + 1, a + 1, a + n + 1, a + n + 2); }
+        }
+        world.addBody({ shape: 'mesh', vertices, indices });
+      } else {
+        const heights = [];
+        for (let z = 0; z <= n; z++) for (let x = 0; x <= n; x++) heights.push(ridge(x));
+        world.addBody({ shape: 'heightfield', heights, columns: n + 1, spacing: 1 });
+      }
+      const from = [-0.75, k * 0.04, -1.07], box = world.addBody({ size: [2, 0.3, 0.6], position: from, rotation: [0, 0, k * s, w] });
+      let t = 0;
+      while (t < 120 && !box.asleep) { world.step(1 / 60); t++; }
+      const what = `${ground}${k < 0 ? ', upside down' : ''}`;
+      assert.ok(box.asleep, `${what}: still awake after 2 s`);
+      assert.ok(apart(box.position, from) < 0.01, `${what}: moved ${apart(box.position, from)} m`);
+    }
+  }
+});
+
 test("a box slides over ground rippled a millimetre or two as the slope says, and holds below friction's hold", () => {
   // Ground rippled a + sin(1.3 i) cos(0.9 j) over 0.25 m squares, mesh and
   // heightfield, tipped to a slope; a 1 m box set down on it, friction 0.5.
