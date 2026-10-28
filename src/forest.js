@@ -51,6 +51,7 @@
 // two hinges) share the push between them, rather than dividing by nothing.
 
 import { resized } from './core/slots.js';
+import { axesOf } from './core/math.js';
 
 const DYNAMIC = 0;
 
@@ -255,6 +256,8 @@ function branch(F, root, length, seen) {
 // Scratch for the solve: none of it is re-entered.
 const W = new Float64Array(36), S = new Float64Array(36), E = new Float64Array(36), X = new Float64Array(36);
 const L = new Float64Array(36), Y = new Float64Array(6), PIVOT = new Uint8Array(6);
+/** A body's axes where it has turned to, for mass(). */
+const AX9 = new Float64Array(9);
 
 /**
  * Factors the forest's matrix from its joints' rows at F.row: each node's
@@ -268,7 +271,7 @@ const L = new Float64Array(36), Y = new Float64Array(6), PIVOT = new Uint8Array(
  */
 export function factorForest(world) {
   const F = world._joints.forest, T = F.count, n = F.nodes, order = F.order, parent = F.parent;
-  const invMass = world._invMass, invI = world._invI, lock = world._lock;
+  const invMass = world._invMass, invI = world._invIt, lock = world._lock;
   const first = F.first, next = F.next, rows = F.rows, side = F.side, jac = F.jac;
   const D = F.jointInverse, inv = F.inverse, up = F.up, down = F.down;
   for (let t = 0; t < T; t++) shape(F, t);
@@ -306,6 +309,8 @@ export function factorForest(world) {
           }
         }
       }
+      // Each body's inertia is taken where it has turned to now, as its
+      // joints' rows are: see turnedInertias() in contact.js.
       if (!any) {
         inverseMass(invMass[s], invI, 6 * s, inv, o);
         continue;
@@ -369,12 +374,13 @@ function shape(F, t) {
   }
 }
 
-/** Body slot s's mass matrix, m on the diagonal for moving and its world inertia R diag(I) Rᵀ for turning, into out. */
+/** Body slot s's mass matrix, m on the diagonal for moving and its world inertia R diag(I) Rᵀ for turning, where it has turned to now, into out. */
 function mass(world, s, out) {
   out.fill(0);
   const m = 1 / world._invMass[s];
   out[0] = m; out[7] = m; out[14] = m;
-  const ax = world._axes, a9 = 9 * s, I = world._inertia, i0 = I[3 * s], i1 = I[3 * s + 1], i2 = I[3 * s + 2];
+  const ax = AX9, a9 = 0, I = world._inertia, i0 = I[3 * s], i1 = I[3 * s + 1], i2 = I[3 * s + 2];
+  axesOf(world._rotation, 4 * s, AX9, 0);
   for (let r = 0; r < 3; r++) {
     for (let c = r; c < 3; c++) {
       const v = ax[a9 + r] * ax[a9 + c] * i0 + ax[a9 + 3 + r] * ax[a9 + 3 + c] * i1 + ax[a9 + 6 + r] * ax[a9 + 6 + c] * i2;

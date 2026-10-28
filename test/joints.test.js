@@ -360,7 +360,9 @@ test('a floating leg, hip and knee, swings for a minute and never gains energy',
     most = Math.max(most, energy());
   }
   // Within a step energy wobbles by a few parts in a million, as an
-  // integrator's does; over the minute it only falls. Measured: 93% kept.
+  // integrator's does; over the minute it only falls. Measured: 93% kept;
+  // 92.5% since the joints take each body's inertia where it has turned to
+  // (turnedInverse()), at most 0.0015% over the first in between.
   assert.ok(most < first * 1.001, `energy rose ${((most / first - 1) * 100).toFixed(3)}%`);
   assert.ok(energy() > 0.9 * first, `${(energy() / first * 100).toFixed(1)}% of the energy left`);
 });
@@ -444,7 +446,9 @@ test('a chain on a turning kinematic plate is swept through a post, never flung,
   // hinged chain at 3 rad/s to 2 x 10^6 m/s and opened its joints by
   // kilometres, and the catch held the ball-jointed one in the post, thrashing
   // at 4.7 times its speed with no post. Measured since: 1.00, 1.00 and 1.04
-  // times, joints within 7.6, 3.2 and 30 mm.
+  // times, joints within 7.6, 3.2 and 30 mm; with each link's inertia taken
+  // where it has turned to (turnedInverse()), 1.00 times all three, joints
+  // within 7.6, 2.0 and 26 mm.
   const run = (type, spin, post) => {
     const world = new World();
     const plate = world.addBody({ type: 'kinematic', position: [0, 5, 0], size: [1, 0.2, 1], angularVelocity: [0, spin, 0] });
@@ -488,6 +492,34 @@ test('a chain on a turning kinematic plate is swept through a post, never flung,
     if (!(a.position[0] < 0 && b.position[0] < 0)) through++;
   }
   assert.ok(through <= 1, `${through} of 40 throws through the wall`);
+});
+
+test('a chain whipped round by a plate at 10 rad/s, touching nothing, keeps its joints shut', () => {
+  // Eight 40 cm links hung 5 m out from a plate turning about y: the plate
+  // yanks the first at 50 m/s and the chain cracks like a whip, its links
+  // spinning at 100 to 250 rad/s, a few tenths of a radian a substep. A link
+  // is 8.5 times easier to turn about its length than across it, and the
+  // joints were solved with the inertia each link had as the step began
+  // (contact.js, turnedInverse()): the ball-jointed chain opened its joints by
+  // 4.9 m. Measured since: 26 mm, the hinged one 12 mm (17 mm before).
+  for (const type of ['ball', 'hinge']) {
+    const world = new World();
+    let last = world.addBody({ type: 'kinematic', position: [0, 5, 0], size: [1, 0.2, 1], angularVelocity: [0, 10, 0] });
+    const links = [last];
+    for (let i = 0; i < 8; i++) {
+      const link = world.addBody({ size: [0.4, 0.1, 0.1], position: [-4 + 0.4 * (i + 0.5), 4, -3] });
+      world.addJoint({ type, a: link, b: last, anchor: [-4 + 0.4 * i, 4, -3], axis: [0, 0, 1] });
+      links.push(link);
+      last = link;
+    }
+    let gap = 0;
+    for (let s = 0; s < 600; s++) {
+      world.step(DT);
+      gap = Math.max(gap, apart(at(links[0], [-4, -1, -3]), at(links[1], [-0.2, 0, 0])));
+      for (let i = 2; i < 9; i++) gap = Math.max(gap, apart(at(links[i - 1], [0.2, 0, 0]), at(links[i], [-0.2, 0, 0])));
+    }
+    assert.ok(gap < 0.05, `a ${type} chain: a joint opened ${(gap * 1000).toFixed(1)} mm`);
+  }
 });
 
 test('a joint and its bodies: removing either, the joint goes; handles, counts and alive', () => {
@@ -563,7 +595,9 @@ test('a ragdoll dropped on the floor comes to rest with its joints shut, and sle
   // to step: two of these never slept in 30 s, one took 20 s, and joints
   // opened up to 12 mm. Joints last, all slept within 10.9 s (most in 2 to
   // 4 s; the slowest waits on a forearm swinging on its hinge, which nothing
-  // damps), and no joint opened more than 0.19 mm after the first 2 s.
+  // damps), and no joint opened more than 0.19 mm after the first 2 s. With
+  // the joints taking each part's inertia where it has turned to
+  // (turnedInverse()), all slept within 4.6 s and none opened more than 0.32 mm.
   const PARTS = [[[0.32, 0.2, 0.2], [0, 1, 0]], [[0.36, 0.45, 0.22], [0, 1.325, 0]], [[0.2, 0.24, 0.22], [0, 1.67, 0]],
     [[0.28, 0.1, 0.1], [-0.32, 1.5, 0]], [[0.26, 0.08, 0.08], [-0.59, 1.5, 0]], [[0.28, 0.1, 0.1], [0.32, 1.5, 0]],
     [[0.26, 0.08, 0.08], [0.59, 1.5, 0]], [[0.14, 0.44, 0.14], [-0.09, 0.68, 0]], [[0.12, 0.44, 0.12], [-0.09, 0.24, 0]],

@@ -137,6 +137,12 @@ All notable changes to Bearing are recorded here. The format follows
   Eight links on a plate turning at 0.5 to 10 rad/s, among hanging chains and boxes, now go no
   faster than 1.75 times the same chain with nothing in its way; before, they were flung past
   1,000 m/s at 1.5 to 7 rad/s.
+- A chain whipped round fast, touching nothing, keeps its joints shut. The joints were solved
+  with the inertia each body had as the step began, though their anchors follow it as it turns;
+  a link spinning a few tenths of a radian a substep took a pull at its end as turning it about
+  its own length. Eight links on a plate turning at 10 rad/s opened their joints by 4.9 m; now
+  26 mm. The joints now take each body's inertia where it has turned to; the contacts keep the
+  step's.
 - A long box lying on one slope of a ridge, an end past the crest, rests there. Its centre was
   below the far slope's plane, carried back under it, so that slope's triangles were touched from
   below and pressed it 0.3 m down into the slope it lay on: wedged, it took up to 15 s to sleep

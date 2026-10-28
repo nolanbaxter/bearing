@@ -218,6 +218,14 @@ export function rotate(q, o, x, y, z, inverse, out) {
   return out;
 }
 
+/** The rotation at q[o..] as the three axes it turns x, y and z to, the columns of its matrix, into ax[a9..a9+8]. */
+export function axesOf(q, o, ax, a9) {
+  const x = q[o], y = q[o + 1], z = q[o + 2], w = q[o + 3];
+  ax[a9] = 1 - 2 * (y * y + z * z); ax[a9 + 1] = 2 * (x * y + z * w); ax[a9 + 2] = 2 * (x * z - y * w);
+  ax[a9 + 3] = 2 * (x * y - z * w); ax[a9 + 4] = 1 - 2 * (x * x + z * z); ax[a9 + 5] = 2 * (y * z + x * w);
+  ax[a9 + 6] = 2 * (x * z + y * w); ax[a9 + 7] = 2 * (y * z - x * w); ax[a9 + 8] = 1 - 2 * (x * x + y * y);
+}
+
 /** out[oo..] = a[ao..] ⊗ b[bo..], quaternions [x, y, z, w]: b's turn, then a's. out may not be a or b. */
 export function quatMultiply(a, ao, b, bo, out, oo) {
   const ax = a[ao], ay = a[ao + 1], az = a[ao + 2], aw = a[ao + 3];

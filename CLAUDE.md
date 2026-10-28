@@ -163,6 +163,15 @@ These were made with Nolan and override the rules below where they differ.
   352), solving the tree at the warm start cost 15% of a jointed scene; this costs nothing
   measurable and keeps ragdolls to the bit. `_catch` doesn't sweep a held-down tree's bodies
   (`anchored()`, `_fast` 2): put back alone, its joints dragged it on into the post.
+  Turned inertia (2026-10-28, the whipped chain): joints read each body's inverse inertia from its
+  rotation now, not the step's start: `_invIt` (scratch to `save()`), filled by `turnedInertias()`
+  in `contact.js` for awake dynamic jointed bodies before the substeps and after each `_move`;
+  `load()` copies it and `factorForest()` reads it. Contacts keep the step-start `_invI`, which
+  their once-a-step effective masses match (refreshing it for them stopped ragdolls sleeping). A
+  link whipped at 200 rad/s turns tenths of a radian a substep: with the old axes a pull at its end
+  spun it about its own length, which no row sees, and the gaps doubled each substep. Ball chain
+  on a plate at 10 rad/s: 4.9 m -> 26 mm. At 12-20 rad/s it still opens (the anchors' arcs taken
+  as straight lines), left for later. Ragdolls and chains about 4% slower, pinned.
 - **Continuous collision** (2026-10-15, milestone 13, approved): speculative contacts stay; a pair
   not touching that moves against itself by more than its tolerance in the step (`moving()` in
   `src/contact.js`) asks `impact()` (`src/impact.js`, conservative advancement over velocity,

@@ -75,7 +75,7 @@ const TYPED_NAME = new Map(Object.entries(TYPED).map(([k, v]) => [v, k]));
  * default, 'auto', as a new one does.
  */
 const SCRATCH = {
-  World: new Set(['_lines', '_placed', '_colours', '_workers', '_jobs']),
+  World: new Set(['_lines', '_placed', '_colours', '_invIt', '_workers', '_jobs']),
   Contacts: new Set(['jac', 'fjac', 'block', 'colour', 'order', 'row', 'scratch', 'starts', 'digits', 'onParts', 'plain', 'wasPlain', 'records', 'taken', 'now']),
   Pairs: new Set(['verdict']),
 };
@@ -161,6 +161,7 @@ export function load(data, World) {
     made[0]._lines = new Float32Array(0);
     made[0]._placed = [];
     made[0]._colours = new Int32Array(made[0]._type.length);
+    made[0]._invIt = new Float64Array(made[0]._type.length * 6);
     made[0]._setWorkers(null, 'workers', 'auto');
     for (const o of made) {
       if (!(o instanceof Contacts)) continue;

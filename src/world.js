@@ -29,7 +29,7 @@ import { Slots, resized, MAX_ID, MAX_SLOTS } from './core/slots.js';
 import { volume, inertia as shapeInertia, hullMass, shifted, turnedTensor, matrixOf, principal } from './shapes.js';
 import { build } from './hull.js';
 import {
-  Contacts, PIXEL, narrow, store, inertias, prepare, makeSoft, warmStart, solve, restitution, touched, gapOf,
+  Contacts, PIXEL, narrow, store, inertias, turnedInertias, prepare, makeSoft, warmStart, solve, restitution, touched, gapOf,
   WORK, crowded,
 } from './contact.js';
 import { Jobs, cores, sharedMemory } from './core/jobs.js';
@@ -49,7 +49,7 @@ import { ray, shapeCast as cast, overlap as overlapping, sense, sweep } from './
 import { Events, END } from './events.js';
 import { walk, settle, CHARACTER } from './character.js';
 import { lockedInverse } from './contact.js';
-import { cos, quatMultiply } from './core/math.js';
+import { cos, quatMultiply, axesOf } from './core/math.js';
 import { Mesh, Heightfield } from './mesh.js';
 import { save, load } from './save.js';
 import { debugLines } from './debug.js';
@@ -257,6 +257,7 @@ const COLUMNS = [
   ['_box', Float64Array, 6],         // its bounding box, grown by how far it can move: min, max
   ['_motion', Float64Array, 1],      // how far any point of it can move this step, m
   ['_invI', Float64Array, 6],        // world-space inverse inertia, xx xy xz yy yz zz
+  ['_invIt', Float64Array, 6],       // the same where a jointed body has turned to in the substep: what its joints read (contact.js turnedInertias())
   ['_start', Float64Array, 3],       // its position when the step began
   ['_startQ', Float64Array, 4],      // and its rotation, for a fast body caught after the solve (_catch)
   ['_fast', Uint8Array, 1],          // during _catch: 1 for a fast body, which is never another's target; 2 for one not swept
@@ -965,6 +966,7 @@ export class World {
       // through a long joint pass, they slowed it (core/jobs.js). The relax
       // pass's stretch runs on into the next substep's warm start.
       const lull = parallel && held > 0;
+      if (held > 0) turnedInertias(this);
       for (let sub = 0; sub < substeps; sub++) {
         this._accelerate(h);
         if (touching > 0) warmStart(this, next);
@@ -974,6 +976,7 @@ export class World {
         if (lull) jobs.lull(1);
         if (held > 0) solveJoints(this, h, true);
         this._move(h);
+        if (held > 0) turnedInertias(this);
         if (touching > 0) solve(this, next, h, false);
         if (lull) jobs.lull(2);
         if (held > 0) solveJoints(this, h, false);
@@ -1418,10 +1421,7 @@ export class World {
     const ax = this._axes, box = this._box, motion = this._motion, d = this._dims;
     {
       const s3 = s * 3, s4 = s * 4, a9 = s * 9, b6 = s * 6;
-      const x = q[s4], y = q[s4 + 1], z = q[s4 + 2], qw = q[s4 + 3];
-      ax[a9] = 1 - 2 * (y * y + z * z); ax[a9 + 1] = 2 * (x * y + z * qw); ax[a9 + 2] = 2 * (x * z - y * qw);
-      ax[a9 + 3] = 2 * (x * y - z * qw); ax[a9 + 4] = 1 - 2 * (x * x + z * z); ax[a9 + 5] = 2 * (y * z + x * qw);
-      ax[a9 + 6] = 2 * (x * z + y * qw); ax[a9 + 7] = 2 * (y * z - x * qw); ax[a9 + 8] = 1 - 2 * (x * x + y * y);
+      axesOf(q, s4, ax, a9);
 
       let m = 0;
       if (type[s] !== STATIC) {

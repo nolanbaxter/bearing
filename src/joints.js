@@ -888,12 +888,19 @@ function emit(F, t, m, o, c, rate) {
   return m + 1;
 }
 
-/** Joint j's bodies into the scratch: a point in the world is a body that never moves. */
+/**
+ * Joint j's bodies into the scratch: a point in the world is a body that never
+ * moves. Their inverse inertias are worked out where they have turned to now,
+ * as the anchors are (contact.js, turnedInertias()), and nothing but a
+ * dynamic body turns under a push.
+ */
 function load(world, j) {
-  const J = world._joints, a = J.a[j], b = J.b[j], v = world._velocity, w = world._angular, invI = world._invI;
+  const J = world._joints, a = J.a[j], b = J.b[j], v = world._velocity, w = world._angular;
+  const invI = world._invIt, type = world._type;
   const a3 = 3 * a, a6 = 6 * a;
   VA[0] = v[a3]; VA[1] = v[a3 + 1]; VA[2] = v[a3 + 2]; VA[3] = w[a3]; VA[4] = w[a3 + 1]; VA[5] = w[a3 + 2];
-  for (let k = 0; k < 6; k++) IA[k] = invI[a6 + k];
+  if (type[a] === DYNAMIC) for (let k = 0; k < 6; k++) IA[k] = invI[a6 + k];
+  else IA.fill(0);
   ima = world._invMass[a];
   if (b < 0) {
     VB.fill(0);
@@ -903,7 +910,8 @@ function load(world, j) {
   }
   const b3 = 3 * b, b6 = 6 * b;
   VB[0] = v[b3]; VB[1] = v[b3 + 1]; VB[2] = v[b3 + 2]; VB[3] = w[b3]; VB[4] = w[b3 + 1]; VB[5] = w[b3 + 2];
-  for (let k = 0; k < 6; k++) IB[k] = invI[b6 + k];
+  if (type[b] === DYNAMIC) for (let k = 0; k < 6; k++) IB[k] = invI[b6 + k];
+  else IB.fill(0);
   imb = world._invMass[b];
 }
 

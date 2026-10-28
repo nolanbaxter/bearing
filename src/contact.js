@@ -104,7 +104,7 @@
 
 import { collide, Shape, Manifold, Parts, Placed, placePart, SPHERE, CAPSULE, BOX as BOX_KIND, HULL } from './collide.js';
 import { touchLevel, Touches } from './triangle.js';
-import { rotate, atan2 } from './core/math.js';
+import { rotate, atan2, axesOf } from './core/math.js';
 import { resized } from './core/slots.js';
 import { impact, posed, UNSURE } from './impact.js';
 import { COMPLIANCE } from './forest.js';
@@ -1349,10 +1349,54 @@ function prepareRows(world, c, from, to) {
 
 /** world._invI for slot s: R diag(1/I) Rᵀ for a dynamic body, zero for anything else. */
 function inverseInertia(world, s) {
-  const o = s * 6, out = world._invI;
+  inverseAt(world, s, world._axes, s * 9, world._invI, s * 6);
+}
+
+/**
+ * Each awake dynamic body with a joint: its world inverse inertia where it has
+ * turned to now, into world._invIt, as the step starts and after each move
+ * (World.step), so that whatever the joints read in a substep was worked out
+ * once for it, from the rotation they read. Bodies with no joint pay only the
+ * test; a body a joint holds that isn't dynamic is read as 0 (joints.js load()).
+ */
+export function turnedInertias(world) {
+  const list = world._awakeList, n = world._awakeCount, head = world._jointHead, type = world._type, out = world._invIt;
+  for (let i = 0; i < n; i++) {
+    const s = list[i];
+    if (head[s] !== 0 && type[s] === DYNAMIC) turnedInverse(world, s, out, 6 * s);
+  }
+}
+
+/**
+ * Slot s's world inverse inertia where it has turned to now, into out[o..o+5]:
+ * what the joints use (joints.js load(), forest.js), where inertias() is
+ * what the contacts use. The contacts' levers and effective masses are taken
+ * once a step, from the inertia the body had as it began (prepare()), and are
+ * applied with it, so they stay as they were. A joint's anchors and rows are
+ * worked out afresh at every pass, so a link spinning fast stays exact, and
+ * so must the inertia they are paired with. A chain link is easy to turn
+ * about its long axis (a 0.4 x 0.1 x 0.1 m box: 8.5 times easier than across
+ * it), and with the inertia from the start of the step, a link that had
+ * turned a few tenths of a radian since took a pull at its end, which can
+ * only turn it across its axis now, as turning it about the axis it had then:
+ * as much spin about its own length as across it, which no joint row sees
+ * and none takes back, and the spin across far more than the pull asked.
+ * Eight links hung from a plate turning at 10 rad/s, whipping them at 100 to
+ * 250 rad/s, opened their joints by 4.9 m; worked out where they are, 26 mm.
+ * At the first substep the rotation is the one inertias() read, so this is
+ * the same to the bit.
+ */
+function turnedInverse(world, s, out, o) {
+  axesOf(world._rotation, 4 * s, AXES, 0);
+  inverseAt(world, s, AXES, 0, out, o);
+}
+const AXES = new Float64Array(9);
+
+/** R diag(1/I) Rᵀ for slot s, R's columns its axes at ax[a9..a9+8], into out[o..o+5]; zero but for a dynamic body. */
+function inverseAt(world, s, ax, a9, out, o) {
   if (world._type[s] !== DYNAMIC) { out.fill(0, o, o + 6); return; }
-  if (world._lock[s] !== 0) { lockedInverse(world._axes, s * 9, world._inertia, s * 3, world._lock[s], out, o); return; }
-  const ax = world._axes, a9 = s * 9, inv = world._invInertia, s3 = s * 3;
+  if (world._lock[s] !== 0) { lockedInverse(ax, a9, world._inertia, s * 3, world._lock[s], out, o); return; }
+  const inv = world._invInertia, s3 = s * 3;
   const i0 = inv[s3], i1 = inv[s3 + 1], i2 = inv[s3 + 2];
   // Columns of R are the body's axes; entry (r, c) is Σ_k R_rk R_ck / I_k.
   const x0 = ax[a9], x1 = ax[a9 + 1], x2 = ax[a9 + 2];
