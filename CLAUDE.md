@@ -329,7 +329,8 @@ These were made with Nolan and override the rules below where they differ.
   every Contacts column it reads in a local (`cNormal`, `cNormalImpulse`, ...) because `pushes()`
   isn't inlined (`--trace-turbo-inlining`: "cannot consider"), and after a call V8 reloads each
   `c.x` at every manifold. Pinned, both load orders: pile 31%, pyramid 40%, hulls 30%, terrain
-  28%, ragdolls 8% faster; 10,000 falling boxes 230 -> 170 ms. Check other hot loops that call
+  28%, ragdolls 8% faster; 10,000 falling boxes 230 -> 170 ms. `prepareRows` (calls `lever()`)
+  and `warmRows` too: pile, pyramid, hulls, terrain 9-16% more. Check other hot loops that call
   something not inlined the same way.
 - **No allocation in the step means no new arrays or views** (2026-10-22, milestone 16 step 4):
   copy elements one by one, never `subarray()`/`slice()`/`map()` in step code;

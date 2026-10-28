@@ -1255,42 +1255,50 @@ export function prepare(world, c) {
 
 /** prepare() for rows from..to-1: each row's own, reading only what the step has fixed. */
 function prepareRows(world, c, from, to) {
+  // Columns in locals, read once a pass, as in solveRows (see there): lever()
+  // isn't inlined. Measured with warmRows': pile 8-9%, pyramid 13%, hulls 10%.
+  const cA = c.a, cAdjusted = c.adjusted, cAnchorA = c.anchorA, cAnchorB = c.anchorB, cB = c.b,
+    cBlock = c.block, cLever = c.lever, cMaxNormalImpulse = c.maxNormalImpulse, cNormal = c.normal,
+    cNormalMass = c.normalMass, cPartA = c.partA, cPartB = c.partB, cPoint = c.point, cPoints = c.points,
+    cRa = c.ra, cRb = c.rb, cRelativeVelocity = c.relativeVelocity, cRollMass1 = c.rollMass1,
+    cRollMass2 = c.rollMass2, cSeparation = c.separation, cShift = c.shift, cSpinMass = c.spinMass,
+    cT1 = c.t1, cT2 = c.t2, cTangentMass = c.tangentMass, cTolerance = c.tolerance;
   const invI = world._invI, invMass = world._invMass;
   const p = world._position, q = world._rotation, v = world._velocity, w = world._angular;
   for (let m = from; m < to; m++) {
-    const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3;
+    const a = cA[m], b = cB[m], a3 = a * 3, b3 = b * 3;
     const ima = invMass[a], imb = invMass[b];
-    const nx = c.normal[3 * m], ny = c.normal[3 * m + 1], nz = c.normal[3 * m + 2];
-    const partA = c.partA[m] < 0 ? null : world._inner[a].list[c.partA[m]];
-    const partB = c.partB[m] < 0 ? null : world._inner[b].list[c.partB[m]];
+    const nx = cNormal[3 * m], ny = cNormal[3 * m + 1], nz = cNormal[3 * m + 2];
+    const partA = cPartA[m] < 0 ? null : world._inner[a].list[cPartA[m]];
+    const partB = cPartB[m] < 0 ? null : world._inner[b].list[cPartB[m]];
     const m3 = 3 * m;
-    if (c.points[m] <= 2) {
-      c.rollMass1[m] = turning(invI, a, b, c.t1[m3], c.t1[m3 + 1], c.t1[m3 + 2]);
-      c.rollMass2[m] = turning(invI, a, b, c.t2[m3], c.t2[m3 + 1], c.t2[m3 + 2]);
+    if (cPoints[m] <= 2) {
+      cRollMass1[m] = turning(invI, a, b, cT1[m3], cT1[m3 + 1], cT1[m3 + 2]);
+      cRollMass2[m] = turning(invI, a, b, cT2[m3], cT2[m3 + 1], cT2[m3 + 2]);
     }
-    c.spinMass[m] = turning(invI, a, b, nx, ny, nz);
+    cSpinMass[m] = turning(invI, a, b, nx, ny, nz);
     // The friction anchor's sums (see FRICTION): each point weighed 1 within
     // the tolerance of touching, down to 0 at twice it; evenly if none is near.
-    const tol = c.tolerance[m];
+    const tol = cTolerance[m];
     let weight = 0, ax = 0, ay = 0, az = 0, bx = 0, by = 0, bz = 0;
     let ex = 0, ey = 0, ez = 0, fx = 0, fy = 0, fz = 0;
-    for (let k = 0; k < c.points[m]; k++) {
+    for (let k = 0; k < cPoints[m]; k++) {
       const i = m * P + k, i3 = 3 * i;
-      const px = c.point[i3], py = c.point[i3 + 1], pz = c.point[i3 + 2];
+      const px = cPoint[i3], py = cPoint[i3 + 1], pz = cPoint[i3 + 2];
       const rax = px - p[a3], ray = py - p[a3 + 1], raz = pz - p[a3 + 2];
-      const rbx = px + c.shift[i3] - p[b3], rby = py + c.shift[i3 + 1] - p[b3 + 1], rbz = pz + c.shift[i3 + 2] - p[b3 + 2];
-      c.ra[i3] = rax; c.ra[i3 + 1] = ray; c.ra[i3 + 2] = raz;
-      c.rb[i3] = rbx; c.rb[i3 + 1] = rby; c.rb[i3 + 2] = rbz;
+      const rbx = px + cShift[i3] - p[b3], rby = py + cShift[i3 + 1] - p[b3 + 1], rbz = pz + cShift[i3 + 2] - p[b3 + 2];
+      cRa[i3] = rax; cRa[i3 + 1] = ray; cRa[i3 + 2] = raz;
+      cRb[i3] = rbx; cRb[i3 + 1] = rby; cRb[i3 + 2] = rbz;
       // Separation as the bodies move during the step is the starting
       // separation plus how far the two anchors have moved apart along the
       // normal; this is the part of that sum fixed at the start.
       core(world, a, partA, rax, ray, raz, c.la, i3);
       const cax = v3[0], cay = v3[1], caz = v3[2];
       core(world, b, partB, rbx, rby, rbz, c.lb, i3);
-      c.adjusted[i] = c.separation[i] - ((v3[0] - cax) * nx + (v3[1] - cay) * ny + (v3[2] - caz) * nz);
-      c.normalMass[i] = lever(c.jac, J * i, invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, nx, ny, nz);
-      c.maxNormalImpulse[i] = 0;
-      const s = c.separation[i] / tol, near = s <= 1 ? 1 : s >= 2 ? 0 : 2 - s;
+      cAdjusted[i] = cSeparation[i] - ((v3[0] - cax) * nx + (v3[1] - cay) * ny + (v3[2] - caz) * nz);
+      cNormalMass[i] = lever(c.jac, J * i, invI, ima, imb, a, b, rax, ray, raz, rbx, rby, rbz, nx, ny, nz);
+      cMaxNormalImpulse[i] = 0;
+      const s = cSeparation[i] / tol, near = s <= 1 ? 1 : s >= 2 ? 0 : 2 - s;
       weight += near;
       ax += near * rax; ay += near * ray; az += near * raz; bx += near * rbx; by += near * rby; bz += near * rbz;
       ex += rax; ey += ray; ez += raz; fx += rbx; fy += rby; fz += rbz;
@@ -1298,9 +1306,9 @@ function prepareRows(world, c, from, to) {
       const dvx = v[b3] + w[b3 + 1] * rbz - w[b3 + 2] * rby - v[a3] - w[a3 + 1] * raz + w[a3 + 2] * ray;
       const dvy = v[b3 + 1] + w[b3 + 2] * rbx - w[b3] * rbz - v[a3 + 1] - w[a3 + 2] * rax + w[a3] * raz;
       const dvz = v[b3 + 2] + w[b3] * rby - w[b3 + 1] * rbx - v[a3 + 2] - w[a3] * ray + w[a3 + 1] * rax;
-      c.relativeVelocity[i] = dvx * nx + dvy * ny + dvz * nz;
+      cRelativeVelocity[i] = dvx * nx + dvy * ny + dvz * nz;
     }
-    const n = c.points[m];
+    const n = cPoints[m];
     if (n >= 2) {
       // The block (see solve): each entry from the turning terms just made,
       // so its diagonal is exactly what normalMass inverts.
@@ -1311,27 +1319,27 @@ function prepareRows(world, c, from, to) {
           const jl = J * (m * P + l);
           const e = s + jac[jk] * jac[jl + 6] + jac[jk + 1] * jac[jl + 7] + jac[jk + 2] * jac[jl + 8]
             + jac[jk + 3] * jac[jl + 9] + jac[jk + 4] * jac[jl + 10] + jac[jk + 5] * jac[jl + 11];
-          c.block[kb + P * k + l] = e; c.block[kb + P * l + k] = e;
+          cBlock[kb + P * k + l] = e; cBlock[kb + P * l + k] = e;
         }
       }
     }
-    if (weight === 0) { weight = c.points[m]; ax = ex; ay = ey; az = ez; bx = fx; by = fy; bz = fz; }
+    if (weight === 0) { weight = cPoints[m]; ax = ex; ay = ey; az = ez; bx = fx; by = fy; bz = fz; }
     ax /= weight; ay /= weight; az /= weight; bx /= weight; by /= weight; bz /= weight;
-    c.anchorA[m3] = ax; c.anchorA[m3 + 1] = ay; c.anchorA[m3 + 2] = az;
-    c.anchorB[m3] = bx; c.anchorB[m3 + 1] = by; c.anchorB[m3 + 2] = bz;
+    cAnchorA[m3] = ax; cAnchorA[m3 + 1] = ay; cAnchorA[m3 + 2] = az;
+    cAnchorB[m3] = bx; cAnchorB[m3 + 1] = by; cAnchorB[m3 + 2] = bz;
     // Each point's twist lever: its distance from the anchor across the normal.
-    for (let k = 0; k < c.points[m]; k++) {
+    for (let k = 0; k < cPoints[m]; k++) {
       const i3 = 3 * (m * P + k);
-      let dx = c.ra[i3] - ax, dy = c.ra[i3 + 1] - ay, dz = c.ra[i3 + 2] - az;
+      let dx = cRa[i3] - ax, dy = cRa[i3 + 1] - ay, dz = cRa[i3 + 2] - az;
       const along = dx * nx + dy * ny + dz * nz;
       dx -= along * nx; dy -= along * ny; dz -= along * nz;
-      c.lever[m * P + k] = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      cLever[m * P + k] = Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
     // The 2x2 block along t1 and t2 at the anchor, and its inverse. The
     // tangents are at right angles, so the masses add nothing off the diagonal.
     const f = FJ * m, jac = c.fjac;
-    lever(jac, f, invI, ima, imb, a, b, ax, ay, az, bx, by, bz, c.t1[m3], c.t1[m3 + 1], c.t1[m3 + 2]);
-    lever(jac, f + 12, invI, ima, imb, a, b, ax, ay, az, bx, by, bz, c.t2[m3], c.t2[m3 + 1], c.t2[m3 + 2]);
+    lever(jac, f, invI, ima, imb, a, b, ax, ay, az, bx, by, bz, cT1[m3], cT1[m3 + 1], cT1[m3 + 2]);
+    lever(jac, f + 12, invI, ima, imb, a, b, ax, ay, az, bx, by, bz, cT2[m3], cT2[m3 + 1], cT2[m3 + 2]);
     const k11 = ima + imb + jac[f] * jac[f + 6] + jac[f + 1] * jac[f + 7] + jac[f + 2] * jac[f + 8]
       + jac[f + 3] * jac[f + 9] + jac[f + 4] * jac[f + 10] + jac[f + 5] * jac[f + 11];
     const k22 = ima + imb + jac[f + 12] * jac[f + 18] + jac[f + 13] * jac[f + 19] + jac[f + 14] * jac[f + 20]
@@ -1340,9 +1348,9 @@ function prepareRows(world, c, from, to) {
       + jac[f + 15] * jac[f + 9] + jac[f + 16] * jac[f + 10] + jac[f + 17] * jac[f + 11];
     const det = k11 * k22 - k12 * k12;
     if (det > 0) {
-      c.tangentMass[m3] = k22 / det; c.tangentMass[m3 + 1] = -k12 / det; c.tangentMass[m3 + 2] = k11 / det;
+      cTangentMass[m3] = k22 / det; cTangentMass[m3 + 1] = -k12 / det; cTangentMass[m3 + 2] = k11 / det;
     } else {
-      c.tangentMass[m3] = 0; c.tangentMass[m3 + 1] = 0; c.tangentMass[m3 + 2] = 0;
+      cTangentMass[m3] = 0; cTangentMass[m3 + 1] = 0; cTangentMass[m3 + 2] = 0;
     }
   }
 }
@@ -1517,19 +1525,23 @@ export function warmStart(world, c) {
 
 /** warmStart() for rows from..to-1, all of one colour or taken in order. */
 function warmRows(world, c, from, to) {
+  // Columns in locals, as in solveRows (see there).
+  const cA = c.a, cB = c.b, cNormal = c.normal, cNormalImpulse = c.normalImpulse, cPoints = c.points,
+    cRollImpulse1 = c.rollImpulse1, cRollImpulse2 = c.rollImpulse2, cSpinImpulse = c.spinImpulse, cT1 = c.t1,
+    cT2 = c.t2, cTangentImpulse1 = c.tangentImpulse1, cTangentImpulse2 = c.tangentImpulse2;
   const v = world._velocity, w = world._angular, invI = world._invI, invMass = world._invMass, jac = c.jac;
   for (let m = from; m < to; m++) {
-    const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3, m3 = 3 * m;
+    const a = cA[m], b = cB[m], a3 = a * 3, b3 = b * 3, m3 = 3 * m;
     const ima = invMass[a], imb = invMass[b];
-    const nx = c.normal[m3], ny = c.normal[m3 + 1], nz = c.normal[m3 + 2];
-    const t1x = c.t1[m3], t1y = c.t1[m3 + 1], t1z = c.t1[m3 + 2];
-    const t2x = c.t2[m3], t2y = c.t2[m3 + 1], t2z = c.t2[m3 + 2];
+    const nx = cNormal[m3], ny = cNormal[m3 + 1], nz = cNormal[m3 + 2];
+    const t1x = cT1[m3], t1y = cT1[m3 + 1], t1z = cT1[m3 + 2];
+    const t2x = cT2[m3], t2y = cT2[m3 + 1], t2z = cT2[m3 + 2];
     // The pair's velocities in locals for the manifold, as in solve().
     let vax = v[a3], vay = v[a3 + 1], vaz = v[a3 + 2], wax = w[a3], way = w[a3 + 1], waz = w[a3 + 2];
     let vbx = v[b3], vby = v[b3 + 1], vbz = v[b3 + 2], wbx = w[b3], wby = w[b3 + 1], wbz = w[b3 + 2];
-    for (let k = 0; k < c.points[m]; k++) {
+    for (let k = 0; k < cPoints[m]; k++) {
       const i = m * P + k, j = J * i;
-      const ln = c.normalImpulse[i];
+      const ln = cNormalImpulse[i];
       const px = nx * ln, py = ny * ln, pz = nz * ln;
       vax -= ima * px; vay -= ima * py; vaz -= ima * pz;
       vbx += imb * px; vby += imb * py; vbz += imb * pz;
@@ -1538,7 +1550,7 @@ function warmRows(world, c, from, to) {
     }
     {
       // Friction at the anchor.
-      const f = FJ * m, fj = c.fjac, l1 = c.tangentImpulse1[m], l2 = c.tangentImpulse2[m];
+      const f = FJ * m, fj = c.fjac, l1 = cTangentImpulse1[m], l2 = cTangentImpulse2[m];
       const px = t1x * l1 + t2x * l2, py = t1y * l1 + t2y * l2, pz = t1z * l1 + t2z * l2;
       vax -= ima * px; vay -= ima * py; vaz -= ima * pz;
       vbx += imb * px; vby += imb * py; vbz += imb * pz;
@@ -1547,7 +1559,7 @@ function warmRows(world, c, from, to) {
     }
     {
       // Rolling (none past two points: carry() and solve() leave it 0) and twist.
-      const r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m], sp = c.spinImpulse[m], oa = a * 6, ob = b * 6;
+      const r1 = cRollImpulse1[m], r2 = cRollImpulse2[m], sp = cSpinImpulse[m], oa = a * 6, ob = b * 6;
       const lx = t1x * r1 + t2x * r2 + nx * sp, ly = t1y * r1 + t2y * r2 + ny * sp, lz = t1z * r1 + t2z * r2 + nz * sp;
       wax -= invI[oa] * lx + invI[oa + 1] * ly + invI[oa + 2] * lz;
       way -= invI[oa + 1] * lx + invI[oa + 3] * ly + invI[oa + 4] * lz;
