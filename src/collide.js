@@ -843,6 +843,39 @@ function support(X, h, nx, ny, nz) {
     + h[2] * Math.abs(X[6] * nx + X[7] * ny + X[8] * nz);
 }
 
+// SWAPPED: a clipped point's feature as it would be named with the two boxes'
+// roles swapped, so a point is named by what of a and of b made it, whichever
+// face is the reference. Two faces lying flat on each other separate the boxes
+// equally, give or take their tilt times their width, and which face wins
+// (boxBox) can change with a tilt of a few milliradians: a ragdoll's thigh
+// lying flat on its own forearm swapped once every ten steps, the tolerance
+// there being 0.4 mm. Named by reference and incident, every point then got a
+// new id, lost its warm-started impulse and its slip, and the thigh dropped a
+// step's weight onto the forearm and bounced: a 6 Hz buzz at up to 6 cm/s
+// that kept the ragdoll awake for good, in 6 of 20 starts of the
+// joint-friction ragdolls (test/joints.test.js). Box2D names its points the
+// same way (b2ContactFeature, swapped when flipped).
+//
+// A face's corners and sides are named by their signs along its box's next
+// two axes, p and q after the face's own, the same two that the reference
+// face's side planes cut along (u and w in faceContact; planes 0 to 3 are
+// +u, -u, +w and -w). Incident corner v is at (CORNER_P[v], CORNER_Q[v]);
+// incident edge e runs from corner e to corner e + 1, so edges 0 to 3 lie on
+// q = -1, p = +1, q = +1 and p = -1, which are side planes 3, 0, 2 and 1. So
+// corner v (0-3) and the reference's corner of side planes j and k
+// (20 + 4j + k) name each other, and incident edge e cut by plane k
+// (4 + 4e + k) is the other box's edge on plane k cut by the plane edge e
+// lies on. Features no clip makes (two parallel planes) stay as they are.
+const EDGE_PLANE = [3, 0, 2, 1], PLANE_EDGE = [1, 3, 2, 0];
+const SWAPPED = new Uint8Array(32);
+for (let f = 0; f < 32; f++) SWAPPED[f] = f;
+for (let v = 0; v < 4; v++) {
+  const j = CORNER_P[v] > 0 ? 0 : 1, k = CORNER_Q[v] > 0 ? 2 : 3;
+  SWAPPED[v] = 20 + 4 * j + k;
+  SWAPPED[20 + 4 * j + k] = v;
+}
+for (let e = 0; e < 4; e++) for (let k = 0; k < 4; k++) SWAPPED[4 + 4 * e + k] = 4 + 4 * PLANE_EDGE[k] + EDGE_PLANE[e];
+
 /**
  * Face `axis` of `ref`, the side facing `inc`, against the face of `inc` most
  * nearly opposite it. `flipped` is true when ref is the collide() call's b, so
@@ -902,7 +935,7 @@ function faceContact(ref, inc, axis, flipped, margin, tolerance, out) {
     const m = separation * 0.5;
     kept[3 * n] = vx - nx * m; kept[3 * n + 1] = vy - ny * m; kept[3 * n + 2] = vz - nz * m;
     keptSep[n] = separation;
-    keptId[n] = ((flipped ? 1 : 0) << 12) | (refFace << 9) | (incFace << 6) | feat[v];
+    keptId[n] = flipped ? (incFace << 9) | (refFace << 6) | SWAPPED[feat[v]] : (refFace << 9) | (incFace << 6) | feat[v];
     n++;
   }
   if (n === 0) return;

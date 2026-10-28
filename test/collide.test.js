@@ -420,6 +420,23 @@ test('swapping a and b turns the normal round and keeps the contact', () => {
   }
 });
 
+test('a box point keeps its id whichever face is the reference', () => {
+  // A ragdoll's forearm under its thigh, faces flat on each other: tilted
+  // 1 mrad, the forearm's face is the reference; tilted 3 mrad, the thigh's
+  // wins by more than the tolerance. The same four points come out, the
+  // thigh's edge across the forearm's sides and the forearm's two corners
+  // under the thigh, and each keeps its id, so its warm start carries over
+  // (SWAPPED in collide.js). Named by reference and incident, all four changed.
+  const a = make({ size: [0.26, 0.08, 0.08] });
+  const at = (t) => run(a, make({ size: [0.14, 0.14, 0.44], position: [0.1, 0.108, 0.01], rotation: turn([1, 0, 0], t) }), 0.01, 0.0004);
+  const r = at(0.001), s = at(0.003);
+  near(r.normal, [0, 1, 0], "the forearm's face", 0);
+  assert.ok(s.normal[2] > 0.002, `the thigh's face: normal ${s.normal}`);
+  assert.equal(s.count, 4);
+  assert.deepEqual(s.points.map((p) => p.id).sort(), r.points.map((p) => p.id).sort());
+  for (const p of r.points) near(s.points.find((q) => q.id === p.id).p, p.p, `point ${p.id}`, 0.001);
+});
+
 test('moving a shape by d changes the deepest separation by at most d', () => {
   // Continuity: a contact that jumps when a shape barely moves is a contact
   // the solver can't rest on. Box pairs may also switch between a face and an

@@ -278,10 +278,17 @@ test('a ball joint\'s friction holds a pendulum above it, slows one below, and i
 test('ragdolls with friction in their joints stop swinging and sleep', () => {
   // bench/compare.html's 32 ragdolls, the upper 16 dropped on the lower. With
   // no friction, 286 of their 352 parts still swung at 12 s, each holding its
-  // whole island awake; with 1 N·m in every joint, all slept by 5.55 s
+  // whole island awake; with 1 N·m in every joint, all slept by 5.1 to 5.8 s
   // (0.5 N·m: 341 by 12 s; 0.1: 319). 1 N·m is less than gravity's torque on
   // any limb held out level (2.1 N·m on a forearm, 19 on a thigh), so limbs
   // still fall as they would; it stops them swinging once down.
+  //
+  // Six starts, the scene moved 0 to 5 nm along x: rounding sends each its own
+  // way. Before box contacts named their points by both boxes' features
+  // (SWAPPED in collide.js), the 1 nm start never slept: a thigh lying flat on
+  // its own forearm swapped which face was the reference every ten steps, its
+  // points lost their impulses, and the ragdoll buzzed in place. That was 6 of
+  // 20 such starts; one start alone passed or failed by luck.
   const PARTS = [[[0.32, 0.2, 0.2], [0, 1, 0]], [[0.36, 0.45, 0.22], [0, 1.325, 0]], [[0.2, 0.24, 0.22], [0, 1.67, 0]],
     [[0.28, 0.1, 0.1], [-0.32, 1.5, 0]], [[0.26, 0.08, 0.08], [-0.59, 1.5, 0]], [[0.28, 0.1, 0.1], [0.32, 1.5, 0]],
     [[0.26, 0.08, 0.08], [0.59, 1.5, 0]], [[0.14, 0.44, 0.14], [-0.09, 0.68, 0]], [[0.12, 0.44, 0.12], [-0.09, 0.24, 0]],
@@ -290,18 +297,21 @@ test('ragdolls with friction in their joints stop swinging and sleep', () => {
     ['hinge', 4, 3, [-0.46, 1.5, 0], [0, 1, 0]], ['ball', 5, 1, [0.18, 1.5, 0]], ['hinge', 6, 5, [0.46, 1.5, 0], [0, 1, 0]],
     ['ball', 7, 0, [-0.09, 0.9, 0]], ['hinge', 8, 7, [-0.09, 0.46, 0], [1, 0, 0]], ['ball', 9, 0, [0.09, 0.9, 0]],
     ['hinge', 10, 9, [0.09, 0.46, 0], [1, 0, 0]]];
-  const world = new World();
-  world.addBody({ type: 'static', size: [200, 1, 200], position: [0, -0.5, 0] });
-  const parts = [];
-  for (let i = 0; i < 32; i++) {
-    const layer = i >> 4, k = i & 15, at = [((k & 3) - 1.5) * 1.6 + layer * 0.5, 0.2 + layer * 2.4, ((k >> 2) - 1.5) + layer * 0.3];
-    const plus = (p) => [at[0] + p[0], at[1] + p[1], at[2] + p[2]];
-    const b = PARTS.map(([size, p]) => world.addBody({ size, position: plus(p) }));
-    parts.push(...b);
-    for (const [type, a, bb, p, axis] of JOINTS) world.addJoint({ type, a: b[a], b: b[bb], anchor: plus(p), friction: 1, ...(axis ? { axis } : {}) });
+  for (let nudge = 0; nudge <= 5; nudge++) {
+    const world = new World();
+    world.addBody({ type: 'static', size: [200, 1, 200], position: [0, -0.5, 0] });
+    const parts = [];
+    for (let i = 0; i < 32; i++) {
+      const layer = i >> 4, k = i & 15, at = [((k & 3) - 1.5) * 1.6 + layer * 0.5 + nudge * 1e-9, 0.2 + layer * 2.4, ((k >> 2) - 1.5) + layer * 0.3];
+      const plus = (p) => [at[0] + p[0], at[1] + p[1], at[2] + p[2]];
+      const b = PARTS.map(([size, p]) => world.addBody({ size, position: plus(p) }));
+      parts.push(...b);
+      for (const [type, a, bb, p, axis] of JOINTS) world.addJoint({ type, a: b[a], b: b[bb], anchor: plus(p), friction: 1, ...(axis ? { axis } : {}) });
+    }
+    for (let step = 0; step < 8 * 60 && !parts.every((b) => b.asleep); step++) world.step(DT);
+    assert.ok(parts.every((b) => b.asleep), `moved ${nudge} nm: ${parts.filter((b) => b.asleep).length} of 352 asleep at 8 s`);
+    world.destroy();
   }
-  for (let step = 0; step < 8 * 60 && !parts.every((b) => b.asleep); step++) world.step(DT);
-  assert.ok(parts.every((b) => b.asleep), `${parts.filter((b) => b.asleep).length} of 352 asleep at 8 s`);
 });
 
 test('a spring bounces at its frequency; a rod holds its length', () => {

@@ -238,6 +238,12 @@ These were made with Nolan and override the rules below where they differ.
   the smallest id within the tolerance of the deepest, not the deepest by rounding. Exactly aligned
   stacks lost 59 ids in 600 steps and the pyramid 8,840; now none. `triangle.js` clips on its own
   and may want the same.
+  Whichever face is the reference (2026-10-28, the buzzing ragdoll): `faceContact` names a point
+  by (a's face, b's face, feature) either way, `SWAPPED` renaming a flipped clip's features (Box2D's
+  b2ContactFeature); the flip bit is gone. Two faces lying flat swapped reference every 10 steps
+  at a few mrad of tilt, every point lost its warm start, and a ragdoll's thigh on its forearm
+  buzzed at 6 Hz, awake for good in 6 of 20 nudged starts (now none). `hullFace` and `triangle.js`
+  still put the flip in the id and may want the same.
 - **Folds and friction's direction** (2026-10-23): `mesh.js` keeps each edge's fold, the direction
   into the triangle across it (`fold()`, `Mesh.folds` Float32Array, the heightfield in `edge()`;
   float32's 2^-24 is under FLAT), and `beside()` in `triangle.js` drops a contact at any edge

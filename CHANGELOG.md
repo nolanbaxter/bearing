@@ -149,6 +149,12 @@ All notable changes to Bearing are recorded here. The format follows
   on a mesh and a heightfield alike (22 and 21 of 300 drops of a 2 m box had such a contact; now
   none, and the slowest sleeps in 5.4 and 7.9 s). A box's or hull's part over a triangle now
   decides the side when the triangle's own face stands in for the shape's.
+- Ragdolls with joint friction settle every time. Two boxes lying flat on each other, such as a
+  ragdoll's thigh on its own forearm, can swap which face the contact is clipped against from one
+  step to the next, and their points were named by that face, so every swap lost the points'
+  impulses: the thigh dropped onto the forearm and bounced, and the ragdoll buzzed in place at up
+  to 6 cm/s for good. 6 of 20 starts of the 32 joint-friction ragdolls never slept; now all 20
+  sleep by 5.9 s. A box contact's points are now named by what of each box made them.
 - Each substep's solving pass reads every contact point's separation from the relaxing pass before
   it, which left the bodies exactly where the solving pass finds them, instead of working it out
   again: the same results to the bit, and the 1,000-box pile steps about 4% faster, the pyramid
