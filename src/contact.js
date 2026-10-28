@@ -210,6 +210,13 @@ export class Contacts {
     grow('la', Float64Array, 3 * p); grow('lb', Float64Array, 3 * p);
     grow('adjusted', Float64Array, p);
     grow('gap', Float64Array, m);   // its points' least separation as the last pass saw it: at the step's end
+    // Each point's separation as the last relaxing pass saw it. Nothing moves
+    // the bodies between that pass and the next substep's solving pass (only
+    // _move does, and it runs between the solving and the relaxing pass), so
+    // the solving pass reads it here instead of turning both anchors again:
+    // the same numbers, to the bit, for 9 turnings of every point a step
+    // instead of 16.
+    grow('now', Float64Array, p);
     grow('normalMass', Float64Array, p);
     grow('jac', Float64Array, J * p);   // each point's turning terms, worked out once a step (see J)
     // A manifold's points' couplings along the normal, P x P (see solve's BLOCK):
@@ -1597,29 +1604,30 @@ export function gapOf(world, c, m) {
  * One pass over every contact: the normal at each point, then friction.
  * `bias` is true while solving, false while relaxing. h is the substep.
  */
-export function solve(world, c, h, bias) {
+export function solve(world, c, h, bias, known = false) {
   const jobs = world._jobs;
   if (jobs === null || !jobs.live) {
-    solveRows(world, c, h, bias, 0, c.count);
+    solveRows(world, c, h, bias, known, 0, c.count);
     return;
   }
   // What solveRows reads besides the rows and columns, for the workers' own
   // copy of this module (see solveJob).
   const args = jobs.args;
-  args[0] = h; args[1] = bias ? 1 : 0; args[2] = soft.biasRate; args[3] = soft.massScale; args[4] = soft.impulseScale;
+  args[0] = h; args[1] = bias ? (known ? 2 : 1) : 0; args[2] = soft.biasRate; args[3] = soft.massScale; args[4] = soft.impulseScale;
   const starts = c.starts;
   for (let k = 0; k < COLOURS; k++) if (starts[k + 1] > starts[k]) jobs.run(SOLVE, world, c, starts[k], starts[k + 1]);
   // The overflow's manifolds may share bodies: one thread, in order (graph.js).
-  solveRows(world, c, h, bias, starts[OVERFLOW], starts[OVERFLOW + 1]);
+  solveRows(world, c, h, bias, known, starts[OVERFLOW], starts[OVERFLOW + 1]);
 }
 
 /**
  * solve() for rows from..to-1. The rows lie colour by colour (graph.js): no
  * two manifolds of one colour share a body the solve moves, so within a
  * colour the order, and how the rows are split between threads, changes
- * nothing.
+ * nothing. `known`: the separations the last relaxing pass left in c.now
+ * still hold (a solving pass after the first substep's).
  */
-function solveRows(world, c, h, bias, from, to) {
+function solveRows(world, c, h, bias, known, from, to) {
   const v = world._velocity, w = world._angular, invI = world._invI, invMass = world._invMass;
   const p = world._position, start = world._start, q = world._rotation;
   const inv = 1 / h;
@@ -1640,10 +1648,15 @@ function solveRows(world, c, h, bias, from, to) {
       const i = m * P + k, i3 = 3 * i;
       // The separation now: the anchors where the bodies' current rotations put
       // them. It can't change within a pass, since nothing moves until _move.
-      rotate(q, a * 4, c.la[i3], c.la[i3 + 1], c.la[i3 + 2], false, v3);
-      const cax = v3[0], cay = v3[1], caz = v3[2];
-      rotate(q, b * 4, c.lb[i3], c.lb[i3 + 1], c.lb[i3 + 2], false, v3);
-      const s = (dx + v3[0] - cax) * nx + (dy + v3[1] - cay) * ny + (dz + v3[2] - caz) * nz + c.adjusted[i];
+      let s;
+      if (known) s = c.now[i];
+      else {
+        rotate(q, a * 4, c.la[i3], c.la[i3 + 1], c.la[i3 + 2], false, v3);
+        const cax = v3[0], cay = v3[1], caz = v3[2];
+        rotate(q, b * 4, c.lb[i3], c.lb[i3 + 1], c.lb[i3 + 2], false, v3);
+        s = (dx + v3[0] - cax) * nx + (dy + v3[1] - cay) * ny + (dz + v3[2] - caz) * nz + c.adjusted[i];
+        if (!bias) c.now[i] = s;
+      }
       if (s < least) least = s;
       if (s > 0) {
         // Not touching yet: allowed to close exactly the gap this substep, no more.
@@ -1907,7 +1920,7 @@ function warmJob(world, c, args, from, to) {
 
 function solveJob(world, c, args, from, to) {
   soft.biasRate = args[2]; soft.massScale = args[3]; soft.impulseScale = args[4];
-  solveRows(world, c, args[0], args[1] === 1, from, to);
+  solveRows(world, c, args[0], args[1] > 0, args[1] === 2, from, to);
 }
 
 function prepareJob(world, c, args, from, to) {

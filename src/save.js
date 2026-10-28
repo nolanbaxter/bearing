@@ -76,7 +76,7 @@ const TYPED_NAME = new Map(Object.entries(TYPED).map(([k, v]) => [v, k]));
  */
 const SCRATCH = {
   World: new Set(['_lines', '_placed', '_colours', '_workers', '_jobs']),
-  Contacts: new Set(['jac', 'fjac', 'block', 'colour', 'order', 'row', 'scratch', 'starts', 'digits', 'onParts', 'plain', 'wasPlain', 'records', 'taken']),
+  Contacts: new Set(['jac', 'fjac', 'block', 'colour', 'order', 'row', 'scratch', 'starts', 'digits', 'onParts', 'plain', 'wasPlain', 'records', 'taken', 'now']),
   Pairs: new Set(['verdict']),
 };
 
@@ -168,7 +168,7 @@ export function load(data, World) {
       o.colour = new Int32Array(o.a.length); o.order = new Int32Array(o.a.length); o.row = new Int32Array(o.a.length);
       o.scratch = new Float64Array(o.point.length); o.starts = new Int32Array(COLOURS + 2); o.digits = new Int32Array(DIGITS + 1);
       o.onParts = 0; o.plain = 0; o.wasPlain = 0;
-      o.records = new Float64Array(o.a.length * RECORD); o.taken = new Int32Array(1);
+      o.records = new Float64Array(o.a.length * RECORD); o.taken = new Int32Array(1); o.now = new Float64Array(o.normalMass.length);
     }
     for (const o of made) if (o instanceof Pairs) o.verdict = new Int32Array(o.a.length);
     return made[0];

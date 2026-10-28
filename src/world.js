@@ -970,7 +970,7 @@ export class World {
         if (touching > 0) warmStart(this, next);
         if (lull) jobs.lull(0);
         if (held > 0) warmStartJoints(this);
-        if (touching > 0) solve(this, next, h, true);
+        if (touching > 0) solve(this, next, h, true, sub > 0);
         if (lull) jobs.lull(1);
         if (held > 0) solveJoints(this, h, true);
         this._move(h);

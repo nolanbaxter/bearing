@@ -311,6 +311,11 @@ These were made with Nolan and override the rules below where they differ.
   load. Timing method that works on the i7-1260P: one process, both copies loaded, alternating
   blocks, pinned to CPU 0 at high priority (PowerShell `ProcessorAffinity = 1`), median of pair
   ratios over three processes; the same code reads up to 5-7% apart between module copies.
+- **Separations carried from relax to solve** (2026-10-28, from the speed research; same bits):
+  only `_move` moves bodies in the substep loop, so the relax pass stores each point's separation
+  in Contacts `now` (scratch to `save()`) and the next substep's solve pass reads it (`known`,
+  args[1] = 2 for workers); only substep 0's solve pass turns the anchors. Pinned: pile 4%,
+  pyramid 5.6%, hulls 2.7%, ragdolls 0.5% faster.
 - **No allocation in the step means no new arrays or views** (2026-10-22, milestone 16 step 4):
   copy elements one by one, never `subarray()`/`slice()`/`map()` in step code;
   `test/soak.test.js` counts those calls over a world of every feature (`test/scenes.js`,
