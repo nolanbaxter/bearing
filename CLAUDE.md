@@ -325,6 +325,11 @@ These were made with Nolan and override the rules below where they differ.
   in Contacts `now` (scratch to `save()`) and the next substep's solve pass reads it (`known`,
   args[1] = 2 for workers); only substep 0's solve pass turns the anchors. Pinned: pile 4%,
   pyramid 5.6%, hulls 2.7%, ragdolls 0.5% faster.
+  Since 2026-10-28 (Nolan: "Go ahead"), where it is measured (`solveRows`, `gapOf`) the normal is
+  turned into each body's frame once a manifold (rotate with inverse, R^T n) and each point is
+  dn + lb . nb - la . na + adjusted: 2 turns a manifold instead of 2 a point. Bits change at
+  rounding (`prepareRows`' `adjusted` keeps the old form; they differ by ~1e-16 m); pyramid within
+  a micrometre, pile sleeps 10.05 s (10.37). Pinned, both orders: pile 2-3.5%, pyramid 3.5-5%.
 - **Columns in locals across calls V8 won't inline** (2026-10-28, same bits): `solveRows` holds
   every Contacts column it reads in a local (`cNormal`, `cNormalImpulse`, ...) because `pushes()`
   isn't inlined (`--trace-turbo-inlining`: "cannot consider"), and after a call V8 reloads each

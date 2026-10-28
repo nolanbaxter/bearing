@@ -1644,13 +1644,17 @@ export function gapOf(world, c, m) {
   const dx = (p[b3] - start[b3]) - (p[a3] - start[a3]);
   const dy = (p[b3 + 1] - start[b3 + 1]) - (p[a3 + 1] - start[a3 + 1]);
   const dz = (p[b3 + 2] - start[b3 + 2]) - (p[a3 + 2] - start[a3 + 2]);
+  // As solveRows measures it (see there): the normal turned into each body's frame.
+  const dn = dx * nx + dy * ny + dz * nz;
+  rotate(q, a * 4, nx, ny, nz, true, v3);
+  const nax = v3[0], nay = v3[1], naz = v3[2];
+  rotate(q, b * 4, nx, ny, nz, true, v3);
+  const nbx = v3[0], nby = v3[1], nbz = v3[2];
   let least = Infinity;
   for (let k = 0; k < c.points[m]; k++) {
     const i = m * P + k, i3 = 3 * i;
-    rotate(q, a * 4, c.la[i3], c.la[i3 + 1], c.la[i3 + 2], false, v3);
-    const cax = v3[0], cay = v3[1], caz = v3[2];
-    rotate(q, b * 4, c.lb[i3], c.lb[i3 + 1], c.lb[i3 + 2], false, v3);
-    const s = (dx + v3[0] - cax) * nx + (dy + v3[1] - cay) * ny + (dz + v3[2] - caz) * nz + c.adjusted[i];
+    const s = dn + (c.lb[i3] * nbx + c.lb[i3 + 1] * nby + c.lb[i3 + 2] * nbz)
+      - (c.la[i3] * nax + c.la[i3 + 1] * nay + c.la[i3 + 2] * naz) + c.adjusted[i];
     if (s < least) least = s;
   }
   return least;
@@ -1712,18 +1716,28 @@ function solveRows(world, c, h, bias, known, from, to) {
     // An overlap is pushed out no faster than a pixel (the tolerance) a substep.
     const maxBias = cTolerance[m] * inv;
     const count = cPoints[m];
+    // The separation now: the anchors where the bodies' current rotations put
+    // them, along the normal. A turn keeps dot products, so (R l) . n is l .
+    // (R^T n): the normal is turned into each body's frame once, and each
+    // point is then two dot products, where turning both its anchors took two
+    // rotations a point, eight for a box face. It can't change within a pass,
+    // since nothing moves until _move.
+    let dn = 0, nax = 0, nay = 0, naz = 0, nbx = 0, nby = 0, nbz = 0;
+    if (!known) {
+      dn = dx * nx + dy * ny + dz * nz;
+      rotate(q, a * 4, nx, ny, nz, true, v3);
+      nax = v3[0]; nay = v3[1]; naz = v3[2];
+      rotate(q, b * 4, nx, ny, nz, true, v3);
+      nbx = v3[0]; nby = v3[1]; nbz = v3[2];
+    }
     let least = Infinity;
     for (let k = 0; k < count; k++) {
       const i = m * P + k, i3 = 3 * i;
-      // The separation now: the anchors where the bodies' current rotations put
-      // them. It can't change within a pass, since nothing moves until _move.
       let s;
       if (known) s = cNow[i];
       else {
-        rotate(q, a * 4, cLa[i3], cLa[i3 + 1], cLa[i3 + 2], false, v3);
-        const cax = v3[0], cay = v3[1], caz = v3[2];
-        rotate(q, b * 4, cLb[i3], cLb[i3 + 1], cLb[i3 + 2], false, v3);
-        s = (dx + v3[0] - cax) * nx + (dy + v3[1] - cay) * ny + (dz + v3[2] - caz) * nz + cAdjusted[i];
+        s = dn + (cLb[i3] * nbx + cLb[i3 + 1] * nby + cLb[i3 + 2] * nbz)
+          - (cLa[i3] * nax + cLa[i3 + 1] * nay + cLa[i3 + 2] * naz) + cAdjusted[i];
         if (!bias) cNow[i] = s;
       }
       if (s < least) least = s;
