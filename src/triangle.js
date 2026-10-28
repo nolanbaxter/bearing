@@ -33,6 +33,12 @@
 // axis lying along the face, a rock beside the triangle, leaves by either
 // side as rounding has it.
 //
+// ONE-SIDED. A heightfield's triangles (mesh.js ONE_SIDED) are touched from
+// the front only, whatever side the centre is on: under the ground is ground,
+// and everything in it goes up out of it. A ball or capsule whose core is
+// behind the face takes the face, or nothing if it isn't over it; over() is
+// never asked.
+//
 // SEAMS. `flags` says which of the triangle's edges are corners from each
 // side (mesh.js); a corner of the triangle is a seam when both its edges
 // there are. A contact that comes out against a seam would push the shape
@@ -58,10 +64,20 @@
 // slid over the fold. Only normals of the shape's own choosing are asked:
 // the closest points, an edge against an edge, the shape's own face. The
 // triangle's own face is always within what its edges allow.
+//
+// WEDGES. Under a fold inward, the two faces' prisms part: a point below the
+// seam, past this triangle's edge and short of the triangle across's, is over
+// neither, and clipping leaves it out of both. A shape's own corner there is
+// kept, with this face's normal (wedge()), as the triangle across keeps it with
+// its own. A rock's corner, pressed into a valley by the heap above, slid into
+// the wedge, where its contacts pushed it, 0.7 mm wide 7 mm down: with nothing
+// holding it, it sank 0.5 m in ten steps, until the ground beside pushed it
+// down and through. Points clipping makes on the seam are still left out: the
+// corner holds the shape.
 
 import { Shape, Manifold, Placed, SPHERE, CAPSULE, HULL, TRIANGLE, MAX_POINTS } from './collide.js';
 import { closest, Closest } from './gjk.js';
-import { FLAT, triangleNormal } from './mesh.js';
+import { FLAT, ONE_SIDED, triangleNormal } from './mesh.js';
 import { resized } from './core/slots.js';
 
 const near = new Closest();
@@ -69,6 +85,7 @@ const near = new Closest();
 const up = new Float64Array(3), P = new Float64Array(9);
 let corners = 0;   // which edges are corners from the shape's side, bit e for edge e
 let behind = 0;    // the same from the other side, for turn()
+let oneSided = false;   // a heightfield's triangle (see ONE-SIDED)
 // The triangle's front normal (ahead), and its edges' folds (mesh.js fold(): two numbers an edge), or
 // null for a triangle met alone, as queries meet them, with its seams in BARE, where nothing is asked of folds.
 const ahead = new Float64Array(3);
@@ -89,9 +106,10 @@ export function touch(s, t, flags, fold, margin, tolerance, out, tri) {
   mix = (tri + 1) * 512;
   P.set(t.points);
   folds = fold;
+  oneSided = (flags & ONE_SIDED) !== 0;
   const nx = t.axes[0], ny = t.axes[1], nz = t.axes[2];
   ahead[0] = nx; ahead[1] = ny; ahead[2] = nz;
-  const front = (s.center[0] - P[0]) * nx + (s.center[1] - P[1]) * ny + (s.center[2] - P[2]) * nz >= 0;
+  const front = oneSided || (s.center[0] - P[0]) * nx + (s.center[1] - P[1]) * ny + (s.center[2] - P[2]) * nz >= 0;
   const k = front ? 1 : -1;
   up[0] = k * nx; up[1] = k * ny; up[2] = k * nz;
   corners = front ? flags & 7 : (flags >> 3) & 7;
@@ -167,6 +185,36 @@ function beside(x, y, z, nx, ny, nz, tolerance) {
     if (gm * out + gn * (nx * ahead[0] + ny * ahead[1] + nz * ahead[2]) > FLAT) return true;
   }
   return near === 1 && back;
+}
+
+/**
+ * Whether a shape's own corner at (x, y, z), which clipping left out, lies in
+ * the wedge under a seam (see WEDGES): past exactly one edge of the triangle,
+ * a seam from the shape's side, and short of the triangle across's side of
+ * that edge (its prism's side plane, square to the way into it, fold()). Past
+ * two edges, it is beyond a corner of the triangle, where other triangles
+ * meet. Only below a fold inward do the two prisms part: on a flat seam the
+ * prisms meet, and a point past one is in the other to rounding, where, kept
+ * by both, it is one point (the same id, the same normal).
+ */
+function wedge(x, y, z) {
+  if (folds === null) return false;
+  let past = -1, mx = 0, my = 0, mz = 0, l = 0;
+  for (let e = 0; e < 3; e++) {
+    const a = 3 * e, b = 3 * ((e + 1) % 3), c = 3 * ((e + 2) % 3);
+    const ex = P[b] - P[a], ey = P[b + 1] - P[a + 1], ez = P[b + 2] - P[a + 2];
+    // This triangle's outward square to the edge, in its plane, as in beside(): as long as the edge.
+    let ox = ey * ahead[2] - ez * ahead[1], oy = ez * ahead[0] - ex * ahead[2], oz = ex * ahead[1] - ey * ahead[0];
+    if (ox * (P[c] - P[a]) + oy * (P[c + 1] - P[a + 1]) + oz * (P[c + 2] - P[a + 2]) > 0) { ox = -ox; oy = -oy; oz = -oz; }
+    if ((x - P[a]) * ox + (y - P[a + 1]) * oy + (z - P[a + 2]) * oz <= 0) continue;
+    if (past >= 0) return false;
+    past = e; mx = ox; my = oy; mz = oz; l = Math.sqrt(ex * ex + ey * ey + ez * ez);
+  }
+  if (past < 0 || (corners >> past & 1) !== 0) return false;
+  // The way into the triangle across, g = gm m + gn n, n this triangle's front normal (fold()).
+  const a = 3 * past, gm = folds[2 * past] / l, gn = folds[2 * past + 1];
+  const gx = gm * mx + gn * ahead[0], gy = gm * my + gn * ahead[1], gz = gm * mz + gn * ahead[2];
+  return (x - P[a]) * gx + (y - P[a + 1]) * gy + (z - P[a + 2]) * gz < 0;
 }
 
 /** Which region of the triangle a point on it lies in, to within the tolerance. */
@@ -247,7 +295,12 @@ function sphere(s, t, margin, tolerance, out) {
   let nx = c[0] - Q[0], ny = c[1] - Q[1], nz = c[2] - Q[2];
   const d = Math.sqrt(nx * nx + ny * ny + nz * nz);
   let sep;
-  if (seam(where)) {
+  if (oneSided && above(c[0], c[1], c[2]) < 0) {
+    // Its centre in the ground (see ONE-SIDED): up along the face, if over it.
+    if (where !== FACE) return;
+    nx = up[0]; ny = up[1]; nz = up[2];
+    sep = above(c[0], c[1], c[2]) - r;
+  } else if (seam(where)) {
     // Nearest at a seam. Over the triangle, to within the tolerance, as a
     // ball rolling along the line between two flat triangles is over both,
     // its face holds it. Otherwise the ball is over another triangle, which
@@ -317,7 +370,8 @@ function capsule(s, t, margin, tolerance, out) {
     sep = d - r;
     where = region(near.b[0], near.b[1], near.b[2], tolerance);
     // Nearest at an edge, leaning over the triangle across it: as at a seam (see FOLDS).
-    held = seam(where) || beside(near.b[0], near.b[1], near.b[2], nx, ny, nz, tolerance);
+    held = seam(where) || beside(near.b[0], near.b[1], near.b[2], nx, ny, nz, tolerance)
+      || (oneSided && nx * up[0] + ny * up[1] + nz * up[2] < 0);
   }
   // Lying over the triangle: its segment, clipped to the prism over the
   // triangle, rests on the face at both ends, as a capsule lies on a box.
@@ -329,7 +383,7 @@ function capsule(s, t, margin, tolerance, out) {
   // it is on the other, as for a capsule that crosses the triangle's plane
   // just beside it, centre beyond.
   const h0 = over ? above(seg[0], seg[1], seg[2]) : 0, h1 = over ? above(seg[3], seg[4], seg[5]) : 0;
-  const k = h0 < 0 && h1 < 0 ? -1 : 1;
+  const k = !oneSided && h0 < 0 && h1 < 0 ? -1 : 1;
   const s0 = over ? k * h0 - r : Infinity, s1 = over ? k * h1 - r : Infinity;
   const face = Math.min(s0, s1);
   // Apart, the face is taken over the closest points when it is as near, to
@@ -492,6 +546,8 @@ function clip(src, srcId, n, dst, dstId, px, py, pz, mx, my, mz, plane) {
 }
 
 const CP = [-1, 1, 1, -1], CQ = [-1, -1, 1, 1];   // a face's corners, in order around it
+/** The box's face clipBox last took: its axis and which way along it. */
+let faceK = 0, faceSide = 1;
 
 // The clip buffers: what was written is read next. Module scratch, as everything here.
 let src = polyA, dst = polyB, srcId = idA, dstId = idB;
@@ -520,6 +576,19 @@ function triangleFace(b, margin, tolerance, out) {
     if (id >= 4 && seam(region(x - up[0] * sep, y - up[1] * sep, z - up[2] * sep, tolerance))) continue;
     add(out, x - up[0] * sep / 2, y - up[1] * sep / 2, z - up[2] * sep / 2, sep, id < 4 ? 32 + id : mix + 32 + id);
   }
+  // The face's own corners clipping left out under a seam (see WEDGES).
+  if (folds !== null) {
+    const c = b.center, A = b.axes, h = b.half, k = faceK, p = (k + 1) % 3, q = (k + 2) % 3;
+    for (let i = 0; i < 4; i++) {
+      const x = c[0] + faceSide * h[k] * A[3 * k] + CP[i] * h[p] * A[3 * p] + CQ[i] * h[q] * A[3 * q];
+      const y = c[1] + faceSide * h[k] * A[3 * k + 1] + CP[i] * h[p] * A[3 * p + 1] + CQ[i] * h[q] * A[3 * q + 1];
+      const z = c[2] + faceSide * h[k] * A[3 * k + 2] + CP[i] * h[p] * A[3 * p + 2] + CQ[i] * h[q] * A[3 * q + 2];
+      const sep = above(x, y, z);
+      if (sep > margin || !wedge(x, y, z)) continue;
+      reached = true;
+      add(out, x - up[0] * sep / 2, y - up[1] * sep / 2, z - up[2] * sep / 2, sep, 32 + i);
+    }
+  }
   if (out.count > 0) aim(out, -up[0], -up[1], -up[2]);
   return reached;
 }
@@ -540,7 +609,7 @@ function triangleFace(b, margin, tolerance, out) {
  * over the triangle at all keeps the centre's side.
  */
 function over(clipped, b) {
-  if (bottom(clipped(b)) + above(b.center[0], b.center[1], b.center[2]) < 0) turn();
+  if (!oneSided && bottom(clipped(b)) + above(b.center[0], b.center[1], b.center[2]) < 0) turn();
 }
 
 /** The least height above the triangle of the n points in src. */
@@ -560,6 +629,7 @@ function clipBox(b) {
   }
   // The face whose outward normal points down into the triangle.
   const side = most > 0 ? -1 : 1, p = (k + 1) % 3, q = (k + 2) % 3;
+  faceK = k; faceSide = side;
   src = polyA; dst = polyB; srcId = idA; dstId = idB;
   for (let i = 0; i < 4; i++) {
     for (let x = 0; x < 3; x++) {
@@ -763,6 +833,9 @@ function hullRoom(n) {
  */
 const CORNER = 1 << 30;
 
+/** The hull's face clipHull last took. */
+let incident = 0;
+
 /**
  * The triangle's face as the reference: the hull's face at its deepest
  * corner most against it, clipped to the triangle. Returns as triangleFace
@@ -780,6 +853,16 @@ function triangleFaceHull(margin, tolerance, out) {
     // doesn't (see SEAMS), asked of the point below it, as in triangleFace.
     if (!own && seam(region(x - up[0] * sep, y - up[1] * sep, z - up[2] * sep, tolerance))) continue;
     add(out, x - up[0] * sep / 2, y - up[1] * sep / 2, z - up[2] * sep / 2, sep, own ? id : mix + 32 + id);
+  }
+  // The face's own corners clipping left out under a seam (see WEDGES).
+  if (folds !== null) {
+    const h = H.hull, v = H.v, i0 = h.start[incident], i1 = h.start[incident + 1];
+    for (let j = i0; j < i1; j++) {
+      const i = 3 * h.loops[j], x = v[i], y = v[i + 1], z = v[i + 2], sep = above(x, y, z);
+      if (sep > margin || !wedge(x, y, z)) continue;
+      reached = true;
+      add(out, x - up[0] * sep / 2, y - up[1] * sep / 2, z - up[2] * sep / 2, sep, CORNER + h.loops[j]);
+    }
   }
   if (out.count > 0) aim(out, -up[0], -up[1], -up[2]);
   return reached;
@@ -810,6 +893,7 @@ function clipHull() {
     for (let j = h.start[k]; j < h.start[k + 1] && !at; j++) at = h.loops[j] === low;
     if (at) { least = d; f = k; }
   }
+  incident = f;
   const i0 = h.start[f], m = h.start[f + 1] - i0;
   hullRoom(m + 3);
   src = hullP; dst = hullQ; srcId = hullPi; dstId = hullQi;

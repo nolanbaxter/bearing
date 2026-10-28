@@ -149,6 +149,16 @@ All notable changes to Bearing are recorded here. The format follows
   on a mesh and a heightfield alike (22 and 21 of 300 drops of a 2 m box had such a contact; now
   none, and the slowest sleeps in 5.4 and 7.9 s). A box's or hull's part over a triangle now
   decides the side when the triangle's own face stands in for the shape's.
+- A heightfield has one side: it is ground, and pushes everything under its surface up out of it,
+  along its own +y, which turns with the body, so a heightfield turned over is a ceiling. Two-sided,
+  a body pressed in past its centre was pushed down through it by a triangle beside it whose plane
+  passed over that centre: a rock at the bottom of a 288-body heap fell through the ground for good.
+  Meshes keep two sides. A heightfield given negative heights and gravity up to stand for a ceiling
+  now needs turning over instead.
+- A box's or hull's corner pressed into a valley of a mesh or heightfield could go through it.
+  Under the seam of a fold inward, a corner is over neither face, and each face left it out, so
+  nothing held it: a rock pressed into a valley by a heap sank 0.5 m in ten steps. Such a corner
+  is now held by both faces.
 - Ragdolls with joint friction settle every time. Two boxes lying flat on each other, such as a
   ragdoll's thigh on its own forearm, can swap which face the contact is clipped against from one
   step to the next, and their points were named by that face, so every swap lost the points'

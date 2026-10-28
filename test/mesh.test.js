@@ -603,7 +603,9 @@ test('a long box lying on one slope of a ridge, an end past the crest, rests the
   // slope with 500 N·s a step. It was wedged and pushed about, moved 15 to 23
   // cm, and took 4.5 s to sleep on the mesh and never did on the
   // heightfield. Upside down, the ridge a valley overhead and gravity up, the
-  // box meets every triangle from its other side, and must do the same.
+  // box meets every triangle from its other side, and must do the same. A
+  // heightfield has one side, so it is turned over (half a turn about x), its
+  // face turning with it, as a ceiling.
   const c = 1 / Math.sqrt(1 + 0.15 * 0.15), s = Math.sqrt((1 - c) / 2), w = Math.sqrt((1 + c) / 2);
   for (const ground of ['mesh', 'heightfield']) {
     for (const k of [1, -1]) {
@@ -618,8 +620,8 @@ test('a long box lying on one slope of a ridge, an end past the crest, rests the
         world.addBody({ shape: 'mesh', vertices, indices });
       } else {
         const heights = [];
-        for (let z = 0; z <= n; z++) for (let x = 0; x <= n; x++) heights.push(ridge(x));
-        world.addBody({ shape: 'heightfield', heights, columns: n + 1, spacing: 1 });
+        for (let z = 0; z <= n; z++) for (let x = 0; x <= n; x++) heights.push(-Math.abs(x - 8) * 0.15);
+        world.addBody({ shape: 'heightfield', heights, columns: n + 1, spacing: 1, rotation: k < 0 ? [1, 0, 0, 0] : [0, 0, 0, 1] });
       }
       const from = [-0.75, k * 0.04, -1.07], box = world.addBody({ size: [2, 0.3, 0.6], position: from, rotation: [0, 0, k * s, w] });
       let t = 0;
@@ -628,6 +630,69 @@ test('a long box lying on one slope of a ridge, an end past the crest, rests the
       assert.ok(box.asleep, `${what}: still awake after 2 s`);
       assert.ok(apart(box.position, from) < 0.01, `${what}: moved ${apart(box.position, from)} m`);
     }
+  }
+});
+
+test('a corner pressed into the wedge under a valley is held, on a heightfield and a mesh, box and hull', () => {
+  // A shallow valley along z (slopes of 0.05 meeting at x = 0), and a cube
+  // stood on a corner set 5 mm into the valley line. Below a fold inward the
+  // two slopes' prisms part, and the corner is over neither: each clipped it
+  // away and dropped the points it made on the seam, so nothing held it, and
+  // it fell through the ground. A rock pressed into a valley by a heap slid
+  // into such a wedge and sank 0.5 m in ten steps.
+  const r = 1 / Math.sqrt(3), q = [-r, 0, r, 1 + r], l = Math.hypot(...q), rotation = q.map((x) => x / l);
+  const half = 0.3, cube = [];
+  for (const x of [-half, half]) for (const y of [-half, half]) for (const z of [-half, half]) cube.push(x, y, z);
+  const valley = (x) => Math.abs(x) * 0.05, n = 8;
+  for (const ground of ['heightfield', 'mesh']) {
+    for (const kind of ['box', 'hull']) {
+      const world = new World();
+      if (ground === 'mesh') {
+        const vertices = [], indices = [];
+        for (let z = 0; z <= n; z++) for (let x = 0; x <= n; x++) vertices.push(x - 4, valley(x - 4), z - 4);
+        for (let z = 0; z < n; z++) {
+          for (let x = 0; x < n; x++) { const a = z * (n + 1) + x; indices.push(a, a + n + 1, a + 1, a + 1, a + n + 1, a + n + 2); }
+        }
+        world.addBody({ shape: 'mesh', vertices, indices });
+      } else {
+        const heights = [];
+        for (let z = 0; z <= n; z++) for (let x = 0; x <= n; x++) heights.push(valley(x - 4));
+        world.addBody({ shape: 'heightfield', heights, columns: n + 1, spacing: 1 });
+      }
+      const shape = kind === 'box' ? { size: [2 * half, 2 * half, 2 * half] } : { shape: 'hull', vertices: cube };
+      const body = world.addBody({ ...shape, position: [0, half * Math.sqrt(3) - 0.005, 0.3], rotation });
+      // The cube's lowest corner against the ground under it, each step for 2 s, as it topples onto a face.
+      let deepest = 0;
+      steps(world, 2, () => {
+        const [x, y, z, w] = body.rotation, p = body.position;
+        for (let k = 0; k < 8; k++) {
+          const v = cube.slice(3 * k, 3 * k + 3), tx = 2 * (y * v[2] - z * v[1]), ty = 2 * (z * v[0] - x * v[2]), tz = 2 * (x * v[1] - y * v[0]);
+          const cx = p[0] + v[0] + w * tx + (y * tz - z * ty), cy = p[1] + v[1] + w * ty + (z * tx - x * tz);
+          deepest = Math.max(deepest, valley(cx) - cy);
+        }
+      });
+      assert.ok(deepest < 0.01, `${kind} on a ${ground}: a corner went ${deepest} m into the ground`);
+      assert.ok(body.asleep, `${kind} on a ${ground}: still awake after 2 s`);
+    }
+  }
+});
+
+test('a body sunk past its centre into a heightfield comes up out of it, the right way up or turned over', () => {
+  // A heightfield is ground, solid below: whatever is under a triangle's
+  // plane goes up out of it, along its face, however far in. Two-sided, a box
+  // whose centre was under the plane was pushed down through it, as a rock
+  // pressed into a valley was by the slope beside, its centre under that
+  // slope's plane carried back over it. Turned over, the heightfield is a
+  // ceiling, and gravity up presses the box into it from below.
+  for (const k of [1, -1]) {
+    const world = new World();
+    world.gravity = [0, -k * 9.81, 0];
+    world.addBody({ shape: 'heightfield', heights: new Array(25).fill(0), columns: 5, spacing: 1, rotation: k < 0 ? [1, 0, 0, 0] : [0, 0, 0, 1] });
+    const box = world.addBody({ size: [0.6, 0.6, 0.6], position: [0.2, -k * 0.1, 0.1] });
+    steps(world, 2);
+    const what = k < 0 ? 'turned over' : 'right way up';
+    assert.ok(k * box.position[1] > 0.29, `${what}: the box's centre is at ${box.position[1]}`);
+    assert.ok(box.asleep, `${what}: still awake after 2 s`);
   }
 });
 

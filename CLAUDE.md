@@ -93,7 +93,8 @@ These were made with Nolan and override the rules below where they differ.
   `indices`) and `shape: 'heightfield'` (`heights`, `columns`, `spacing`; x along columns, z along
   rows, centred; each cell cut from its lowest-x-and-z corner to its highest), and `readGlb(bytes,
   { node })` exported beside World and Body. Static by default, kinematic allowed, dynamic throws
-  (compound shapes come later); no mass, density or inertia (`a mesh has no mass`). Two-sided.
+  (compound shapes come later); no mass, density or inertia (`a mesh has no mass`). Meshes
+  two-sided; heightfields one-sided since 2026-10-28 (below).
   Zero-area triangles left out. A mesh's `_size` is 0: its contacts and queries take the other
   shape's tolerance. Per mesh pair: triangles under the other body's box, one manifold per
   direction (normals within FLAT²/2), points sorted by id and reduced to four; each pair keeps a
@@ -109,6 +110,17 @@ These were made with Nolan and override the rules below where they differ.
   it. A 2 m box on one slope of a ridge, an end past the crest, had its centre 63 mm under the far
   slope's plane and was pressed 0.3 m into the near one, wedged up to 15 s. The winning axis's
   side was tried and flips by rounding on edge axes along a face. Heaps keep their bits.
+  Falling through (2026-10-28, Nolan: "One-sided heightfields I suppose are fine with me"): under
+  a fold inward (a valley) the two faces' prisms lean apart below the ground, leaving a wedge
+  neither covers; a corner pressed into it was clipped away by both and its seam points dropped,
+  so nothing held it, and a heap pressed a rock 0.5 m down, after which a slope beside turned
+  (`over()`) and pushed it through. `wedge()` in `triangle.js` keeps a box's or hull's own corner
+  past exactly one edge that is a seam from its side and short of the neighbour's prism (from
+  `folds`), so both valley faces hold it. Heightfields are one-sided (`ONE_SIDED` = 64, the flag bit
+  after the six edge bits, set by `Heightfield.edge()`): `touch()` uses the front, which turns with
+  the body (a heightfield turned over is a ceiling), and `over()` never turns them; queries still
+  see both sides. Jolt ignores back faces by default; Box2D's chains are one-sided. Heaps: 1 body
+  through the ground in 288 heaps, now 0; terrain bits change (the wedge rule), timing even.
 - **Contact events and sensors** (2026-10-14, milestone 10, approved): `world.contacts(body)` (the
   last step's `begin`/`end`, read after the step, rule 65; with a body, its own, turned so it is
   `a`; removed bodies accepted), `world.touching(body)` in place of stay events (through the

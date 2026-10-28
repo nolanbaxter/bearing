@@ -48,6 +48,18 @@ const FLAT = 1 / 1048576;
 const FRONT = 1, BACK = 8;
 
 /**
+ * Flag bit 6, past the six edge bits: a triangle of a heightfield, touched
+ * from the front only. A heightfield is ground, solid below its surface, so
+ * whatever is under a triangle's plane is in the ground and goes up out of
+ * it, along the face's normal, which turns with the body. Two-sided, a rock
+ * pressed 0.2 m into a valley had its centre under the plane of the slope
+ * beside, carried back over it, and that slope pushed it down through the
+ * ground. A mesh can be a wall or a sheet with nothing behind, so stays
+ * two-sided.
+ */
+const ONE_SIDED = 64;
+
+/**
  * Whether the triangle across an edge, whose far corner is `bend` from this
  * triangle's plane (along its normal), makes the edge a corner from the front
  * and from the back. A fold away from a side is a corner seen from it.
@@ -439,10 +451,10 @@ export class Heightfield {
       const f = flags(bend, Math.sqrt(ex * ex + ey * ey + ez * ez));
       out |= (f & FRONT ? FRONT << e : 0) | (f & BACK ? BACK << e : 0);
     }
-    return out;
+    return out | ONE_SIDED;
   }
 }
 
 const G = new Int32Array(6), H = new Int32Array(6);
 
-export { FRONT, BACK, FLAT, normal as triangleNormal };
+export { FRONT, BACK, ONE_SIDED, FLAT, normal as triangleNormal };

@@ -386,7 +386,8 @@ const player = world.addBody({ shape: 'capsule', radius: 0.3, height: 1.8, mass:
 Notes: a size option the shape doesn't have throws rather than being ignored, so
 `addBody({ radius: 0.5 })`, which forgot `shape: 'sphere'`, says `a box has no radius` instead of
 quietly making a 1 m box. A capsule whose height is exactly twice its radius is a sphere, and is
-allowed. Bodies collide as soon as they are added; see [Contacts](#contacts). A long list that
+allowed. A heightfield pushes only up, along its own +y, out of the ground; a mesh pushes from
+either side ([Meshes and heightfields](#meshes)). Bodies collide as soon as they are added; see [Contacts](#contacts). A long list that
 throws names the first bad entry and where it is (`got NaN at index 2`), or how many numbers it
 has (`got 10 numbers`), rather than every number in it.
 
@@ -1374,11 +1375,17 @@ const hills = world.addBody({ shape: 'heightfield', heights: [0, 1, 0, 1, 3, 1, 
   with or turn. A mesh or heightfield is static unless given `type: 'kinematic'`, which makes a
   moving platform of any shape; `'dynamic'` throws. Its `mass` is 0. A falling object of any
   shape will come with compound shapes, in a later version.
-- **Every triangle has two sides.** A body is pushed out on whichever side it is, so a wall needs
-  no thickness, and the order of a triangle's corners doesn't matter.
+- **A mesh's triangles have two sides.** A body is pushed out on whichever side it is, so a wall
+  needs no thickness, and the order of a triangle's corners doesn't matter.
+- **A heightfield has one side: it is ground.** Everything under its surface is in the ground, and
+  is pushed up out of it, along the face of the triangle it is under, however deep it has gone.
+  Up is the body's own +y, so a heightfield turned over (`rotation: [1, 0, 0, 0]`) is a ceiling,
+  pushing down. A two-sided heightfield pushed a body pressed in past its centre down through the
+  ground instead.
 - **The seams between triangles can't be caught on.** Where two triangles meet flat, or fold
   inward, nothing could touch the edge between them without touching a face first, so a contact
-  pointing off that edge is left out, and the face beside holds the body instead. A box slides
+  pointing off that edge is left out, and the face beside holds the body instead. A corner pressed
+  into a valley, under its seam, where neither face is over it, is held by both faces. A box slides
   across a floor of 800 triangles on exactly the path it takes across one big box, and a ball
   rolls over a heightfield without bumping at its seams. Where triangles fold outward, the edge is
   a real corner, and a ball rolls over it as over any edge. Two triangles count as flat to within a
