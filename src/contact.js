@@ -1672,34 +1672,47 @@ export function solve(world, c, h, bias, known = false) {
  * still hold (a solving pass after the first substep's).
  */
 function solveRows(world, c, h, bias, known, from, to) {
+  // Every column in a local, read once: pushes() isn't inlined (V8's
+  // --trace-turbo-inlining: "cannot consider"), and after a call V8 reads
+  // each c.x again, at every manifold.
+  // Measured: the 10,000-box pile 230 -> 170 ms a step, the 1,000-box pile
+  // and the pyramid 30-40% faster (pinned, both load orders), same bits.
+  const cA = c.a, cAdjusted = c.adjusted, cB = c.b, cDrift1 = c.drift1, cDrift2 = c.drift2,
+    cFriction = c.friction, cGap = c.gap, cLa = c.la, cLb = c.lb, cLever = c.lever,
+    cMaxNormalImpulse = c.maxNormalImpulse, cNormal = c.normal, cNormalImpulse = c.normalImpulse,
+    cNormalMass = c.normalMass, cNow = c.now, cPatch = c.patch, cPoints = c.points,
+    cRelativeVelocity = c.relativeVelocity, cRollImpulse1 = c.rollImpulse1, cRollImpulse2 = c.rollImpulse2,
+    cRollMass1 = c.rollMass1, cRollMass2 = c.rollMass2, cSliding = c.sliding, cSpinImpulse = c.spinImpulse,
+    cSpinMass = c.spinMass, cT1 = c.t1, cT2 = c.t2, cTangentImpulse1 = c.tangentImpulse1,
+    cTangentImpulse2 = c.tangentImpulse2, cTolerance = c.tolerance;
   const v = world._velocity, w = world._angular, invI = world._invI, invMass = world._invMass;
   const p = world._position, start = world._start, q = world._rotation;
   const inv = 1 / h;
   // A soft point's give over its own K_kk (see BLOCK): is/ms, and COMPLIANCE.
   const springy = soft.impulseScale / soft.massScale + COMPLIANCE;
   for (let m = from; m < to; m++) {
-    const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3, m3 = 3 * m;
-    const nx = c.normal[m3], ny = c.normal[m3 + 1], nz = c.normal[m3 + 2];
+    const a = cA[m], b = cB[m], a3 = a * 3, b3 = b * 3, m3 = 3 * m;
+    const nx = cNormal[m3], ny = cNormal[m3 + 1], nz = cNormal[m3 + 2];
     // How far each body has moved since the step began.
     const dx = (p[b3] - start[b3]) - (p[a3] - start[a3]);
     const dy = (p[b3 + 1] - start[b3 + 1]) - (p[a3 + 1] - start[a3 + 1]);
     const dz = (p[b3 + 2] - start[b3 + 2]) - (p[a3 + 2] - start[a3 + 2]);
     // An overlap is pushed out no faster than a pixel (the tolerance) a substep.
-    const maxBias = c.tolerance[m] * inv;
-    const count = c.points[m];
+    const maxBias = cTolerance[m] * inv;
+    const count = cPoints[m];
     let least = Infinity;
     for (let k = 0; k < count; k++) {
       const i = m * P + k, i3 = 3 * i;
       // The separation now: the anchors where the bodies' current rotations put
       // them. It can't change within a pass, since nothing moves until _move.
       let s;
-      if (known) s = c.now[i];
+      if (known) s = cNow[i];
       else {
-        rotate(q, a * 4, c.la[i3], c.la[i3 + 1], c.la[i3 + 2], false, v3);
+        rotate(q, a * 4, cLa[i3], cLa[i3 + 1], cLa[i3 + 2], false, v3);
         const cax = v3[0], cay = v3[1], caz = v3[2];
-        rotate(q, b * 4, c.lb[i3], c.lb[i3 + 1], c.lb[i3 + 2], false, v3);
-        s = (dx + v3[0] - cax) * nx + (dy + v3[1] - cay) * ny + (dz + v3[2] - caz) * nz + c.adjusted[i];
-        if (!bias) c.now[i] = s;
+        rotate(q, b * 4, cLb[i3], cLb[i3 + 1], cLb[i3 + 2], false, v3);
+        s = (dx + v3[0] - cax) * nx + (dy + v3[1] - cay) * ny + (dz + v3[2] - caz) * nz + cAdjusted[i];
+        if (!bias) cNow[i] = s;
       }
       if (s < least) least = s;
       if (s > 0) {
@@ -1713,7 +1726,7 @@ function solveRows(world, c, h, bias, known, from, to) {
       }
     }
     // The last relaxing pass comes after the last move, so this is where the step leaves them.
-    c.gap[m] = least;
+    cGap[m] = least;
     // The pair's velocities are held in locals for the whole manifold and
     // written back once at its end: the normal and friction read and write
     // them, and reading and writing the shared columns at each push cost more
@@ -1759,8 +1772,8 @@ function solveRows(world, c, h, bias, known, from, to) {
         const i = m * P + k, j = J * i;
         const vn = (vbx - vax) * nx + (vby - vay) * ny + (vbz - vaz) * nz
           + wbx * jac[j + 3] + wby * jac[j + 4] + wbz * jac[j + 5] - wax * jac[j] - way * jac[j + 1] - waz * jac[j + 2];
-        const old = c.normalImpulse[i];
-        let next = old - c.normalMass[i] * massScale[k] * (vn + target[k]) - impulseScale[k] * old;
+        const old = cNormalImpulse[i];
+        let next = old - cNormalMass[i] * massScale[k] * (vn + target[k]) - impulseScale[k] * old;
         if (next < 0) next = 0;
         closingNow[k] = vn; solved[k] = next;
       }
@@ -1774,7 +1787,7 @@ function solveRows(world, c, h, bias, known, from, to) {
       let set = 0;
       for (let k = 0; k < count; k++) {
         let r = -closingNow[k] - target[k];
-        for (let l = 0; l < count; l++) r += K[kb + P * k + l] * c.normalImpulse[m * P + l];
+        for (let l = 0; l < count; l++) r += K[kb + P * k + l] * cNormalImpulse[m * P + l];
         wanted[k] = r;
         if (r > 0) set |= 1 << k;
       }
@@ -1798,15 +1811,15 @@ function solveRows(world, c, h, bias, known, from, to) {
     }
     for (let k = 0; k < count; k++) {
       const i = m * P + k, j = J * i;
-      const old = c.normalImpulse[i], next = solved[k] > 0 ? solved[k] : 0;
+      const old = cNormalImpulse[i], next = solved[k] > 0 ? solved[k] : 0;
       const d = next - old;
-      c.normalImpulse[i] = next;
+      cNormalImpulse[i] = next;
       // The first push at a point this step is the moment of impact: the
       // speed it closes at now is what a bounce sends back. Taken at the
       // start of the step instead, it would miss what gravity added before
       // the bodies met, a twentieth of a slow bounce at 60 Hz.
-      if (d > 0 && c.maxNormalImpulse[i] === 0) c.relativeVelocity[i] = closingNow[k];
-      if (d > c.maxNormalImpulse[i]) c.maxNormalImpulse[i] = d;
+      if (d > 0 && cMaxNormalImpulse[i] === 0) cRelativeVelocity[i] = closingNow[k];
+      if (d > cMaxNormalImpulse[i]) cMaxNormalImpulse[i] = d;
       const px = nx * d, py = ny * d, pz = nz * d;
       vax -= ima * px; vay -= ima * py; vaz -= ima * pz;
       vbx += imb * px; vby += imb * py; vbz += imb * pz;
@@ -1817,14 +1830,14 @@ function solveRows(world, c, h, bias, known, from, to) {
     // tangents as one 2x2 block, held within a circle of mu times the whole
     // normal impulse, so a box sliding diagonally slows exactly as one
     // sliding straight.
-    const mu = c.friction[m], oa = a * 6, ob = b * 6;
-    const t1x = c.t1[m3], t1y = c.t1[m3 + 1], t1z = c.t1[m3 + 2];
-    const t2x = c.t2[m3], t2y = c.t2[m3 + 1], t2z = c.t2[m3 + 2];
+    const mu = cFriction[m], oa = a * 6, ob = b * 6;
+    const t1x = cT1[m3], t1y = cT1[m3 + 1], t1z = cT1[m3 + 2];
+    const t2x = cT2[m3], t2y = cT2[m3 + 1], t2z = cT2[m3 + 2];
     let pressed = 0, twisted = 0;
     for (let k = 0; k < count; k++) {
       const i = m * P + k;
-      pressed += c.normalImpulse[i];
-      twisted += c.lever[i] * c.normalImpulse[i];
+      pressed += cNormalImpulse[i];
+      twisted += cLever[i] * cNormalImpulse[i];
     }
     {
       const f = FJ * m, fj = c.fjac, g = f + 12;
@@ -1835,7 +1848,7 @@ function solveRows(world, c, h, bias, known, from, to) {
         + wbx * fj[g + 3] + wby * fj[g + 4] + wbz * fj[g + 5] - wax * fj[g] - way * fj[g + 1] - waz * fj[g + 2];
       // The solving pass also pulls back the slip carried in (see store), as
       // fast as an overlap is pushed out, and no faster than a pixel a substep.
-      const s1 = c.drift1[m], s2 = c.drift2[m];
+      const s1 = cDrift1[m], s2 = cDrift2[m];
       if (bias && (s1 !== 0 || s2 !== 0)) {
         let b1 = soft.biasRate * s1, b2 = soft.biasRate * s2;
         const bb = b1 * b1 + b2 * b2;
@@ -1845,7 +1858,7 @@ function solveRows(world, c, h, bias, known, from, to) {
         }
         v1 += b1; v2 += b2;
       }
-      const tm = c.tangentMass, o1 = c.tangentImpulse1[m], o2 = c.tangentImpulse2[m];
+      const tm = c.tangentMass, o1 = cTangentImpulse1[m], o2 = cTangentImpulse2[m];
       let n1 = o1 - (tm[m3] * v1 + tm[m3 + 1] * v2), n2 = o2 - (tm[m3 + 1] * v1 + tm[m3 + 2] * v2);
       const limit = mu * pressed, l2 = n1 * n1 + n2 * n2;
       if (l2 > limit * limit) {
@@ -1876,11 +1889,11 @@ function solveRows(world, c, h, bias, known, from, to) {
         }
         const scale = limit / Math.sqrt(ll);
         n1 = x * scale; n2 = y * scale;
-        c.sliding[m] = 1;
+        cSliding[m] = 1;
       } else {
-        c.sliding[m] = 0;
+        cSliding[m] = 0;
       }
-      c.tangentImpulse1[m] = n1; c.tangentImpulse2[m] = n2;
+      cTangentImpulse1[m] = n1; cTangentImpulse2[m] = n2;
       const d1 = n1 - o1, d2 = n2 - o2;
       const px = t1x * d1 + t2x * d2, py = t1y * d1 + t2y * d2, pz = t1z * d1 + t2z * d2;
       vax -= ima * px; vay -= ima * py; vaz -= ima * pz;
@@ -1892,17 +1905,17 @@ function solveRows(world, c, h, bias, known, from, to) {
       // Rolling (see PATCHES): the turning of b against a about the two
       // tangents, held within the patch's push leaning to its edge, a disc as
       // friction's is.
-      const most = c.patch[m] * pressed;
+      const most = cPatch[m] * pressed;
       const ux = wbx - wax, uy = wby - way, uz = wbz - waz;
-      const r1 = c.rollImpulse1[m], r2 = c.rollImpulse2[m];
-      let n1 = r1 - c.rollMass1[m] * (ux * t1x + uy * t1y + uz * t1z);
-      let n2 = r2 - c.rollMass2[m] * (ux * t2x + uy * t2y + uz * t2z);
+      const r1 = cRollImpulse1[m], r2 = cRollImpulse2[m];
+      let n1 = r1 - cRollMass1[m] * (ux * t1x + uy * t1y + uz * t1z);
+      let n2 = r2 - cRollMass2[m] * (ux * t2x + uy * t2y + uz * t2z);
       const l2 = n1 * n1 + n2 * n2;
       if (l2 > most * most) {
         const scale = most / Math.sqrt(l2);
         n1 *= scale; n2 *= scale;
       }
-      c.rollImpulse1[m] = n1; c.rollImpulse2[m] = n2;
+      cRollImpulse1[m] = n1; cRollImpulse2[m] = n2;
       const d1 = n1 - r1, d2 = n2 - r2;
       // An angular impulse L: -L on a, +L on b, each through its inverse inertia.
       const lx = t1x * d1 + t2x * d2, ly = t1y * d1 + t2y * d2, lz = t1z * d1 + t2z * d2;
@@ -1917,11 +1930,11 @@ function solveRows(world, c, h, bias, known, from, to) {
       // Twist about the normal: within mu times each point's normal impulse
       // times its lever from the anchor; one point has no lever, so its
       // patch's spinning friction (see PATCHES).
-      const limit = count === 1 ? SPIN * mu * c.patch[m] * pressed : mu * twisted;
-      const s0 = c.spinImpulse[m];
-      let s1 = s0 - c.spinMass[m] * ((wbx - wax) * nx + (wby - way) * ny + (wbz - waz) * nz);
+      const limit = count === 1 ? SPIN * mu * cPatch[m] * pressed : mu * twisted;
+      const s0 = cSpinImpulse[m];
+      let s1 = s0 - cSpinMass[m] * ((wbx - wax) * nx + (wby - way) * ny + (wbz - waz) * nz);
       if (s1 > limit) s1 = limit; else if (s1 < -limit) s1 = -limit;
-      c.spinImpulse[m] = s1;
+      cSpinImpulse[m] = s1;
       const ds = s1 - s0, lx = nx * ds, ly = ny * ds, lz = nz * ds;
       wax -= invI[oa] * lx + invI[oa + 1] * ly + invI[oa + 2] * lz;
       way -= invI[oa + 1] * lx + invI[oa + 3] * ly + invI[oa + 4] * lz;

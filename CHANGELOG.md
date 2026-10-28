@@ -153,6 +153,9 @@ All notable changes to Bearing are recorded here. The format follows
   it, which left the bodies exactly where the solving pass finds them, instead of working it out
   again: the same results to the bit, and the 1,000-box pile steps about 4% faster, the pyramid
   5.6%, a pile of hulls 2.7%.
+- The contact solve reads its columns once a pass instead of once a manifold: the same results to
+  the bit, and the 1,000-box pile steps about 31% faster, the pyramid 40%, hulls 30%, boxes on
+  terrain 28% and ragdolls 8%; 10,000 boxes falling, 230 to 170 ms a step on one thread.
 - Joint friction: `friction` on ball joints, hinges and sliders, the most torque (N·m) or force
   (N) the joint resists turning or sliding with, as a stiff hinge does. A hinge's or slider's is
   its motor held at speed 0, to the bit; a ball joint's resists turning every way alike. 32 ragdolls
