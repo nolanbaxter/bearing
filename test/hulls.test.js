@@ -296,6 +296,39 @@ test('a rock lying face to face on another, its weight beside a line of pressed 
   }
 });
 
+test('a hull point keeps its id whichever face is the reference', () => {
+  // collide.test.js's forearm under a thigh, the thigh made as a hull, and
+  // the forearm as a hull, then as a box (a box against a hull is a hull of
+  // its corners). Tilted 1 mrad, the forearm's face is the reference; tilted
+  // 3 mrad, the thigh's. The same four points come out and each keeps its id
+  // (named() in collide.js), so its warm start carries over. Named by
+  // reference and incident, all four changed: in ragdolls made of hulls a
+  // thigh on its forearm, and a chest flat on the floor, swapped every few
+  // steps, and the chest buzzed at 5 cm/s for 16 s.
+  for (const box of [false, true]) {
+    const a = new Shape();
+    if (box) { a.kind = BOX; a.half.set([0.13, 0.04, 0.04]); } else { a.kind = HULL; a.hull = build(corners(0.26, 0.08, 0.08)); }
+    a.place(0, 0, 0, [0, 0, 0, 1]);
+    const at = (t) => {
+      const b = new Shape(), m = new Manifold();
+      b.kind = HULL; b.hull = build(corners(0.14, 0.14, 0.44));
+      b.place(0.1, 0.108, 0.01, [Math.sin(t / 2), 0, 0, Math.cos(t / 2)]);
+      collide(a, b, 0.01, 0.0004, m);
+      return m;
+    };
+    const r = at(0.001), s = at(0.003), what = box ? 'box' : 'hull';
+    assert.equal(r.normal[2], 0, `${what}: the forearm's face`);
+    assert.ok(s.normal[2] > 0.002, `${what}: the thigh's face, normal ${s.normal}`);
+    assert.equal(r.count, 4);
+    assert.equal(s.count, 4);
+    for (let k = 0; k < 4; k++) {
+      const j = [...s.ids].indexOf(r.ids[k]);
+      assert.ok(j >= 0 && j < 4, `${what}: point ${k}'s id ${r.ids[k]} is gone: ${[...s.ids]}`);
+      for (let i = 0; i < 3; i++) near(s.points[3 * j + i], r.points[3 * k + i], 0.001, `${what}: point ${k}[${i}]`);
+    }
+  }
+});
+
 test('a pile of irregular hulls lands on a box, a ball, a capsule, a mesh and a heightfield, and sleeps', () => {
   const rnd = numbers(3), world = new World();
   world.addBody({ type: 'static', size: [10, 1, 10], position: [-5, -0.5, 0] });

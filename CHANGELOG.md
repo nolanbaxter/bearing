@@ -155,6 +155,10 @@ All notable changes to Bearing are recorded here. The format follows
   impulses: the thigh dropped onto the forearm and bounced, and the ragdoll buzzed in place at up
   to 6 cm/s for good. 6 of 20 starts of the 32 joint-friction ragdolls never slept; now all 20
   sleep by 5.9 s. A box contact's points are now named by what of each box made them.
+- Hulls lying flat on hulls or boxes keep their contact points' impulses when the face the
+  contact is clipped against swaps, as boxes do: their points are now named by what of each
+  shape made them. In ragdolls made of hulls, a chest lying flat on the floor buzzed at 5 cm/s
+  and kept its ragdoll awake to 21 s in 1 of 12 starts; now all 12 sleep by 6.25 s.
 - Each substep's solving pass reads every contact point's separation from the relaxing pass before
   it, which left the bodies exactly where the solving pass finds them, instead of working it out
   again: the same results to the bit, and the 1,000-box pile steps about 4% faster, the pyramid

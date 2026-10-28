@@ -1432,6 +1432,43 @@ let keptP = new Float64Array(48), keptS = new Float64Array(16), keptI = new Uint
 const CUT = 1 << 20;
 
 /**
+ * Clip feature f of hullFace's, with R's face rf the reference and I's face
+ * inc the incident one, as an id named by what of a and of b made it,
+ * whichever face is the reference, as boxes' points are (SWAPPED). Two faces
+ * lying flat on each other separate the hulls about equally, and which one
+ * hullHull takes can change with a tilt of a few milliradians: named by
+ * reference and incident, every point then got a new id and lost its warm
+ * start, and the upper body dropped a step's weight and bounced. In
+ * bench/compare.html's ragdolls made of hulls, a thigh on its own forearm
+ * swapped every five steps for two seconds, and a chest lying flat on the
+ * floor (a box: a box against a hull comes here too) every two or three,
+ * buzzing at 5 cm/s and keeping its ragdoll awake to 21 s, in 1 of 12 starts
+ * nudged by nanometres; named as here, all 12 slept by 6.25 s.
+ *
+ * Both faces' corners and edges are counted round their own loops, edge e
+ * running from corner e to corner e + 1, which is also the side plane e a
+ * reference face cuts with. So an incident corner j is that hull's corner j;
+ * an incident edge `line` cut by side plane `plane` is the crossing of those
+ * two edges, named a's edge then b's; and a corner of the reference face,
+ * cut by its side planes p and q, is its corner q when q follows p, else
+ * corner 0 (p 0, q the last). Ids: a's corner c is c, b's corner CUT + c,
+ * a's edge i across b's edge j is 2 CUT + 4096 i + j, the 4096 being
+ * clipSides's own radix for a line and a plane.
+ */
+function named(f, flipped, rf, inc) {
+  let g;
+  if (f < CUT) g = flipped ? f : CUT + f;
+  else if (f < 2 * CUT) {
+    const x = (f - CUT) >> 1, line = x >> 12, plane = x & 4095;
+    g = 2 * CUT + (flipped ? 4096 * line + plane : 4096 * plane + line);
+  } else {
+    const x = (f - 2 * CUT) >> 1, p = x >> 12, q = x & 4095, c = q === p + 1 ? q : p;
+    g = flipped ? CUT + c : c;
+  }
+  return flipped ? mix(0, inc, rf, g) : mix(0, rf, inc, g);
+}
+
+/**
  * Face rf of placed hull R as the reference, against the face of I most
  * nearly opposite it. `flipped`: R is the collide() call's b, and the normal,
  * which points from R to I here, is turned to point from a to b. Returns
@@ -1503,7 +1540,7 @@ function hullFace(R, rf, I, flipped, margin, tolerance, out, sure) {
     const h = separation * 0.5;
     keptP[3 * n] = x - nx * h; keptP[3 * n + 1] = y - ny * h; keptP[3 * n + 2] = z - nz * h;
     keptS[n] = separation;
-    keptI[n] = mix(flipped ? 1 : 0, rf, inc, feat[j]);
+    keptI[n] = named(feat[j], flipped, rf, inc);
     n++;
   }
   // Touching or into the face along its normal, and no point as deep as the
@@ -1520,7 +1557,7 @@ function hullFace(R, rf, I, flipped, margin, tolerance, out, sure) {
       const v = 3 * low, h = s * 0.5;
       keptP[3 * n] = iv[v] - nx * h; keptP[3 * n + 1] = iv[v + 1] - ny * h; keptP[3 * n + 2] = iv[v + 2] - nz * h;
       keptS[n] = s;
-      keptI[n] = mix(flipped ? 1 : 0, rf, inc, j);
+      keptI[n] = named(j, flipped, rf, inc);
       n++;
     }
   }

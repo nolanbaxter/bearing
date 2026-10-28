@@ -250,8 +250,12 @@ These were made with Nolan and override the rules below where they differ.
   by (a's face, b's face, feature) either way, `SWAPPED` renaming a flipped clip's features (Box2D's
   b2ContactFeature); the flip bit is gone. Two faces lying flat swapped reference every 10 steps
   at a few mrad of tilt, every point lost its warm start, and a ragdoll's thigh on its forearm
-  buzzed at 6 Hz, awake for good in 6 of 20 nudged starts (now none). `hullFace` and `triangle.js`
-  still put the flip in the id and may want the same.
+  buzzed at 6 Hz, awake for good in 6 of 20 nudged starts (now none). Hulls the same (2026-10-28):
+  `named()` maps `hullFace`'s clip features to (a's face, b's face, a's corner | b's corner | a's
+  edge x b's edge), corners and edges counted round each face's loop; a hull-ragdoll chest flat
+  on the floor buzzed to 21 s (1 of 12 starts), now all sleep by 6.25 s. `triangle.js` swaps
+  (box or hull face against the triangle's) only while bodies move, never at rest (the tie keeps
+  the triangle's face), so it was left; its clip names points by polygon position, not feature.
 - **Folds and friction's direction** (2026-10-23): `mesh.js` keeps each edge's fold, the direction
   into the triangle across it (`fold()`, `Mesh.folds` Float32Array, the heightfield in `edge()`;
   float32's 2^-24 is under FLAT), and `beside()` in `triangle.js` drops a contact at any edge
