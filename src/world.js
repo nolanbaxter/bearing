@@ -974,7 +974,7 @@ export class World {
         if (held > 0) warmStartJoints(this);
         if (touching > 0) solve(this, next, h, true, sub > 0);
         if (lull) jobs.lull(1);
-        if (held > 0) solveJoints(this, h, true);
+        if (held > 0) solveJoints(this, h, true, sub > 0);
         this._move(h);
         if (held > 0) turnedInertias(this);
         if (touching > 0) solve(this, next, h, false);

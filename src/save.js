@@ -72,12 +72,15 @@ const TYPED_NAME = new Map(Object.entries(TYPED).map(([k, v]) => [v, k]));
  * workers found for each pair and its records (contact.js, LOOKED), which
  * last one narrowphase pass. The workers themselves (core/jobs.js) change
  * how fast a world steps, never what it does: a world loaded has the
- * default, 'auto', as a new one does.
+ * default, 'auto', as a new one does. And which trees keep their factor,
+ * with the rotations it was made at (joints.js, age()): every tree is
+ * factored afresh at a step's first substep.
  */
 const SCRATCH = {
   World: new Set(['_lines', '_placed', '_colours', '_invIt', '_workers', '_jobs']),
   Contacts: new Set(['jac', 'fjac', 'block', 'colour', 'order', 'row', 'scratch', 'starts', 'digits', 'onParts', 'plain', 'wasPlain', 'records', 'taken', 'now']),
   Pairs: new Set(['verdict']),
+  Forest: new Set(['fresh', 'since']),
 };
 
 /** The world as plain, JSON-safe data. */
@@ -172,6 +175,7 @@ export function load(data, World) {
       o.records = new Float64Array(o.a.length * RECORD); o.taken = new Int32Array(1); o.now = new Float64Array(o.normalMass.length);
     }
     for (const o of made) if (o instanceof Pairs) o.verdict = new Int32Array(o.a.length);
+    for (const o of made) if (o instanceof Forest) { o.fresh = new Uint8Array(o.order.length); o.since = new Float64Array(o.body.length * 4); }
     return made[0];
   } catch (e) {
     return fail('load', `data is damaged: ${e.message}`);

@@ -170,6 +170,11 @@ All notable changes to Bearing are recorded here. The format follows
   did); the pile about 2 to 3.5% faster, the pyramid 3.5 to 5%, hulls 1 to 2.5%.
 - A box face's four contact points pushing together are solved with the block's elimination written
   out: the same results to the bit, the pyramid about 9% faster and the pile 3%.
+- A tree of joints keeps the factor of its equations from one substep to the next while none of its
+  bodies has turned more than 0.071 rad since it was made (or it hangs from two or more fixed
+  points), instead of factoring them afresh every substep: ragdolls step 11 to 19% faster and
+  hanging chains 20 to 26%. Joints hold as before, within a few tenths of a millimetre; ragdolls
+  with joint friction settle about 0.7 s later (5.6 to 6.3 s).
 - Joint friction: `friction` on ball joints, hinges and sliders, the most torque (N·m) or force
   (N) the joint resists turning or sliding with, as a stiff hinge does. A hinge's or slider's is
   its motor held at speed 0, to the bit; a ball joint's resists turning every way alike. 32 ragdolls

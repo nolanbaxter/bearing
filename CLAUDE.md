@@ -172,6 +172,14 @@ These were made with Nolan and override the rules below where they differ.
   spun it about its own length, which no row sees, and the gaps doubled each substep. Ball chain
   on a plate at 10 rad/s: 4.9 m -> 26 mm. At 12-20 rad/s it still opens (the anchors' arcs taken
   as straight lines), left for later. Ragdolls and chains about 4% slower, pinned.
+  Factor kept (2026-10-28, Nolan: "Go ahead... I'm fine with a little drift"): a tree keeps its
+  factor, rows (`F.jac`) and inertias from when it was made, while every body in it has turned
+  less than theta since, theta^2 = PIXEL (0.071 rad; `KEPT` = 1 - PIXEL/8 against |q . q0|: a
+  lever off by theta in a substep turning it by theta misses by |r| theta^2), and is factored
+  every substep if held at two or more points (repeated rows: the bridge opened 2.28 m). What
+  each pass asks is still measured along the current rows (asked along the kept rows, the leg
+  kept 60% of its energy). `age()` in joints.js; forest `fresh`/`since`, scratch. Ragdolls
+  11-19%, chains 20-26% faster pinned; friction ragdolls sleep 5.6-6.3 s (5.1-5.4).
 - **Continuous collision** (2026-10-15, milestone 13, approved): speculative contacts stay; a pair
   not touching that moves against itself by more than its tolerance in the step (`moving()` in
   `src/contact.js`) asks `impact()` (`src/impact.js`, conservative advancement over velocity,

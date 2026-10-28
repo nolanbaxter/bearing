@@ -96,6 +96,7 @@ export class Forest {
     // multiplied twice: measured, see ROADMAP.md, milestone 16.
     grow('up', Float64Array, 36);
     grow('down', Float64Array, 72);
+    grow('fresh', Uint8Array, 3);      // by node: 1 if its tree is factored at this solve pass (joints.js, age())
     grow('inTree', Uint8Array, 1);     // by joint slot: 1 while the joint is in the forest this step; 2 or 3 in a tree held down (see plant())
     // Per body node k, at most two per joint:
     grow('body', Int32Array, 2);       // its slot
@@ -103,6 +104,7 @@ export class Forest {
     grow('first', Int32Array, 2);      // its first forest joint, as an edge 2t + side, plus 1
     grow('next', Int32Array, 2);       // per edge (2t + side), the next at the same body, plus 1
     grow('union', Int32Array, 2);      // union-find while trees are found
+    grow('since', Float64Array, 2 * 4);  // its rotation when its tree was last factored (joints.js, age())
     // The elimination: every node (joints 0..count-1, bodies count..), parents before children.
     grow('order', Int32Array, 3);
     grow('parent', Int32Array, 3);
@@ -261,7 +263,9 @@ const AX9 = new Float64Array(9);
 
 /**
  * Factors the forest's matrix from its joints' rows at F.row: each node's
- * block's inverse, children first. Once a substep (see joints.js).
+ * block's inverse, children first, for the trees F.fresh marks: every tree at
+ * a step's first substep, and after that only one a body of which has turned
+ * too far since (see joints.js, age()).
  *
  * A body's block D = M - S (S = Σ Jᵀ D⁻¹ J over its child joints) is
  * symmetric and positive definite, so it is inverted through its Cholesky
@@ -273,8 +277,8 @@ export function factorForest(world) {
   const F = world._joints.forest, T = F.count, n = F.nodes, order = F.order, parent = F.parent;
   const invMass = world._invMass, invI = world._invIt, lock = world._lock;
   const first = F.first, next = F.next, rows = F.rows, side = F.side, jac = F.jac;
-  const D = F.jointInverse, inv = F.inverse, up = F.up, down = F.down;
-  for (let t = 0; t < T; t++) shape(F, t);
+  const D = F.jointInverse, inv = F.inverse, up = F.up, down = F.down, fresh = F.fresh;
+  for (let t = 0; t < T; t++) if (fresh[t] !== 0) shape(F, t);
   // The loops below take every sum's terms in the order a plain loop over
   // q would (from 0, and from a 0 start, which keeps a -0 term's sign as
   // the loop did), so the factor is the same to the bit; only the index
@@ -282,6 +286,7 @@ export function factorForest(world) {
   // ROADMAP.md, milestone 16.
   for (let i = n - 1; i >= 0; i--) {
     const x = order[i];
+    if (fresh[x] === 0) continue;   // a tree whose factor is kept
     if (x >= T) {
       const k = x - T, s = F.body[k], o = 36 * k;
       S.fill(0);

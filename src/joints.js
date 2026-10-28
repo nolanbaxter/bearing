@@ -44,6 +44,7 @@ import { atan2, rotate } from './core/math.js';
 import { Slots, resized, MAX_SLOTS } from './core/slots.js';
 import { Body } from './body.js';
 import { Forest, plant, factorForest, solveForest, inverseSPD, NODE } from './forest.js';
+import { PIXEL } from './contact.js';
 
 export const TYPES = ['fixed', 'ball', 'hinge', 'slider', 'distance'];
 const FIXED = 0, BALL = 1, HINGE = 2, SLIDER = 3, DISTANCE = 4;
@@ -685,9 +686,11 @@ export function warmStartJoints(world) {
  * One pass over every solved joint. `bias` is true while solving, false
  * while relaxing. In each joint, the rows that may give (motors, limits,
  * springs) come first and the rows that must hold come last, so what holds
- * is solved against everything else's latest push: Box2D's order.
+ * is solved against everything else's latest push: Box2D's order. `again`
+ * is true after a step's first substep, when the trees may keep their factor
+ * (holdForest()).
  */
-export function solveJoints(world, h, bias) {
+export function solveJoints(world, h, bias, again = false) {
   const J = world._joints, list = J.list, n = J.active, acc = J.impulse, tree = J.forest.inTree;
   for (let i = 0; i < n; i++) {
     const j = list[i], o = j * IMPULSES, type = J.type[j], held = tree[j] !== 0;
@@ -743,7 +746,7 @@ export function solveJoints(world, h, bias) {
     }
     save(world, j);
   }
-  if (J.forest.count > 0) holdForest(world, h, bias);
+  if (J.forest.count > 0) holdForest(world, h, bias, again);
 }
 
 /** Whether joint slot j has rows that must hold, and so can be in a tree: all but a distance joint with room to stretch. */
@@ -769,10 +772,27 @@ const planted = (j) => holds(PLANTING, j);
  * factors them, and asks each for its whole error back this substep,
  * JOINT_BIAS of it; the relax pass, after the bodies have moved, solves the
  * same rows again for no speed along them.
+ *
+ * ONCE A STEP. Factoring was 15% of a step of 32 ragdolls, and 5% more in
+ * its inverses, so it is done at the first substep and kept for the rest, as
+ * the contacts' effective masses are (contact.js, prepare()), but for a tree
+ * a body of which has turned too far since (age()). A kept factor keeps both
+ * the rows it was made from (F.jac) and the inertias (each body's block):
+ * it is then the exact solve of the joints as they stood, and a factor of
+ * one pose with rows of another solves nothing exactly (rows built afresh
+ * with the step's first inertia opened a whipped chain by metres, see
+ * turnedInertias() in contact.js). What each pass asks for is measured
+ * along this pass's rows, from where the anchors are now, so the pass still
+ * aims at the joints as they are, and the kept factor only answers it a
+ * little off, by about the angle turned: what that leaves, the next pass
+ * takes up. Asked along the kept rows instead, a pass held the joints as
+ * they had stood and took the free swing across them for error: a floating
+ * leg kept 60% of its energy over a minute, not 93%.
  */
-function holdForest(world, h, bias) {
+function holdForest(world, h, bias, again) {
   const J = world._joints, F = J.forest, T = F.count;
   if (bias) {
+    age(world, !again);
     build(world, JOINT_BIAS / h);
     factorForest(world);
   } else {
@@ -792,6 +812,67 @@ function holdForest(world, h, bias) {
     }
   }
   settleForest(world);
+}
+
+/**
+ * How far a body may turn before its tree's factor is made again: θ with θ²
+ * = PIXEL, 0.071 rad, as the cosine of its half, |q·q₀| ≥ cos(θ/2) =
+ * 1 - θ²/8 (the next term, θ⁴/384, moves θ by under 10^-4 of itself). A kept
+ * factor answers a pull as the bodies stood when it was made: a lever turned
+ * θ since is off by θ of its length, and in the substep after, which turns it
+ * by no more than θ again or the factor is made afresh, the anchor it misses
+ * strays by about that error times that turn, |r| θ², within PIXEL of the
+ * lever, as a contact is held to PIXEL of a body's size. Measured on the
+ * chain whipped at 4 to 12 rad/s (test/joints.test.js), ball and hinged:
+ * the widest gaps as before (medians 16.9 and 18.3 mm against 15.8 and 18.2);
+ * at 0.1 rad a ball chain opened 234 mm at 11 rad/s, at 0.2 a hinged one
+ * 820 mm at 10, and factored once a step whatever turned, hanging chains
+ * blew apart.
+ */
+const KEPT = 1 - PIXEL / 8;
+
+/**
+ * Marks each tree in F.fresh to be factored at this solve pass, or to keep
+ * its factor: `all` at a step's first substep, and after that a tree one of
+ * whose bodies has turned past KEPT since its factor was made, whose
+ * rotations F.since keeps, and every substep a tree held at two or more
+ * points. Such a tree can have rows that repeat one another (a bridge fixed
+ * at both ends, a door on two hinges), which the factor holds by the give
+ * (forest.js, GIVE), a million times stiffer along their repeat than the
+ * joints themselves: what this pass's rows ask along it, rows a factor made
+ * at another pose doesn't see repeat, is answered a million times over. A
+ * bridge of 20 planks opened 2.3 m. Held at one point or none, no tree's
+ * rows repeat (each joint's rows hold its child, rows apart), and an error
+ * of θ stays one of about θ.
+ */
+function age(world, all) {
+  const F = world._joints.forest, T = F.count, order = F.order, parent = F.parent, side = F.side, fresh = F.fresh, since = F.since, q = world._rotation;
+  // Each tree's nodes lie together in the order, its root, a body, first.
+  let end = F.nodes;
+  for (let i = end - 1; i >= 0; i--) {
+    if (parent[order[i]] !== -1) continue;
+    let again = all, held = 0;
+    for (let k = i; k < end; k++) {
+      const x = order[k];
+      if (x < T) {
+        if (side[2 * x] < 0 || side[2 * x + 1] < 0) held++;
+      } else if (!again) {
+        const o = 4 * (x - T), s4 = 4 * F.body[x - T];
+        const dot = since[o] * q[s4] + since[o + 1] * q[s4 + 1] + since[o + 2] * q[s4 + 2] + since[o + 3] * q[s4 + 3];
+        again = !(Math.abs(dot) >= KEPT);
+      }
+    }
+    if (held > 1) again = true;
+    for (let k = i; k < end; k++) {
+      const x = order[k];
+      fresh[x] = again ? 1 : 0;
+      if (again && x >= T) {
+        const o = 4 * (x - T), s4 = 4 * F.body[x - T];
+        since[o] = q[s4]; since[o + 1] = q[s4 + 1]; since[o + 2] = q[s4 + 2]; since[o + 3] = q[s4 + 3];
+      }
+    }
+    end = i;
+  }
 }
 
 /** Every forest joint's rows, from where its bodies are now, into F.row, with their targets. */
@@ -856,18 +937,21 @@ function settleForest(world) {
     w[s3] += vec[o + 3]; w[s3 + 1] += vec[o + 4]; w[s3 + 2] += vec[o + 5];
   }
   for (let t = 0; t < T; t++) {
-    const j = F.joint[t], type = J.type[j], o = j * IMPULSES, row = F.row, r = 54 * t;
+    // The directions the impulses were applied along are the factor's rows,
+    // b's side of F.jac (forest.js, shape()), which a kept factor holds from
+    // when it was made (age()); F.row is this pass's.
+    const j = F.joint[t], type = J.type[j], o = j * IMPULSES, jac = F.jac, r = 72 * t + 36;
     const l = NODE * t;
     if (type === FIXED || type === SLIDER) {
       for (let k = 0; k < 3; k++) acc[o + ANG + k] += vec[l + k];
       if (type === SLIDER) {
         // The line's rows, along P1 and P2: their impulse as a world vector.
-        for (let k = 0; k < 3; k++) acc[o + LIN + k] += vec[l + 3] * row[r + 27 + k] + vec[l + 4] * row[r + 36 + k];
+        for (let k = 0; k < 3; k++) acc[o + LIN + k] += vec[l + 3] * jac[r + 18 + k] + vec[l + 4] * jac[r + 24 + k];
       } else {
         for (let k = 0; k < 3; k++) acc[o + LIN + k] += vec[l + 3 + k];
       }
     } else if (type === HINGE) {
-      for (let k = 0; k < 3; k++) acc[o + ANG + k] += vec[l] * row[r + 3 + k] + vec[l + 1] * row[r + 12 + k];
+      for (let k = 0; k < 3; k++) acc[o + ANG + k] += vec[l] * jac[r + 3 + k] + vec[l + 1] * jac[r + 9 + k];
       for (let k = 0; k < 3; k++) acc[o + LIN + k] += vec[l + 2 + k];
     } else if (type === BALL) {
       for (let k = 0; k < 3; k++) acc[o + LIN + k] += vec[l + k];

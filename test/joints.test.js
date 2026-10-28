@@ -372,7 +372,8 @@ test('a floating leg, hip and knee, swings for a minute and never gains energy',
   // Within a step energy wobbles by a few parts in a million, as an
   // integrator's does; over the minute it only falls. Measured: 93% kept;
   // 92.5% since the joints take each body's inertia where it has turned to
-  // (turnedInverse()), at most 0.0015% over the first in between.
+  // (turnedInverse()), at most 0.0015% over the first in between; 93.7% since
+  // the trees keep their factor through a step (joints.js, age()).
   assert.ok(most < first * 1.001, `energy rose ${((most / first - 1) * 100).toFixed(3)}%`);
   assert.ok(energy() > 0.9 * first, `${(energy() / first * 100).toFixed(1)}% of the energy left`);
 });
@@ -511,7 +512,9 @@ test('a chain whipped round by a plate at 10 rad/s, touching nothing, keeps its 
   // is 8.5 times easier to turn about its length than across it, and the
   // joints were solved with the inertia each link had as the step began
   // (contact.js, turnedInverse()): the ball-jointed chain opened its joints by
-  // 4.9 m. Measured since: 26 mm, the hinged one 12 mm (17 mm before).
+  // 4.9 m. Measured since: 26 mm, the hinged one 12 mm (17 mm before); 35 mm
+  // since the trees keep their factor through a step (joints.js, age()), a
+  // chaotic figure: from 4 to 12 rad/s the median gap is as it was, 18 mm.
   for (const type of ['ball', 'hinge']) {
     const world = new World();
     let last = world.addBody({ type: 'kinematic', position: [0, 5, 0], size: [1, 0.2, 1], angularVelocity: [0, 10, 0] });
@@ -694,7 +697,9 @@ test('jointOf gives back what addJoint took, and setJoint changes it', () => {
 
 test('the tree solve agrees with a dense solve of the same equations', () => {
   // After a step, the last pass's joints, rows and targets, solved densely:
-  // K λ = r, K = J W Jᵀ. Two planks, the far one held to the world at a leaf
+  // K λ = r, K = J W Jᵀ, J the rows the factor was made from (F.jac: a tree
+  // held at one point keeps the step's first, joints.js, age()), W as the
+  // step began. Two planks, the far one held to the world at a leaf
   // of the tree, where solving leaves first has a block its children can't
   // move (forest.js, GIVE): exact but for the joints' millionth of give.
   for (const held of ['root', 'leaf', 'both']) {
@@ -711,10 +716,8 @@ test('the tree solve agrees with a dense solve of the same equations', () => {
     const F = world._joints.forest, rows = [];
     for (let t = 0; t < F.count; t++) for (let r = 0; r < F.rows[t]; r++) rows.push([t, r]);
     const J6 = (t, r, k) => {
-      const o = 54 * t + 9 * r, w = F.row;
-      if (F.side[2 * t] === k) return [-w[o], -w[o + 1], -w[o + 2], -w[o + 3], -w[o + 4], -w[o + 5]];
-      if (F.side[2 * t + 1] === k) return [w[o], w[o + 1], w[o + 2], w[o + 6], w[o + 7], w[o + 8]];
-      return null;
+      const side = F.side[2 * t] === k ? 0 : F.side[2 * t + 1] === k ? 1 : -1, o = 72 * t + 36 * side + 6 * r;
+      return side < 0 ? null : Array.from(F.jac.subarray(o, o + 6));
     };
     const n = rows.length, K = Array.from({ length: n }, () => new Array(n).fill(0));
     for (let k = 0; k < F.bodies; k++) {
