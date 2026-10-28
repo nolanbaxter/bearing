@@ -57,6 +57,8 @@ export const FORMAT = 5;
 
 /** The classes a world holds, by the name their objects are written under. */
 const CLASSES = { Slots, Broadphase, Tree, Pairs, Memory, Contacts, Joints, Forest, Events, Mesh, Heightfield, Hull, Parts, Part };
+/** Those with more fields than V8 keeps fast when added by name, whose constructors take nothing they need (see load). */
+const NAMED = new Set(['Contacts', 'Pairs', 'Joints', 'Forest']);
 /** Typed arrays, by the short name their lists are written under. */
 const TYPED = {
   f64: Float64Array, f32: Float32Array, i32: Int32Array, u32: Uint32Array, i16: Int16Array, u16: Uint16Array,
@@ -133,8 +135,14 @@ export function load(data, World) {
   const table = data.objects;
   try {
     // Every object first, empty, so a field can refer to any of them; then their fields.
+    // A World, and the stores the step reads its columns through, are made by
+    // their constructors, which name every field first: filled in by computed
+    // name into an empty object, past a dozen fields V8 keeps it as a
+    // dictionary, every read a hash lookup (see World's constructor;
+    // test/fast.test.js). Their fields are then only replaced.
     const made = table.map((o) => {
-      if (o.c === 'World') return Object.create(World.prototype);
+      if (o.c === 'World') return new World({ workers: 0 });
+      if (NAMED.has(o.c)) return new CLASSES[o.c]();
       if (o.c === 'Object') return {};
       if (o.c === 'Broadphase') return new Broadphase();
       const C = CLASSES[o.c];

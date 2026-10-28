@@ -161,6 +161,21 @@ export class Contacts {
     this.starts = new Int32Array(COLOURS + 2);
     /** One digit's counts while the rows are sorted by slot (graph.js, DIGIT). */
     this.digits = new Int32Array(DIGITS + 1);
+    // Every column named here first, as World's are (see there), so _alloc's
+    // grow() only replaces them and Contacts keeps fast properties.
+    this.a = null; this.b = null; this.pair = null; this.sub = null; this.key = null;
+    this.partA = null; this.partB = null; this.points = null; this.colour = null; this.order = null;
+    this.row = null; this.scratch = null; this.normal = null; this.t1 = null; this.t2 = null;
+    this.friction = null; this.restitution = null; this.tolerance = null; this.patch = null;
+    this.rollMass1 = null; this.rollMass2 = null; this.spinMass = null; this.rollImpulse1 = null;
+    this.rollImpulse2 = null; this.spinImpulse = null; this.anchorA = null; this.anchorB = null;
+    this.fjac = null; this.tangentMass = null; this.tangentImpulse1 = null;
+    this.tangentImpulse2 = null; this.drift1 = null; this.drift2 = null; this.sliding = null;
+    this.pid = null; this.separation = null; this.point = null; this.ra = null; this.rb = null;
+    this.shift = null; this.la = null; this.lb = null; this.adjusted = null; this.gap = null;
+    this.now = null; this.normalMass = null; this.jac = null; this.block = null;
+    this.normalImpulse = null; this.maxNormalImpulse = null; this.relativeVelocity = null;
+    this.lever = null; this.records = null;
     this._alloc(0);
   }
 

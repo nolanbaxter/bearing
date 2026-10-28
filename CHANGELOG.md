@@ -189,6 +189,11 @@ All notable changes to Bearing are recorded here. The format follows
   points), instead of factoring them afresh every substep: ragdolls step 11 to 19% faster and
   hanging chains 20 to 26%. Joints hold as before, within a few tenths of a millimetre; ragdolls
   with joint friction settle about 0.7 s later (5.6 to 6.3 s).
+- The world and its contact store name every column when they are made, instead of adding them in a
+  loop by computed name, which left both as hash tables in V8, every read of a column a lookup.
+  The same results to the bit, and every scene faster: the pile and pyramid about 20 to 25%, hulls
+  23 to 29%, terrain 15 to 19%, raycasts 11 to 14%, ragdolls 9%. A loaded world is made the same
+  way, and a test fails if any of its stores falls back to a hash table.
 - Joint friction: `friction` on ball joints, hinges and sliders, the most torque (N·m) or force
   (N) the joint resists turning or sliding with, as a stiff hinge does. A hinge's or slider's is
   its motor held at speed 0, to the bit; a ball joint's resists turning every way alike. 32 ragdolls

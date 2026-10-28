@@ -308,6 +308,27 @@ export class World {
     known('World', o, WORLD_OPTIONS);
     this._gravity = o.gravity === undefined ? [...GRAVITY] : vec3('World', 'gravity', o.gravity);
     this._slots = new Slots();
+    // Every column named here first, then made: fields added by computed name
+    // (this[name] = ...) past a dozen leave an object in V8's dictionary
+    // properties, every read a hash lookup. Named, the loop below only
+    // replaces them, and the world keeps fast properties.
+    this._position = null; this._rotation = null; this._velocity = null; this._angular = null;
+    this._dims = null; this._density = null; this._mass = null; this._inertia = null;
+    this._offset = null; this._frame = null; this._framed = null; this._com = null;
+    this._comGiven = null; this._invInertia = null; this._tumbled = null; this._ceiling = null;
+    this._force = null; this._torque = null; this._friction = null; this._restitution = null;
+    this._damping = null; this._angularDamping = null; this._gravityScale = null; this._layers = null;
+    this._mask = null; this._invMass = null; this._size = null; this._reach = null; this._axes = null;
+    this._box = null; this._motion = null; this._invI = null; this._invIt = null; this._start = null;
+    this._startQ = null; this._fast = null; this._caught = null; this._type = null; this._shape = null;
+    this._massGiven = null; this._inertiaGiven = null; this._forced = null; this._transforms = null;
+    this._previous = null; this._awake = null; this._awakeList = null; this._inAwake = null;
+    this._still = null; this._rest = null; this._island = null; this._islandNext = null;
+    this._parent = null; this._least = null; this._slept = null; this._staticMoved = null;
+    this._sensor = null; this._lock = null; this._colours = null; this._maxSlope = null;
+    this._slopeCos = null; this._stepHeight = null; this._stepGiven = null; this._ground = null;
+    this._groundAt = null; this._walk = null; this._jointHead = null; this._jointTally = null;
+    this._node = null; this._movedAt = null; this._seen = null; this._movedOut = null;
     for (const [name, Type] of COLUMNS) this[name] = new Type(0);
     /**
      * By slot, the shape as given: a mesh's or heightfield's triangles

@@ -361,6 +361,16 @@ These were made with Nolan and override the rules below where they differ.
   dn + lb . nb - la . na + adjusted: 2 turns a manifold instead of 2 a point. Bits change at
   rounding (`prepareRows`' `adjusted` keeps the old form; they differ by ~1e-16 m); pyramid within
   a micrometre, pile sleeps 10.05 s (10.37). Pinned, both orders: pile 2-3.5%, pyramid 3.5-5%.
+- **Fast properties** (2026-10-28, Nolan asked for something "baser"; same bits): V8 turns an
+  object given more than a dozen fields by computed name (`this[name] = ...`) into a dictionary,
+  every field read a hash lookup; World (118 fields) and Contacts (61) were. Their constructors
+  now name every column (`this._x = null`) before the COLUMNS / `grow()` loops, which then only
+  replace them; `load()` makes World, Contacts, Pairs, Joints and Forest by their constructors
+  (`NAMED` in save.js) before filling them. The prototype trick (an object made a prototype goes
+  fast) was measured and rejected: such an object stays in prototype mode and every store to it
+  is slow, ragdolls 4-8% slower. `test/fast.test.js` (run with --allow-natives-syntax) checks
+  every store new, stepped, loaded. Worker views arrive by structured clone, which is fast. Pinned,
+  both orders: pile 19-25%, pyramid 19-27%, hulls 23-29%, terrain 15-19%, rays 11-14%, ragdolls 9%.
 - **Columns in locals across calls V8 won't inline** (2026-10-28, same bits): `solveRows` holds
   every Contacts column it reads in a local (`cNormal`, `cNormalImpulse`, ...) because `pushes()`
   isn't inlined (`--trace-turbo-inlining`: "cannot consider"), and after a call V8 reloads each
