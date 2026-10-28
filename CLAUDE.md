@@ -255,7 +255,8 @@ These were made with Nolan and override the rules below where they differ.
   positive definite); every point gives `COMPLIANCE` (forest.js, 2^-20) of its own K_kk so a box
   face's four points don't make K singular, and a soft point also is/ms, so one point is exactly
   the old update; pivoting capped at 2^count rounds. One-point manifolds keep the old update.
-  `block` is scratch to `save()`. 16 normal solves a point a step against 36-52 swept. Pinned:
+  `block` is scratch to `save()`. `pushes()` writes out the all-four-pushing case (set 15) in locals,
+  the same operations in order (2026-10-28: pyramid 9%, pile 3%, same bits). 16 normal solves a point a step against 36-52 swept. Pinned:
   pile 5-6% faster, pyramid 13-17%, hulls 2% slower, terrain even; sleep and qualx as before.
 - **Graph colouring** (2026-10-26, milestone 16 step 7): `src/graph.js` `colour()`, called in
   `step()` after narrowing: per-body 32-bit masks (`_colours`, COLOURS = 32, the bitwise width),

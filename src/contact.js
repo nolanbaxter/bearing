@@ -1581,6 +1581,32 @@ function warmRows(world, c, from, to) {
  * definite matrix never needs; at most four points.
  */
 function pushes(K, kb, count, set) {
+  if (set === 15) {
+    // All four points of a face pushing, a resting box's every pass: the
+    // loops below written out, in locals, the same operations in the same
+    // order, so the same bits. The loops' index tables and module arrays
+    // cost more than the arithmetic: pushes() was 14-17% of a resting pile's
+    // step at 185 ns a call; written out, pinned A/B both orders, the pyramid
+    // 8.6-8.9% faster, the pile 3%.
+    const g0 = 1 + give[0], g1 = 1 + give[1], g2 = 1 + give[2], g3 = 1 + give[3];
+    let a00 = K[kb] * g0, a01 = K[kb + 1], a02 = K[kb + 2], a03 = K[kb + 3];
+    let a10 = K[kb + 4], a11 = K[kb + 5] * g1, a12 = K[kb + 6], a13 = K[kb + 7];
+    let a20 = K[kb + 8], a21 = K[kb + 9], a22 = K[kb + 10] * g2, a23 = K[kb + 11];
+    let a30 = K[kb + 12], a31 = K[kb + 13], a32 = K[kb + 14], a33 = K[kb + 15] * g3;
+    let r0 = wanted[0], r1 = wanted[1], r2 = wanted[2], r3 = wanted[3], f;
+    f = a10 / a00; a11 -= f * a01; a12 -= f * a02; a13 -= f * a03; r1 -= f * r0;
+    f = a20 / a00; a21 -= f * a01; a22 -= f * a02; a23 -= f * a03; r2 -= f * r0;
+    f = a30 / a00; a31 -= f * a01; a32 -= f * a02; a33 -= f * a03; r3 -= f * r0;
+    f = a21 / a11; a22 -= f * a12; a23 -= f * a13; r2 -= f * r1;
+    f = a31 / a11; a32 -= f * a12; a33 -= f * a13; r3 -= f * r1;
+    f = a32 / a22; a33 -= f * a23; r3 -= f * r2;
+    const x3 = r3 / a33;
+    const x2 = (r2 - a23 * x3) / a22;
+    const x1 = (r1 - a12 * x2 - a13 * x3) / a11;
+    const x0 = (r0 - a01 * x1 - a02 * x2 - a03 * x3) / a00;
+    solved[0] = x0; solved[1] = x1; solved[2] = x2; solved[3] = x3;
+    return;
+  }
   let n = 0;
   for (let k = 0; k < count; k++) {
     solved[k] = 0;

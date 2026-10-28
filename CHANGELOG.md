@@ -162,6 +162,8 @@ All notable changes to Bearing are recorded here. The format follows
   manifold, instead of each point's two anchors turned out of it: two turns a manifold where a box
   face took eight. Equal but for rounding (a pyramid's boxes end within a micrometre of where they
   did); the pile about 2 to 3.5% faster, the pyramid 3.5 to 5%, hulls 1 to 2.5%.
+- A box face's four contact points pushing together are solved with the block's elimination written
+  out: the same results to the bit, the pyramid about 9% faster and the pile 3%.
 - Joint friction: `friction` on ball joints, hinges and sliders, the most torque (N·m) or force
   (N) the joint resists turning or sliding with, as a stiff hinge does. A hinge's or slider's is
   its motor held at speed 0, to the bit; a ball joint's resists turning every way alike. 32 ragdolls
