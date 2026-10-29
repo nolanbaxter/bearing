@@ -56,9 +56,9 @@ export class Pairs {
     this.touching = new Uint8Array(0);     // 1 while its bodies touch, as of the last step that looked
     this.checked = new Float64Array(0);    // World._pairEpoch when it was last found pairable, its bodies the same (holds)
     this.verdict = new Int32Array(0);      // within a narrowphase pass, what the workers found for it (contact.js, LOOKED)
-    // A hull pair's kept manifold (contact.js, reused), by pair: 1 + its row
-    // in the cache below, or 0 for none. Only pairs with a hull keep one, so
-    // a pile of boxes or balls pays these four bytes a pair and nothing more.
+    // A convex pair's kept manifold (contact.js, reused), by pair: 1 + its
+    // row in the cache below, or 0 for none. Pairs with a mesh, a
+    // heightfield or parts keep theirs in a Memory instead, and never one.
     this.cache = new Int32Array(0);
     // The cache, one row a kept manifold, rows [0, cached) in use, each
     // knowing its pair (owner) so a row given back is filled from the last,
@@ -69,7 +69,8 @@ export class Pairs {
     // in a's frame, and each point's end on a, in a's frame, and on b, in b's
     // frame, and feature id. Kept in rows of their
     // own, not columns beside every pair's, because a row is about 300 bytes
-    // and most pairs (boxes, balls, capsules) never fill one.
+    // and only pairs that touch, a fraction of those near enough to be
+    // listed, fill one.
     this.cached = 0;
     this.cacheCapacity = 0;
     this.cacheOwner = new Int32Array(0);

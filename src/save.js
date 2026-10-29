@@ -53,9 +53,11 @@ import { COLOURS, DIGITS } from './graph.js';
  * friction column): data of format 4 has none, and its joints would load
  * without a value for it. 6 since a hull keeps the radius of a ball inside
  * it (hull.js, inner), which separating axes read: data of format 5 has
- * none.
+ * none. 7 since a body can be frozen (world.js, FREEZING: _frozen, _calm):
+ * data of format 6 has neither, and its bodies would load with no value for
+ * them.
  */
-export const FORMAT = 6;
+export const FORMAT = 7;
 
 /** The classes a world holds, by the name their objects are written under. */
 const CLASSES = { Slots, Broadphase, Tree, Pairs, Memory, Contacts, Joints, Forest, Events, Mesh, Heightfield, Hull, Parts, Part };
@@ -82,7 +84,7 @@ const TYPED_NAME = new Map(Object.entries(TYPED).map(([k, v]) => [v, k]));
  */
 const SCRATCH = {
   World: new Set(['_lines', '_placed', '_colours', '_invIt', '_workers', '_jobs']),
-  Contacts: new Set(['jac', 'fjac', 'block', 'colour', 'order', 'row', 'scratch', 'starts', 'digits', 'onParts', 'plain', 'wasPlain', 'records', 'taken', 'now']),
+  Contacts: new Set(['jac', 'fjac', 'block', 'colour', 'order', 'row', 'scratch', 'starts', 'digits', 'onParts', 'plain', 'wasPlain', 'records', 'taken', 'now', 'solved']),
   Pairs: new Set(['verdict']),
   Forest: new Set(['fresh', 'since']),
 };

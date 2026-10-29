@@ -665,7 +665,7 @@ test('hulls and compounds give the same result twice, to the bit', () => {
   assert.deepEqual(run(), run());
 });
 
-test('a hull at rest keeps its contact from step to step, and boxes keep none', () => {
+test('a hull at rest keeps its contact from step to step, and so does a box', () => {
   const next = numbers(7), rock = [];
   for (let k = 0; k < 12; k++) rock.push(next() - 0.5, (next() - 0.5) * 0.8, next() - 0.5);
   const world = new World({ sleeping: false });
@@ -674,7 +674,7 @@ test('a hull at rest keeps its contact from step to step, and boxes keep none', 
   world.addBody({ position: [3, 0.5, 0] });
   for (let n = 0; n < 180; n++) world.step(DT);
   const pairs = world._pairs;
-  assert.equal(pairs.cached, 1, 'the rock on the floor keeps one manifold; the box on it none');
+  assert.equal(pairs.cached, 2, 'the rock and the box on the floor keep one manifold each');
   // Found afresh, the pose it was found at would be written again each step
   // (the resting rock still moves by rounding); kept, it stays as it was.
   const pose = Array.from(pairs.cachePose.slice(0, 7));

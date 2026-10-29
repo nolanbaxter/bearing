@@ -61,12 +61,14 @@
 // order (store, touched, restitution) goes through c.row, so a mesh pair's
 // manifolds still come together and events in the order they always did.
 
-const DYNAMIC = 0;   // World's type code
+const DYNAMIC = 0, STATIC = 1;   // World's type codes
 
 /** How many colours there are: the bits of a 32-bit integer (see MASKS). */
 export const COLOURS = 32;
 /** The colour number a manifold in the overflow is given, after every real one. */
 export const OVERFLOW = COLOURS;
+/** The run after the overflow: rows between frozen or static bodies, never solved (World._freeze). */
+export const RESTING = OVERFLOW + 1;
 
 const P = 4;   // points a manifold holds (contact.js)
 // Every column narrow() writes, with its numbers per manifold: what arrange()
@@ -102,6 +104,8 @@ export const DIGITS = 1 << DIGIT;
  */
 export function colour(world, c) {
   const used = world._colours, type = world._type, A = c.a, B = c.b, colour = c.colour, n = c.count;
+  // A frozen body the solve never moves, as a static one: it takes no colour.
+  const frozen = world._frozenCount > 0 ? world._frozen : null;
   // Only the masks of bodies with manifolds are read, so only theirs are cleared.
   for (let m = 0; m < n; m++) {
     used[A[m]] = 0;
@@ -109,7 +113,16 @@ export function colour(world, c) {
   }
   for (let m = 0; m < n; m++) {
     const a = A[m], b = B[m];
-    const da = type[a] === DYNAMIC, db = type[b] === DYNAMIC;
+    let da = type[a] === DYNAMIC, db = type[b] === DYNAMIC;
+    if (frozen !== null) {
+      const fa = frozen[a] !== 0, fb = frozen[b] !== 0;
+      if ((fa || type[a] === STATIC) && (fb || type[b] === STATIC)) {
+        colour[m] = RESTING;
+        continue;
+      }
+      if (fa) da = false;
+      if (fb) db = false;
+    }
     const held = (da ? used[a] : 0) | (db ? used[b] : 0);
     if (held === -1) {
       colour[m] = OVERFLOW;
@@ -144,14 +157,15 @@ export function colour(world, c) {
   const starts = c.starts;
   starts.fill(0);
   for (let m = 0; m < n; m++) starts[colour[m] + 1]++;
-  for (let k = 0; k <= OVERFLOW; k++) starts[k + 1] += starts[k];
+  for (let k = 0; k <= RESTING; k++) starts[k + 1] += starts[k];
   for (let i = 0; i < n; i++) {
     const m = from[i];
     order[starts[colour[m]]++] = m;
   }
   // Each run's start was moved on to its end, the next run's start: back by one run.
-  for (let k = OVERFLOW; k > 0; k--) starts[k] = starts[k - 1];
+  for (let k = RESTING; k > 0; k--) starts[k] = starts[k - 1];
   starts[0] = 0;
+  c.solved = starts[RESTING];
   arrange(c, order, n);
 }
 

@@ -30,7 +30,7 @@ import { volume, inertia as shapeInertia, hullMass, shifted, turnedTensor, matri
 import { build } from './hull.js';
 import {
   Contacts, PIXEL, narrow, store, inertias, turnedInertias, prepare, makeSoft, warmStart, solve, restitution, touched, gapOf,
-  WORK, crowded,
+  WORK, crowded, rest,
 } from './contact.js';
 import { Jobs, cores, sharedMemory } from './core/jobs.js';
 import {
@@ -152,6 +152,11 @@ const DAMPING_RATIO = 10;
 // than a pixel in it and can fall asleep before it moves, such as a box on a
 // slope within 0.05° of its friction angle.
 const SLEEP_TIME = 1;
+// _freeze's bits in _calm (see FREEZING): still for SLEEP_TIME; that, and
+// everything it touches too; that, and everything it touches quiet; and set
+// by hand since the step before, which keeps it from the first; and, at a
+// frozen piece's root, that some body of it thaws.
+const STILL = 1, QUIET = 2, CALM = 4, HANDLED = 8, THAWING = 16;
 
 // SPIN: the most a body other than a sphere turns in a step, π, half a turn.
 // Its contacts are found once a step, where the step starts or at the moment
@@ -280,6 +285,9 @@ const COLUMNS = [
   ['_parent', Int32Array, 1],        // union-find, while islands are found
   ['_least', Float64Array, 1],       // at an island's root, while islands are found: its least still time
   ['_slept', Int32Array, 1],         // the bodies that fell asleep in the last step, dense
+  // Freezing (see FREEZING and _freeze):
+  ['_frozen', Uint8Array, 1],        // 1 frozen; 2 frozen in this step, whose transform is still written; 0 not
+  ['_calm', Uint8Array, 1],          // STILL, QUIET, CALM while _freeze runs; HANDLED from a setter until it does
   ['_staticMoved', Uint8Array, 1],   // 1 for a static body moved or changed since the last step
   ['_sensor', Uint8Array, 1],        // 1 for a sensor: it reports what it overlaps, and pushes nothing
   ['_lock', Uint8Array, 1],          // bit k: it never turns about world axis k
@@ -324,7 +332,8 @@ export class World {
     this._massGiven = null; this._inertiaGiven = null; this._forced = null; this._transforms = null;
     this._previous = null; this._awake = null; this._awakeList = null; this._inAwake = null;
     this._still = null; this._rest = null; this._island = null; this._islandNext = null;
-    this._parent = null; this._least = null; this._slept = null; this._staticMoved = null;
+    this._parent = null; this._least = null; this._slept = null; this._frozen = null; this._calm = null;
+    this._staticMoved = null;
     this._sensor = null; this._lock = null; this._colours = null; this._maxSlope = null;
     this._slopeCos = null; this._stepHeight = null; this._stepGiven = null; this._ground = null;
     this._groundAt = null; this._walk = null; this._jointHead = null; this._jointTally = null;
@@ -386,6 +395,9 @@ export class World {
   /** The state that isn't a column: fresh at creation, and again when destroyed. */
   _reset() {
     this._awakeCount = 0;
+    /** Bodies frozen (see FREEZING), and whether some awake body was still for SLEEP_TIME at the last step's end. */
+    this._frozenCount = 0;
+    this._stillReady = false;
     this._sleptCount = 0;
     /** Something woke, or a body was removed or a static one moved: _syncPairs has work to do. */
     this._wakePending = false;
@@ -934,9 +946,15 @@ export class World {
     next.trim();
     pairs.trim();
     const touching = next.count, held = jointed ? joints.active : 0;
+    // Which bodies are frozen this step (see FREEZING), before the colours:
+    // a frozen body takes none, and rows between frozen bodies go last.
+    if (this._sleeping && (this._frozenCount > 0 || this._stillReady)) this._freeze(next);
     // Coloured, and the rows laid out colour by colour, before anything else
     // is worked out for them (graph.js).
-    if (touching > 0) colour(this, next);
+    if (touching > 0) {
+      colour(this, next);
+      if (next.solved < touching) rest(next);
+    }
     if (held > 0) plantJoints(this);
 
     const substeps = this._substeps, h = dt / substeps;
@@ -1018,8 +1036,14 @@ export class World {
     if (touching > 0) touched(this, pairs, next);
 
     const p = this._position, q = this._rotation, framed = this._framedCount > 0 ? this._framed : null;
+    const frozen = this._frozen;
     for (let i = 0; i < this._awakeCount; i++) {
       const s = list[i], t7 = s * 7, s3 = s * 3, s4 = s * 4;
+      // A frozen body didn't move: its transform is as it was, and moved()
+      // leaves it out, but for the step it froze in, whose start set its
+      // `previous` to its transform.
+      if (frozen[s] === 1) continue;
+      if (frozen[s] === 2) frozen[s] = 1;
       if (framed !== null && framed[s] === 1) {
         this._pose(s, POSE);
         for (let k = 0; k < 7; k++) tr[t7 + k] = POSE[k];
@@ -1043,6 +1067,114 @@ export class World {
       this._sensed = resized(this._sensed, c);
     }
     if (this._sleeping) this._sleep(dt);
+  }
+
+  /**
+   * FREEZING (Newton Dynamics' equilibrium, in Bearing's terms). Part of an
+   * island stops while something elsewhere in it still moves: a body that has
+   * been still for SLEEP_TIME, by the sleep rule's own measure (no point of it
+   * strayed its tolerance), and whose neighbours, and their neighbours, have
+   * been too, is frozen: stopped exactly, moved by nothing, and to the solver
+   * as heavy as the floor. A contact between two frozen bodies, or a frozen
+   * one and a static one, isn't prepared, warm-started, solved or stored: it
+   * keeps the impulses it had. Its narrowphase still runs, so its events
+   * and what it touches stay true.
+   *
+   * Two rings, as Newton has them: a body is QUIET when it and everything it
+   * touches is still, and frozen when it and everything it touches is quiet.
+   * Whatever moves is then at least one still, unfrozen body away from a
+   * frozen one, and a body that starts moving thaws, before the solve, the
+   * frozen bodies two contacts from it.
+   *
+   * Thawed at once, before the solve, with every frozen body it touches and
+   * every one those touch, its whole frozen piece, each counted still afresh
+   * as a woken island's bodies are, when anything it touches or anything
+   * that touches those stops being still, or is set by hand (HANDLED), or a
+   * new contact brings a body that isn't still. Thawed and counted still
+   * afresh when anything is set on it. Never a body with a joint (its rows
+   * are solved as one tree, forest.js), a character, or anything while
+   * sleeping is off: freezing is sleeping's, a piece of an island at a time,
+   * and off means off.
+   *
+   * The known limit: a frozen body two or more contacts from anything moving
+   * doesn't notice the load on it change, as a sleeping island doesn't. A
+   * thaw when what its contacts push it with changes was measured, at 10 to
+   * 1,000 times the change that would move it its tolerance in SLEEP_TIME
+   * from rest: on the 288-box heap of test/sleep.test.js it thawed bodies
+   * nearly as fast as they froze (1,228 thaws of 1,862 freezes at 100 times)
+   * and the heap never slept in 24 s, where it sleeps at 11.4 s without. So
+   * motion alone decides; anything added or set by hand wakes what it
+   * touches, which covers the loads a program changes.
+   *
+   * No speed is chosen: it is still by distance over SLEEP_TIME, so a body at
+   * the top of a throw, momentarily at rest, is nowhere near it. Jolt's
+   * looser rule, a speed under a threshold and no point straying, was
+   * measured and rejected: it froze boxes that should still slide or tip.
+   */
+  _freeze(c) {
+    const list = this._awakeList, n = this._awakeCount, calm = this._calm, still = this._still, type = this._type;
+    const frozen = this._frozen, A = c.a, B = c.b, count = c.count, joints = this._jointHead;
+    for (let i = 0; i < n; i++) {
+      const s = list[i];
+      calm[s] = still[s] >= SLEEP_TIME && (calm[s] & HANDLED) === 0 ? STILL | QUIET | CALM : 0;
+    }
+    // A static body counts as all three; its own bits aren't read.
+    for (let m = 0; m < count; m++) {
+      const a = A[m], b = B[m];
+      if (type[b] !== STATIC && (calm[b] & STILL) === 0) calm[a] &= ~(QUIET | CALM);
+      if (type[a] !== STATIC && (calm[a] & STILL) === 0) calm[b] &= ~(QUIET | CALM);
+    }
+    for (let m = 0; m < count; m++) {
+      const a = A[m], b = B[m];
+      if (type[b] !== STATIC && (calm[b] & QUIET) === 0) calm[a] &= ~CALM;
+      if (type[a] !== STATIC && (calm[a] & QUIET) === 0) calm[b] &= ~CALM;
+    }
+    // A frozen piece thaws whole: frozen bodies touching are joined, and if
+    // any of them must thaw, all do, as a sleeping island wakes whole. Thawed
+    // two contacts out alone, a hit passed on further within the step met
+    // frozen bodies as a wall: a steel ball into a frozen pyramid moved its
+    // boxes 18 mm otherwise than awake, more than the hit itself moved them.
+    if (this._frozenCount > 0) {
+      const parent = this._parent;
+      for (let i = 0; i < n; i++) parent[list[i]] = list[i];
+      for (let m = 0; m < count; m++) if (frozen[A[m]] !== 0 && frozen[B[m]] !== 0) join(parent, type, A[m], B[m]);
+      let thawing = false;
+      for (let i = 0; i < n; i++) {
+        const s = list[i];
+        if (frozen[s] !== 0 && (calm[s] & CALM) === 0) { calm[root(parent, s)] |= THAWING; thawing = true; }
+      }
+      if (thawing) {
+        for (let i = 0; i < n; i++) {
+          const s = list[i];
+          if (frozen[s] !== 0 && (calm[root(parent, s)] & THAWING) !== 0) calm[s] &= ~CALM;
+        }
+      }
+    }
+    const v = this._velocity, w = this._angular, invMass = this._invMass;
+    for (let i = 0; i < n; i++) {
+      const s = list[i];
+      const freeze = (calm[s] & CALM) !== 0 && type[s] === DYNAMIC && joints[s] === 0;
+      if (freeze && frozen[s] === 0) {
+        const s3 = s * 3;
+        frozen[s] = 2;
+        this._frozenCount++;
+        invMass[s] = 0;
+        v[s3] = 0; v[s3 + 1] = 0; v[s3 + 2] = 0; w[s3] = 0; w[s3 + 1] = 0; w[s3 + 2] = 0;
+      } else if (!freeze && frozen[s] !== 0) {
+        // Counted still afresh, as a woken island is: thawed only for the
+        // step, the piece froze again at once, its speeds stopped, and a
+        // 5-tonne box set on it slid off 0.24 m otherwise than awake.
+        this._thaw(s, true);
+      }
+    }
+  }
+
+  /** Slot s is frozen no longer; `afresh` starts its still time again. */
+  _thaw(s, afresh) {
+    this._frozen[s] = 0;
+    this._frozenCount--;
+    this._invMass[s] = 1 / this._mass[s];
+    if (afresh) this._settle(s);
   }
 
   /**
@@ -1095,6 +1227,7 @@ export class World {
         this._settle(s);
       }
     }
+    this._stillReady = ready;
     if (!ready) return;
     this._islandSteps++;
 
@@ -1135,6 +1268,7 @@ export class World {
   /** Slot s falls asleep, into the island whose first body is r. */
   _fallAsleep(s, r) {
     const s3 = s * 3;
+    if (this._frozen[s] !== 0) this._thaw(s, false);
     // Stopped exactly, so it can't creep while asleep or wake with a drift.
     this._velocity.fill(0, s3, s3 + 3);
     this._angular.fill(0, s3, s3 + 3);
@@ -1186,7 +1320,12 @@ export class World {
    * body comes here. A static or awake body is left as it is.
    */
   _wake(s) {
-    if (this._island[s] === 0) return;
+    if (this._island[s] === 0) {
+      // Awake or static: set by hand, it can't stay or be frozen (see FREEZING).
+      this._calm[s] |= HANDLED;
+      if (this._frozen[s] !== 0) this._thaw(s, true);
+      return;
+    }
     const dt = this._stepDt, g = this._gravity;
     const gl = dt > 0 ? Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]) : 0;
     for (let b = this._island[s] - 1; b >= 0;) {
@@ -1202,7 +1341,7 @@ export class World {
   }
 
   _wakeAll() {
-    for (let s = 0; s < this._slots.top; s++) if (this._island[s] !== 0) this._wake(s);
+    for (let s = 0; s < this._slots.top; s++) if (this._island[s] !== 0 || this._frozen[s] !== 0) this._wake(s);
   }
 
   /** A static body moved or changed by hand: what slept against it is woken at the next step. */
@@ -1356,10 +1495,10 @@ export class World {
     const v = this._velocity, w = this._angular, scale = this._gravityScale;
     const gx = this._gravity[0] * h, gy = this._gravity[1] * h, gz = this._gravity[2] * h;
     const damping = this._damping, angularDamping = this._angularDamping, shape = this._shape;
-    const most = SPIN / (h * this._substeps);
+    const most = SPIN / (h * this._substeps), frozen = this._frozen;
     for (let i = 0; i < n; i++) {
       const s = list[i];
-      if (type[s] !== DYNAMIC) continue;
+      if (type[s] !== DYNAMIC || frozen[s] !== 0) continue;
       const s3 = s * 3, g = scale[s];
       v[s3] += gx * g; v[s3 + 1] += gy * g; v[s3 + 2] += gz * g;
       // dv/dt = -c v, taken implicitly: v / (1 + c h). Exact operations only
@@ -1392,9 +1531,10 @@ export class World {
   _move(h) {
     const list = this._awakeList, n = this._awakeCount, type = this._type;
     const p = this._position, q = this._rotation, v = this._velocity, w = this._angular, I = this._inertia;
-    const half = h * 0.5;
+    const half = h * 0.5, frozen = this._frozen;
     for (let i = 0; i < n; i++) {
       const s = list[i], s3 = s * 3, s4 = s * 4;
+      if (frozen[s] !== 0) continue;
       p[s3] += v[s3] * h; p[s3 + 1] += v[s3 + 1] * h; p[s3 + 2] += v[s3 + 2] * h;
       const wx = w[s3], wy = w[s3 + 1], wz = w[s3 + 2];
       const turning = wx !== 0 || wy !== 0 || wz !== 0;

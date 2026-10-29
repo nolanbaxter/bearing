@@ -78,6 +78,22 @@ These were made with Nolan and override the rules below where they differ.
   Per-body loops walk the awake list; asleep pairs sit past `pairs.active`; `moved(since)` reads
   per-body stamps through the awake list and a log bounded by the body count. API approved:
   `world.sleeping`, `body.asleep`, `world.stepCount`, `world.moved(since)`.
+  Freezing (2026-10-29, Nolan: "Land both"; Newton Dynamics' equilibrium): `World._freeze`, before
+  the colours, while sleeping is on and something is frozen or was still at the last step's end
+  (`_stillReady`). A body still for `SLEEP_TIME` (the sleep rule's measure, not set by hand since
+  the last step: `HANDLED`) whose neighbours and theirs are too (`_calm` bits STILL, QUIET, CALM) is
+  frozen (`_frozen`, `_frozenCount`): velocities zeroed, inverse mass and `_invI` 0, skipped by
+  `_accelerate`, `_move` and the transforms (moved() leaves it out after its first frozen step).
+  Rows between frozen or static bodies go in their own run after the overflow (`graph.js`
+  `RESTING`, `Contacts.solved`) and aren't prepared, warm-started, solved, stored or bounced;
+  `rest()` sets what `touched()` reads. A frozen piece (frozen bodies touching, union-find) thaws
+  whole, before the solve, counted still afresh, when anything within two contacts isn't still or
+  is set by hand; jointed bodies and characters never freeze. No push-change thaw: at 10-1,000 times
+  the change that would move a body its tolerance in `SLEEP_TIME`, it thawed the 288-box heap as
+  fast as it froze and the heap never slept. Known limit, documented: a frozen body two contacts
+  from anything moving doesn't feel its load change. Jolt's looser speed-based rule rejected: it
+  froze boxes that should slide or tip. 1,000-box pile, whole 15 s: 8.0 -> 6.5 s of step time; the
+  10-15 s window 62% less; all asleep 12.5 s (14.0); contact points solved 73% of before. FORMAT 7.
 - **Contacts are patches** (2026-10-13, approved). A contact of one or two points resists rolling
   (up to N times its patch radius) and, with one point, spinning (up to 2/3 mu N times it); the
   patch is PIXEL of the rolling body's size, so rolling resistance is 0.01 for every ball and
@@ -335,8 +351,8 @@ These were made with Nolan and override the rules below where they differ.
   `triangleFaceHull` takes its incident face the same way, but without the best-axis fallback:
   against one triangle the strictly best axis is often sideways off a seam, and heaps on a flat
   heightfield then never slept.
-- **Hull pairs keep their manifold** (2026-10-23, approved: "land 1 and 2"; Jolt's body pair
-  cache, parry's try_update_contacts): `reused()`/`remember()` in `contact.js`, rows in
+- **Convex pairs keep their manifold** (2026-10-23 for hulls, approved: "land 1 and 2"; Jolt's
+  body pair cache, parry's try_update_contacts; every convex pair since 2026-10-29): `reused()`/`remember()` in `contact.js`, rows in
   `pairs.js` (`cache`, `cacheOf`, `uncache`; dropped on `forget`, removal and a new
   `_pairEpoch`). Kept while `loss + 2 drift <= tolerance` and `drift + moving() <= tolerance`, the
   drift measured from the pose it was found at; `Manifold.loss` is how far `collide()` let it fall
@@ -352,6 +368,19 @@ These were made with Nolan and override the rules below where they differ.
   parallel normals (`NEARLY`, 2^-26) never skipped; nothing skipped if the centre isn't inside.
   FORMAT 6. Skipped on 1,000 rocks: 79% of faces, 91% of edge pairs. Pinned: hulls on terrain
   21-28%, rock pile 1-2% (its pairs mostly keep their manifolds).
+  Every convex pair, and touching ones looser (2026-10-29, Nolan: "Land both"; Box2D 3.2's
+  recycling, its touching flag): boxes, balls and capsules keep one too, and a pair touching after
+  the last step (`pairs.touching`) is kept on `loss + 2 drift <= tolerance` alone, dropping the
+  `moving()` rule: a kept depth is then off by at most one tolerance, no worse than a fresh
+  `collide()` may be. A rebuilt manifold further apart than the margin is dropped for a fresh one.
+  Measured as K tolerances in place of the 1/2 here: K 2 and above left piles unslept, Box2D's 10
+  left contacts out. Box pile's fresh manifolds -72%. `keeps()` is the rule alone; the workers'
+  `look()` asks it and leaves a pair it passes UNSEEN for this thread to rebuild (pair columns
+  `touching`, `cache`, `cachePose`, `cacheLoss` shared), so no look is thrown away; `restore()`
+  sets `loss` 0 (plain pairs' is always 0) so the kept row has the same bits with any worker count.
+  Not for a pair with a jointed body (`_jointHead`, shared with the workers): kept, 32 frictionless
+  ragdolls had 22 of 352 parts asleep at 12 s against 88. Pinned, both orders, with freezing: pile
+  and pyramid 8-10% faster; whole 15 s pile 8.4 -> 5.5 s, all asleep 10.5 s (14.0).
 - **Solver turning terms and locals** (2026-10-22, milestone 16 step 2): Contacts `jac`, `J` = 36
   numbers a point (for n, t1, t2: ra x d, rb x d, Ia⁻¹(ra x d), Ib⁻¹(rb x d)), filled by `lever()` in
   `prepare()`, which also gives the effective masses. `closing()`/`push()` read it; `solve()` and

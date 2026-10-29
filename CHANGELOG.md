@@ -200,6 +200,20 @@ All notable changes to Bearing are recorded here. The format follows
   rocks, 79% of face tests and 91% of edge pairs are skipped, and 70% of rocks' edge axes against
   terrain triangles: hulls on terrain step 21 to 28% faster, the rock pile 1 to 2%. Saved worlds
   are now format 6.
+- Every pair of boxes, balls, capsules and hulls keeps its contact from step to step while its two
+  bodies barely move against each other, not only pairs with a hull, and a pair still touching
+  keeps it until either body has moved half a contact tolerance against the other, so a kept
+  contact's depth is never off by more than a fresh one may be. On the settling 1,000-box pile,
+  72% fewer contacts are found afresh, and the pile and pyramid step 8 to 10% faster. A jointed
+  body's contacts are always found afresh: a ragdoll's light limbs rock onto corners a kept contact
+  misses. The workers leave such pairs alone instead of finding a contact that would be thrown away.
+- Part of an island can stop while the rest of it moves: a body stopped for a second, whose
+  neighbours and theirs are too, is frozen, its contacts with frozen and static bodies left
+  unsolved, and the whole frozen piece starts again as soon as anything within two contacts of it
+  moves or is set by hand. The settling 1,000-box pile solves 73% of the contact points it did,
+  its 15 s take 19% less time (the last 5 s 62% less), and it is all asleep at 12.5 s instead of
+  14. With both, the pile's 15 s take 35% less time (8.4 to 5.5 s) and it is all asleep at 10.5 s.
+  Saved worlds are now format 7.
 - Joint friction: `friction` on ball joints, hinges and sliders, the most torque (N·m) or force
   (N) the joint resists turning or sliding with, as a stiff hinge does. A hinge's or slider's is
   its motor held at speed 0, to the bit; a ball joint's resists turning every way alike. 32 ragdolls

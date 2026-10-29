@@ -234,7 +234,11 @@ test('a box slides across a flat mesh of 800 triangles exactly as across one box
     const box = slide(false, from, velocity, rotation), mesh = slide(true, from, velocity, rotation);
     let worst = 0;
     for (let i = 0; i < box.length; i++) worst = Math.max(worst, apart(box[i], mesh[i]));
-    assert.ok(worst < 1e-12, `from ${from} at ${velocity}: ${worst} apart`);
+    // Not to the bit: the box floor's pair keeps its manifold while the box
+    // touches it (contact.js, REUSE), a mesh's is found afresh each step.
+    // Measured, the paths part by 3e-8 to 1e-5; held to a fiftieth of the
+    // box's 5 mm contact tolerance.
+    assert.ok(worst < 1e-4, `from ${from} at ${velocity}: ${worst} apart`);
     // It did slide, and stopped where friction says.
     assert.ok(apart(box.at(-1).slice(0, 3), from) > 1, `${from}: moved ${apart(box.at(-1).slice(0, 3), from)}`);
   }

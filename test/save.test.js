@@ -75,18 +75,20 @@ test('the save holds every field of the world: a new one must change FORMAT and 
   // would load without it: save.js's FORMAT must change with the list.
   const fields = Object.keys(new World().save().objects[0].f).sort();
   assert.deepEqual(fields, [
-    '_angular', '_angularDamping', '_awake', '_awakeCount', '_awakeList', '_axes', '_box', '_broadphase', '_catchSteps',
-    '_catches', '_caught', '_ceiling', '_characterCount', '_characterSteps', '_com', '_comGiven', '_contacts', '_damping',
-    '_density', '_destroyed', '_dims', '_epoch', '_events', '_fast', '_force', '_forced', '_forcedSlots', '_frame', '_framed',
-    '_framedCount', '_friction', '_geometry', '_gravity', '_gravityScale', '_ground', '_groundAt', '_impacts', '_inAwake',
-    '_inertia', '_inertiaGiven', '_inner', '_invI', '_invInertia', '_invMass', '_island', '_islandNext', '_islandSteps',
-    '_jointHead', '_jointSteps', '_jointTally', '_joints', '_layers', '_least', '_lock', '_logAt', '_logCount', '_logFloor',
-    '_logLast', '_logSlots', '_mask', '_mass', '_massGiven', '_maxSlope', '_motion', '_movedAt', '_movedOut', '_movedStatics',
-    '_node', '_offset', '_pairEpoch', '_pairs', '_parent', '_position', '_previous', '_reach', '_rest', '_restitution', '_rotation', '_seen',
-    '_seenMark', '_sensed', '_sensedCount', '_sensor', '_sensorCount', '_sensorPasses', '_shape', '_size', '_sleeping', '_slept',
-    '_sleptCount', '_slopeCos', '_slots', '_solverSteps', '_start', '_startQ', '_staticMoved', '_stepCount', '_stepDt',
-    '_stepGiven', '_stepHeight', '_still', '_strays', '_straysAt', '_straysEpoch', '_substeps', '_torque', '_transforms',
-    '_tumbled', '_type', '_velocity', '_wakePending', '_walk',
+    '_angular', '_angularDamping', '_awake', '_awakeCount', '_awakeList', '_axes', '_box', '_broadphase', '_calm',
+    '_catchSteps', '_catches', '_caught', '_ceiling', '_characterCount', '_characterSteps', '_com', '_comGiven',
+    '_contacts', '_damping', '_density', '_destroyed', '_dims', '_epoch', '_events', '_fast', '_force',
+    '_forced', '_forcedSlots', '_frame', '_framed', '_framedCount', '_friction', '_frozen', '_frozenCount',
+    '_geometry', '_gravity', '_gravityScale', '_ground', '_groundAt', '_impacts', '_inAwake', '_inertia',
+    '_inertiaGiven', '_inner', '_invI', '_invInertia', '_invMass', '_island', '_islandNext', '_islandSteps',
+    '_jointHead', '_jointSteps', '_jointTally', '_joints', '_layers', '_least', '_lock', '_logAt', '_logCount',
+    '_logFloor', '_logLast', '_logSlots', '_mask', '_mass', '_massGiven', '_maxSlope', '_motion', '_movedAt',
+    '_movedOut', '_movedStatics', '_node', '_offset', '_pairEpoch', '_pairs', '_parent', '_position', '_previous',
+    '_reach', '_rest', '_restitution', '_rotation', '_seen', '_seenMark', '_sensed', '_sensedCount',
+    '_sensor', '_sensorCount', '_sensorPasses', '_shape', '_size', '_sleeping', '_slept', '_sleptCount', '_slopeCos',
+    '_slots', '_solverSteps', '_start', '_startQ', '_staticMoved', '_stepCount', '_stepDt', '_stepGiven', '_stepHeight',
+    '_still', '_stillReady', '_strays', '_straysAt', '_straysEpoch', '_substeps', '_torque', '_transforms', '_tumbled',
+    '_type', '_velocity', '_wakePending', '_walk',
   ]);
 });
 
@@ -94,7 +96,7 @@ test('load refuses what save() didn\'t write, data of another format, and damage
   assert.throws(() => World.load(null), /^Error: load: data must be what world.save\(\) returned, got null$/);
   assert.throws(() => World.load({ bodies: [] }), /^Error: load: data must be what world.save\(\) returned, got an object$/);
   const data = new World().save();
-  assert.throws(() => World.load({ ...data, format: 0 }), /^Error: load: data is format 0; this Bearing reads format 6$/);
+  assert.throws(() => World.load({ ...data, format: 0 }), /^Error: load: data is format 0; this Bearing reads format 7$/);
   const damaged = JSON.parse(JSON.stringify(data));
   damaged.objects[0].f._slots = { r: 999 };
   assert.throws(() => World.load(damaged), /^Error: load: data is damaged: a link to object 999, of \d+$/);

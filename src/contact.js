@@ -157,8 +157,10 @@ export class Contacts {
     this.wasPlain = 0;
     /** Records taken so far by the workers (see LOOKED): one number, counted atomically. */
     this.taken = new Int32Array(1);
-    /** Where each colour's run of `order` starts, the overflow's last, then the end (graph.js). */
-    this.starts = new Int32Array(COLOURS + 2);
+    /** Where each colour's run of `order` starts, then the overflow's, the resting run's last, then the end (graph.js). */
+    this.starts = new Int32Array(COLOURS + 3);
+    /** Rows before the resting run: those the solver works on (graph.js, RESTING). */
+    this.solved = 0;
     /** One digit's counts while the rows are sorted by slot (graph.js, DIGIT). */
     this.digits = new Int32Array(DIGITS + 1);
     // Every column named here first, as World's are (see there), so _alloc's
@@ -351,8 +353,7 @@ function find(world, pairs, p, a, b, next, tolerance, sensing) {
     parted(world, pairs, p, a, b, next, tolerance, margin);
     return false;
   }
-  const hull = shape[a] === HULL_SHAPE || shape[b] === HULL_SHAPE;
-  if (!hull || !reused(world, pairs, p, a, b, tolerance)) {
+  if (!reused(world, pairs, p, a, b, tolerance, margin)) {
     load(world, a, shapeA);
     load(world, b, shapeB);
     const met = meet(world, a, b, null, null, tolerance, margin);
@@ -361,12 +362,17 @@ function find(world, pairs, p, a, b, next, tolerance, sensing) {
       pairs.forget(p);
       return false;
     }
-    if (hull) remember(world, pairs, p, a, b);
+    remember(world, pairs, p, a, b);
   }
   return true;
 }
 
-/** Pair p as the workers found it (see LOOKED): find()'s answer, from its verdict. */
+/**
+ * Pair p as the workers found it (see LOOKED): find()'s answer, from its
+ * verdict. A pair whose kept manifold may be used again was left UNSEEN by
+ * look(), for find(), so one with a verdict has none it may use: its
+ * manifold is found, as find() would find it, and kept.
+ */
 function took(world, pairs, p, next, verdict) {
   if (verdict === ASKED || (verdict > 0 && next.records[RECORD * (verdict - 1)] === 1)) world._impacts++;
   if (verdict < 0) {
@@ -374,16 +380,16 @@ function took(world, pairs, p, next, verdict) {
     return false;
   }
   restore(next, verdict - 1);
+  remember(world, pairs, p, pairs.a[p], pairs.b[p]);
   return true;
 }
 
 /**
- * REUSE. A hull pair (one body a hull, the other a box, a ball, a capsule
- * or a hull; neither a mesh, a heightfield or one with parts) whose two
- * bodies have barely moved against each other since the narrowphase last
- * looked at it gets that manifold again, rebuilt from where
- * its points sit on each body, instead of being found afresh: Jolt's body pair
- * cache, and parry's try_update_contacts. Most of a settling pile's pairs, and
+ * REUSE. A convex pair (boxes, balls, capsules and hulls; neither a mesh, a
+ * heightfield or one with parts) whose two bodies have barely moved against
+ * each other since the narrowphase last looked at it gets that manifold
+ * again, rebuilt from where its points sit on each body, instead of being
+ * found afresh: Jolt's body pair cache, and parry's try_update_contacts. Most of a settling pile's pairs, and
  * every resting one's, are such pairs. Each point keeps its end on a, in a's
  * frame, and its end on b, in b's frame; rebuilt, the two ends are placed
  * where their bodies are now, the point is midway between them and its
@@ -400,10 +406,12 @@ function took(world, pairs, p, next, verdict) {
  * any other, and one kinematic body set by hand every step costs only its
  * own pairs their kept manifolds, not every pair in the world.
  *
- * Only hull pairs keep one. Measured with every plain pair kept: 1,000
- * hulls, whose collide() is separating axes over faces and edges, ran
- * 27% faster, while boxes, a pyramid and terrain, whose collide() is about
- * as cheap as the rebuild, ran no faster and stored about 300 bytes more a pair.
+ * Every convex pair keeps one. At first only hull pairs did: kept by all
+ * the rules below, boxes, a pyramid and terrain, whose collide() is about as
+ * cheap as the rebuild, ran no faster. Kept while touching by the last rule
+ * alone, the 1,000-box pile's manifolds found afresh fell 72%. The workers
+ * (LOOKED) leave a pair whose kept manifold will do to this thread, which
+ * rebuilds it.
  * Rebuilt or found, a manifold reaches emit() and carry() the same way, so
  * the solver's anchor, twist, slip and warm start see no difference.
  *
@@ -428,6 +436,16 @@ function took(world, pairs, p, next, verdict) {
  *   touch by the step's end, so leaving it out loses nothing. A pair moving
  *   fast enough to need a time of impact (moving > tolerance) never gets here.
  *
+ *   A pair touching after the last step (pairs.touching) is kept on the
+ *   rule below alone, without this one, as Box2D 3.2 keeps a touching
+ *   pair's manifold within its recycle distance: a point it lacks is one
+ *   collide() left out while the bodies were in touch, not one still to
+ *   come in from beyond the margin, and the kept manifold's deepest point is
+ *   then off by at most the tolerance, no worse than a fresh collide() may
+ *   be. Measured on the 1,000-box pile against looser limits: at 2 and
+ *   more tolerances piles went unslept, and at Box2D's 10 contacts a fresh
+ *   collide() finds were left out.
+ *
  *   loss + 2 drift ≤ tolerance, which holds the first rule in it. collide()
  *   lets a hull's manifold fall short of the exact answer by up to the
  *   tolerance (Manifold.loss): a face kept on a tie separates the hulls that
@@ -443,21 +461,13 @@ function took(world, pairs, p, next, verdict) {
  *   corner a fresh collide() adds; with it, 0.80 and 0.99.
  *
  * The rules are measured against the pose the manifold was found at, not the
- * last step's, so a slow creep can't add up past them unseen.
+ * last step's, so a slow creep can't add up past them unseen. Rebuilt
+ * further apart than the margin, the manifold is dropped for a fresh one:
+ * a contact must be one collide() could find.
  */
-function reused(world, pairs, p, a, b, tolerance) {
-  if (pairs.cache[p] === 0) return false;
+function reused(world, pairs, p, a, b, tolerance, margin) {
+  if (pairs.cache[p] === 0 || !keeps(world, pairs, p, a, b, tolerance)) return false;
   const r = pairs.cache[p] - 1, count = pairs.cachePoints[r];
-  const g = relative(world, a, b), pose = pairs.cachePose, p7 = 7 * r;
-  const ex = POSE[0] - pose[p7], ey = POSE[1] - pose[p7 + 1], ez = POSE[2] - pose[p7 + 2];
-  // The turn since, conj(then) ⊗ now: its vector part is sin(θ/2) along the axis, either way round.
-  const cx = -pose[p7 + 3], cy = -pose[p7 + 4], cz = -pose[p7 + 5], cw = pose[p7 + 6];
-  const rx = POSE[3], ry = POSE[4], rz = POSE[5], rw = POSE[6];
-  const ux = cw * rx + cx * rw + cy * rz - cz * ry;
-  const uy = cw * ry + cy * rw + cz * rx - cx * rz;
-  const uz = cw * rz + cz * rw + cx * ry - cy * rx;
-  const drift = Math.sqrt(ex * ex + ey * ey + ez * ez) + 2 * Math.sqrt(ux * ux + uy * uy + uz * uz) * world._reach[g];
-  if (pairs.cacheLoss[r] + 2 * drift > tolerance || drift + moving(world, a, b) > tolerance) return false;
   const pos = world._position, A = world._axes, a3 = 3 * a, b3 = 3 * b, a9 = 9 * a, b9 = 9 * b;
   const local = pairs.cacheLocal, ln = pairs.cacheNormal, p3 = 3 * r;
   const n = manifold.normal, lx = ln[p3], ly = ln[p3 + 1], lz = ln[p3 + 2];
@@ -492,8 +502,38 @@ function reused(world, pairs, p, a, b, tolerance) {
     }
     manifold.ids[k] = pairs.cacheId[P * r + k];
   }
+  // Kept further apart than the margin: a fresh collide() might find nothing,
+  // and a contact must be one it could find (test/broadphase.test.js), so it decides.
+  if (least(manifold) > margin) return false;
   shifted = false;
   return true;
+}
+
+/**
+ * Whether pair p's kept manifold may be used again, by REUSE's rules, from
+ * the pose of a and b against each other now and the one it was found at.
+ * It reads only the step's columns and the cache, so the workers ask it too
+ * (look()).
+ */
+function keeps(world, pairs, p, a, b, tolerance) {
+  const r = pairs.cache[p] - 1, pose = pairs.cachePose, p7 = 7 * r;
+  const g = relative(world, a, b);
+  const ex = POSE[0] - pose[p7], ey = POSE[1] - pose[p7 + 1], ez = POSE[2] - pose[p7 + 2];
+  // The turn since, conj(then) ⊗ now: its vector part is sin(θ/2) along the axis, either way round.
+  const cx = -pose[p7 + 3], cy = -pose[p7 + 4], cz = -pose[p7 + 5], cw = pose[p7 + 6];
+  const rx = POSE[3], ry = POSE[4], rz = POSE[5], rw = POSE[6];
+  const ux = cw * rx + cx * rw + cy * rz - cz * ry;
+  const uy = cw * ry + cy * rw + cz * rx - cx * rz;
+  const uz = cw * rz + cz * rw + cx * ry - cy * rx;
+  const drift = Math.sqrt(ex * ex + ey * ey + ez * ez) + 2 * Math.sqrt(ux * ux + uy * uy + uz * uz) * world._reach[g];
+  if (pairs.cacheLoss[r] + 2 * drift > tolerance) return false;
+  // Not a jointed body's, as none freezes (see FREEZING in world.js): a
+  // light limb rocks against its joints, and a kept manifold missed the
+  // corner it rocked onto, so 32 ragdolls left 22 of 352 parts asleep at
+  // 12 s, against 88 found afresh (ragsleep, 2026-10-29); with this, as many.
+  if (world._jointHead[a] !== 0 || world._jointHead[b] !== 0) return false;
+  // Touching after the last step, the first rule is enough (see REUSE).
+  return pairs.touching[p] === 1 || drift + moving(world, a, b) <= tolerance;
 }
 
 /** Keeps the manifold just found for pair p, for reused(); not one found at the moment of impact. */
@@ -773,8 +813,12 @@ let asked = false;
 // body and its island's, which no looked-at pair has, and a removed pair's
 // verdict moves with it (Pairs._move). So the manifolds, the order they are
 // emitted in and the impulses carried onto them are those one thread finds.
-// A pair the workers left (any other kind, or no record free) is found here,
-// as before. Meshes, heightfields, hulls and parts are objects in this
+// A pair the workers left (any other kind, no record free, or one whose
+// kept manifold will do, which this thread rebuilds: see REUSE) is found
+// here, as before. Whether it will do they ask as this thread would, from
+// the bodies and the pair's own kept row and touching flag, which only
+// taking that pair changes (a row given back moves another pair's row, not
+// what is in it). Meshes, heightfields, hulls and parts are objects in this
 // thread's memory only, so are always found here.
 const UNSEEN = 0, APART = -1, MISSED = -2, ASKED = -3;
 /** A record: whether a time of impact was asked for, point count, normal, ids, separations, points, whether shifted, the shifts. */
@@ -880,6 +924,9 @@ function emit(world, next, p, a, b, mf, sign, tolerance, sub, partA, partB, key)
 function restore(c, r) {
   const R = c.records, o = RECORD * r, n = R[o + 1];
   manifold.count = n;
+  // Only plain pairs have records, and collide() never leaves them short of
+  // exact: remember() keeps 0, whatever pair this thread found last.
+  manifold.loss = 0;
   manifold.normal[0] = R[o + 2]; manifold.normal[1] = R[o + 3]; manifold.normal[2] = R[o + 4];
   for (let k = 0; k < n; k++) {
     manifold.ids[k] = R[o + 5 + k];
@@ -917,6 +964,8 @@ function look(world, pairs, c, p, epoch) {
   if (box[a6] > box[b6 + 3] || box[b6] > box[a6 + 3] || box[a6 + 1] > box[b6 + 4]
     || box[b6 + 1] > box[a6 + 4] || box[a6 + 2] > box[b6 + 5] || box[b6 + 2] > box[a6 + 5]) return APART;
   const tolerance = Math.min(world._size[a], world._size[b]) * PIXEL;
+  // Its kept manifold will do: this thread rebuilds it, and a look would be thrown away.
+  if (pairs.cache[p] !== 0 && keeps(world, pairs, p, a, b, tolerance)) return UNSEEN;
   const margin = world._motion[a] + world._motion[b] + tolerance;
   load(world, a, shapeA);
   load(world, b, shapeB);
@@ -1021,6 +1070,7 @@ export function store(world, c) {
   // pair's manifolds then come together, in order.
   for (let f = 0; f < c.count; f++) {
     const m = c.row[f];
+    if (m >= c.solved) continue;   // resting: its pair keeps what it had
     slipped(world, c, m);
     const p = c.pair[m], sub = c.sub[m];
     if (sub < 0) {
@@ -1250,8 +1300,32 @@ function basis(c, m) {
  * in either is awake by now, or static, whose stays zero.
  */
 export function inertias(world) {
-  const list = world._awakeList, n = world._awakeCount;
-  for (let i = 0; i < n; i++) inverseInertia(world, list[i]);
+  const list = world._awakeList, n = world._awakeCount, frozen = world._frozen;
+  // A frozen body is as heavy as the floor to the solver (World._freeze).
+  for (let i = 0; i < n; i++) {
+    const s = list[i];
+    if (frozen[s] !== 0) world._invI.fill(0, s * 6, s * 6 + 6);
+    else inverseInertia(world, s);
+  }
+}
+
+/**
+ * The resting rows (graph.js, RESTING), between frozen or static bodies:
+ * not solved, so what touched() reads is set as the solve would leave it,
+ * their bodies not moving: the gap they were found at, and pushing with the
+ * impulse they keep.
+ */
+export function rest(c) {
+  for (let m = c.solved; m < c.count; m++) {
+    let least = Infinity;
+    for (let k = 0; k < c.points[m]; k++) {
+      const i = m * P + k;
+      if (c.separation[i] < least) least = c.separation[i];
+      c.maxNormalImpulse[i] = c.normalImpulse[i];
+      c.relativeVelocity[i] = 0;
+    }
+    c.gap[m] = least;
+  }
 }
 
 /**
@@ -1264,8 +1338,8 @@ export function prepare(world, c) {
   const jobs = world._jobs;
   // A manifold on a part reads the Part (core()), an object in this thread's
   // memory only, so a step with one prepares on this thread.
-  if (jobs !== null && c.onParts === 0) jobs.run(PREPARE, world, c, 0, c.count);
-  else prepareRows(world, c, 0, c.count);
+  if (jobs !== null && c.onParts === 0) jobs.run(PREPARE, world, c, 0, c.solved);
+  else prepareRows(world, c, 0, c.solved);
 }
 
 /** prepare() for rows from..to-1: each row's own, reading only what the step has fixed. */
@@ -1530,7 +1604,7 @@ export function makeSoft(hertz, zeta, h, out = soft) {
 export function warmStart(world, c) {
   const jobs = world._jobs;
   if (jobs === null || !jobs.live) {
-    warmRows(world, c, 0, c.count);
+    warmRows(world, c, 0, c.solved);
     return;
   }
   const starts = c.starts;
@@ -1708,7 +1782,7 @@ export function gapOf(world, c, m) {
 export function solve(world, c, h, bias, known = false) {
   const jobs = world._jobs;
   if (jobs === null || !jobs.live) {
-    solveRows(world, c, h, bias, known, 0, c.count);
+    solveRows(world, c, h, bias, known, 0, c.solved);
     return;
   }
   // What solveRows reads besides the rows and columns, for the workers' own
@@ -2078,9 +2152,10 @@ export const WORK = {
   columns: [
     '_position', '_rotation', '_velocity', '_angular', '_start', '_dims', '_shape', '_invMass', '_invI',
     '_box', '_motion', '_size', '_reach', '_awake', '_type', '_framed', '_sensor', '_gravityScale', '_axes',
+    '_jointHead',
   ],
   /** The pair list's columns a look reads, and its verdicts (see LOOKED). */
-  pairs: ['a', 'b', 'checked', 'verdict'],
+  pairs: ['a', 'b', 'checked', 'verdict', 'touching', 'cache', 'cachePose', 'cacheLoss'],
 };
 
 /** Whether this step has a colour worth the workers, by their `least` (see Jobs.begin). */
@@ -2157,7 +2232,7 @@ export function restitution(world, c, gravity) {
   // coloured, being once a step and only for bouncy manifolds.
   for (let f = 0; f < c.count; f++) {
     const m = c.row[f], e = c.restitution[m];
-    if (e === 0) continue;
+    if (e === 0 || m >= c.solved) continue;
     const threshold = Math.sqrt(2 * gravity * c.tolerance[m]);
     const a = c.a[m], b = c.b[m], a3 = a * 3, b3 = b * 3, m3 = 3 * m;
     const nx = c.normal[m3], ny = c.normal[m3 + 1], nz = c.normal[m3 + 2];

@@ -344,3 +344,31 @@ test('the same scene twice gives the same bits through sleeping and waking', () 
   assert.deepEqual(a.transforms, b.transforms);
   assert.equal(a._awakeCount, b._awakeCount);
 });
+
+test('part of an island freezes while the rest moves, and thaws whole when touched or switched off', () => {
+  const world = new World();
+  ground(world);
+  const boxes = stack(world, 0, 6);
+  // A ball spun in place on top keeps the island awake for good.
+  const ball = world.addBody({ shape: 'sphere', radius: 0.25, position: [0, 6.25, 0] });
+  const spin = (seconds) => { for (let i = 0; i < seconds * 60; i++) { ball.setAngularVelocity(0, 5, 0); world.step(1 / 60); } };
+  spin(3);
+  // The four boxes two or more contacts from the ball stop exactly; the two under it don't.
+  assert.deepEqual(boxes.map((b) => world._frozen[b.slot] !== 0), [true, true, true, true, false, false]);
+  assert.ok(awake(boxes));
+  assert.deepEqual(boxes[0].velocity, [0, 0, 0]);
+  const at = boxes[0].position;
+  spin(1);
+  assert.deepEqual(boxes[0].position, at);
+  // Set by hand, one body thaws the whole piece in the next step.
+  boxes[0].setVelocity(0, 0, 0);
+  world.step(1 / 60);
+  assert.equal(world._frozenCount, 0);
+  spin(3);
+  assert.equal(world._frozenCount, 4);
+  // Off means off: switching sleeping off thaws everything, and nothing freezes after.
+  world.sleeping = false;
+  assert.equal(world._frozenCount, 0);
+  spin(3);
+  assert.equal(world._frozenCount, 0);
+});

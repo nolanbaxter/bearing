@@ -809,7 +809,7 @@ stepping exactly as the saved world would have.
 Returns: a new [`World`](#world), its own: changing it changes nothing in the world it was saved
 from, or the data.
 
-Throws: `load: data must be what world.save() returned, got …`; `load: data is format …; this Bearing reads format 6`; `load: data is damaged: …`.
+Throws: `load: data must be what world.save() returned, got …`; `load: data is format …; this Bearing reads format 7`; `load: data is damaged: …`.
 
 ```js
 const checkpoint = world.save();
@@ -935,8 +935,8 @@ if (ball.alive) ball.setVelocity(0, 5, 0);
 ### `body.asleep` → `boolean`
 
 `true` while the body is asleep: at rest, and left out of steps until something disturbs it. A
-static body never is. Read only: a body is woken by whatever disturbs it, never by hand. See
-[Sleeping](#sleeping).
+static body never is, and nor is a frozen one, stopped while the rest of its island moves. Read
+only: a body is woken by whatever disturbs it, never by hand. See [Sleeping](#sleeping).
 
 Throws: `asleep: this world was destroyed`; `asleep: this body was removed`; `body.asleep is read only`.
 
@@ -1785,6 +1785,16 @@ tune; [`world.sleeping`](#world-sleeping) switches it off.
   force or impulse; [`setBody`](#world-setbody); removing a body it rests on or that rests on it;
   moving or changing a static body it touches; changing [`world.gravity`](#world-gravity). A
   stack woken by a touch is held up in that same step.
+- **Part of an island can stop while the rest moves.** A body that has been stopped for a second,
+  as above, and whose neighbours and their neighbours have too, is frozen: its velocities are set
+  to exactly zero, nothing moves it, and its contacts with other frozen bodies or static ones are
+  not solved, while the rest of its island goes on. It is still awake: [`body.asleep`](#body-asleep)
+  is `false`, its contacts and events are kept, and [`world.moved()`](#world-moved) leaves it out
+  once it has stopped. The whole frozen piece starts moving again, in the same step, as soon as
+  anything within two contacts of it stops being stopped, or anything is set on any body of it.
+  Bodies with a joint and characters never freeze, and nothing does with sleeping off. On a
+  settling pile of 1,000 boxes this solved 73% of the contact points it did before, and took 19%
+  less time over 15 s.
 - **What it costs.** A sleeping body is not moved, bounded, filed or solved, and its contacts are
   not looked at. A world whose bodies are all asleep steps in a few microseconds, whatever its
   size.
@@ -1794,6 +1804,11 @@ tolerance over a second squared (0.01 m/s² for a 1 m box), can fall asleep befo
 box on a slope within a twentieth of a degree of where friction holds it stays put. Nudge it, or
 switch sleeping off. A heap sleeps only when all of it has stopped, so one corner still settling
 faster than a pixel a second keeps the whole heap awake until it, too, comes to rest.
+
+A frozen body two or more contacts from anything moving doesn't notice the load on it change, as
+a sleeping one doesn't: it answers motion, not force. A body added, or set by hand, wakes what it
+touches, so what a program does is always seen; a change that reaches a frozen body only as a
+push through bodies that don't move, which a game rarely has, is not.
 
 <a id="queries"></a>
 ## Queries
