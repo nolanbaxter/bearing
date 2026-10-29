@@ -75,7 +75,7 @@
 // down and through. Points clipping makes on the seam are still left out: the
 // corner holds the shape.
 
-import { Shape, Manifold, Placed, SPHERE, CAPSULE, HULL, TRIANGLE, MAX_POINTS } from './collide.js';
+import { Shape, Manifold, Placed, LOOSE, SPHERE, CAPSULE, HULL, TRIANGLE, MAX_POINTS } from './collide.js';
 import { closest, Closest } from './gjk.js';
 import { FLAT, ONE_SIDED, triangleNormal } from './mesh.js';
 import { resized } from './core/slots.js';
@@ -779,6 +779,9 @@ function hull(b, t, margin, tolerance, out) {
   }
   const e = h.edges, E = e.length / 2;
   edges();
+  // The hull's ball, taken in by LOOSE (collide.js), or none, and the best face.
+  const c = H.center, loose = LOOSE * (Math.abs(c[0]) + Math.abs(c[1]) + Math.abs(c[2]) + H.reach);
+  const r = H.inner > loose ? H.inner - loose : -Infinity, best = Math.max(faceT, faceB);
   let edgeSep = -Infinity, ex = 0, ey = 0, ez = 0, edgeK = -1, edgeE = -1;
   for (let k = 0; k < E; k++) {
     const i = 3 * e[2 * k], j = 3 * e[2 * k + 1];
@@ -791,8 +794,14 @@ function hull(b, t, margin, tolerance, out) {
       if (!(l > PARALLEL * lu * EL[te])) continue;
       mx /= l; my /= l; mz /= l;
       // The triangle past the hull along m, or along -m: whichever is apart more, and that way round.
+      // The hull's corners reach past its ball, so neither can be by more
+      // than the triangle is past the ball: below the best face, the axis
+      // can't be taken, tie or pass the margin, and its pass over the
+      // corners is skipped (collide.js, INSCRIBED BALLS).
+      const down = low(mx, my, mz), rise = low(-mx, -my, -mz), mc = mx * c[0] + my * c[1] + mz * c[2];
+      if (Math.max(down - mc, rise + mc) - r < best) continue;
       hullSpan(mx, my, mz);
-      const plus = low(mx, my, mz) - hi, minus = low(-mx, -my, -mz) + lo;
+      const plus = down - hi, minus = rise + lo;
       // The hull's farthest along m, after it is turned: hi along m, -lo along -m.
       let top = hi;
       if (minus > plus) { mx = -mx; my = -my; mz = -mz; top = -lo; }

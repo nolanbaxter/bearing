@@ -51,9 +51,11 @@ import { COLOURS, DIGITS } from './graph.js';
  * (mesh.js, FOLDS): data of format 3 has none, and its meshes would stop the
  * first step that touched them. 5 since joints have friction (joints.js, the
  * friction column): data of format 4 has none, and its joints would load
- * without a value for it.
+ * without a value for it. 6 since a hull keeps the radius of a ball inside
+ * it (hull.js, inner), which separating axes read: data of format 5 has
+ * none.
  */
-export const FORMAT = 5;
+export const FORMAT = 6;
 
 /** The classes a world holds, by the name their objects are written under. */
 const CLASSES = { Slots, Broadphase, Tree, Pairs, Memory, Contacts, Joints, Forest, Events, Mesh, Heightfield, Hull, Parts, Part };

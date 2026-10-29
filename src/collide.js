@@ -1243,6 +1243,56 @@ function boxEdge(x, i, nx, ny, nz, s) {
 // sides for up to four points reduced as boxes' are, and two edges give one
 // point. Apart within the margin with nothing clipped, the hulls are nearest
 // at a corner or an edge's end, and GJK finds where.
+//
+// INSCRIBED BALLS (Catto, "Inscribed spheres", box2d.org, September 2026;
+// Box3D's b3TestEdgeCandidateSorted). Each hull holds a ball about its
+// centre (Hull's inner), and no axis n parts the hulls by more than b's ball
+// lets it: b's lowest corner along n is at most n·cb - rb. So a face of a
+// with b's centre less than s + rb above its plane can't part them by s, and
+// nor can an edge of a, whose axes run along its arc, if n·(cb - e), e its
+// corner, stays under s + rb all along the arc; b's faces and edges the same
+// way round. Each skip is of an axis shown to come out below one already
+// measured, a best face's: it can't be the one taken, nor tie with it, nor
+// pass the margin, so what is found is the same to the bit. A hull's faces
+// are measured first at the one the other's centre stands most above, so
+// the rest have a high mark to fall under. Each ball is taken in by LOOSE
+// first, for rounding.
+
+/**
+ * What a ball is taken in by before it may skip an axis, as a share of the
+ * pair's centres' coordinates and reaches. An edge axis's direction is good
+ * to about 2^-52 / PARALLEL = 2^-25, so a corner taken as a hull's farthest
+ * along it can be short by 2^-25 of the hulls' reach; the rest is a few
+ * roundings of 2^-52 of the coordinates. 2^-16 is 512 times the worst of
+ * that, and a millionth of a 10 cm rock's at the origin: nothing a skip
+ * needs is lost.
+ */
+export const LOOSE = 1 / 65536;   // 2^-16
+
+/**
+ * An arc whose ends are within this of parallel, as 1 - c², is never
+ * skipped: its largest n·D is worked out through 1 / (1 - c²), and below
+ * 2^-26 the rounding of c (2^-52) would carry into it by more than 2^-26 of
+ * D, near what LOOSE allows. Two faces of a hull that near flat are rare.
+ */
+const NEARLY = 1 / 67108864;   // 2^-26
+
+/**
+ * Whether n·D can reach `bound` for some unit n on the arc from unit n1 to
+ * unit n2, given a1 = n1·D, a2 = n2·D and c = n1·n2. Along the arc n·D is
+ * largest at an end, or where it turns, which it does between the ends when
+ * lo >= c hi (Box3D's b3TestEdgeCandidateSorted); there it is
+ * sqrt(hi² + u² / (1 - c²)), u = lo - c hi, taken by its square root rather
+ * than compared squared, so a bound near 0 isn't decided by rounding.
+ */
+function reaches(a1, a2, c, bound) {
+  const hi = a1 > a2 ? a1 : a2, lo = a1 > a2 ? a2 : a1;
+  if (!(hi < bound)) return true;
+  const s = 1 - c * c;
+  if (!(s >= NEARLY)) return true;
+  const u = lo - c * hi;
+  return u >= 0 && !(Math.sqrt(hi * hi + u * u / s) < bound);
+}
 
 /** A unit cube's hull: a box against a hull is placed as this, scaled. */
 const CUBE = build([-0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5,
@@ -1264,6 +1314,9 @@ export class Placed {
     /** Per edge, the normal of the face on its second side crossed with the first's: the arc's axis. */
     this.arcs = new Float64Array(36);
     this.center = new Float64Array(3);
+    /** The radius of a ball about center inside it (Hull's inner), and how far its corners reach from center. */
+    this.inner = 0;
+    this.reach = 0;
     // For a body's own (see fresh()): the step and epoch it was placed at.
     this.step = -1;
     this.epoch = -1;
@@ -1295,6 +1348,8 @@ export class Placed {
     if (this.arcs.length < 3 * E) this.arcs = new Float64Array(grown(3 * E));
     const A = s.axes, c = s.center, half = s.half, v = this.v, p = this.planes;
     this.center[0] = c[0]; this.center[1] = c[1]; this.center[2] = c[2];
+    this.inner = box ? Math.min(half[0], half[1], half[2]) : h.inner;
+    this.reach = box ? Math.sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2]) : h.reach;
     for (let i = 0; i < V; i++) {
       let x = hv[3 * i], y = hv[3 * i + 1], z = hv[3 * i + 2];
       if (box) { x *= 2 * half[0]; y *= 2 * half[1]; z *= 2 * half[2]; }
@@ -1335,6 +1390,9 @@ export class Placed {
 const placedA = new Placed(), placedB = new Placed();
 // For hullHull's edge loop: each of b's faces' normals against one of a's arcs.
 let sideB = new Float64Array(16);
+// For hullHull's skips: how far the other hull's centre is above each face of
+// a and of b, and which of b's edges can reach.
+let aboveA = new Float64Array(16), aboveB = new Float64Array(16), reachB = new Uint8Array(16);
 // GJK's answer, for the hulls' fallbacks: the shape gjk.js's Closest has,
 // made here so this module needs nothing of gjk.js while it loads.
 const near = { distance: 0, a: new Float64Array(3), b: new Float64Array(3) };
@@ -1348,19 +1406,54 @@ function mix(kind, i, j, k) {
 function hullHull(a, b, margin, tolerance, out) {
   const A = a.placed !== null ? a.placed.fresh(a) : placedA.set(a);
   const B = b.placed !== null ? b.placed.fresh(b) : placedB.set(b);
-  const ha = A.hull, hb = B.hull, pa = A.planes, pb = B.planes;
+  const ha = A.hull, hb = B.hull, pa = A.planes, pb = B.planes, ca = A.center, cb = B.center;
   const FA = ha.planes.length / 4, FB = hb.planes.length / 4;
-  // a's faces: how far b's lowest corner is above each.
+  // The balls, taken in by LOOSE; none (-Infinity, nothing skipped) if that
+  // leaves nothing, as when the centre isn't inside.
+  const loose = LOOSE * (Math.abs(ca[0]) + Math.abs(ca[1]) + Math.abs(ca[2]) + Math.abs(cb[0]) + Math.abs(cb[1])
+    + Math.abs(cb[2]) + A.reach + B.reach);
+  const ra = A.inner > loose ? A.inner - loose : -Infinity, rb = B.inner > loose ? B.inner - loose : -Infinity;
+  if (aboveA.length < FA) aboveA = new Float64Array(grown(FA));
+  if (aboveB.length < FB) aboveB = new Float64Array(grown(FB));
+  // a's faces: how far b's lowest corner is above each. The face b's centre
+  // is most above is measured first, then the rest in order, each only if b's
+  // ball lets it beat the best so far; that first face is measured as it is
+  // in the loop, so the best and the first to reach it come out as before.
+  let top = 0;
+  for (let f = 0; f < FA; f++) {
+    aboveA[f] = pa[4 * f] * cb[0] + pa[4 * f + 1] * cb[1] + pa[4 * f + 2] * cb[2] - pa[4 * f + 3];
+    if (aboveA[f] > aboveA[top]) top = f;
+  }
+  const firstA = B.lowest(pa[4 * top], pa[4 * top + 1], pa[4 * top + 2]) - pa[4 * top + 3];
+  if (firstA > margin) return;
   let faceA = -Infinity, fa = 0;
   for (let f = 0; f < FA; f++) {
-    const s = B.lowest(pa[4 * f], pa[4 * f + 1], pa[4 * f + 2]) - pa[4 * f + 3];
-    if (s > margin) return;
+    let s = firstA;
+    if (f !== top) {
+      if (aboveA[f] - rb < Math.max(faceA, firstA)) continue;
+      s = B.lowest(pa[4 * f], pa[4 * f + 1], pa[4 * f + 2]) - pa[4 * f + 3];
+      if (s > margin) return;
+    }
     if (s > faceA) { faceA = s; fa = f; }
   }
+  // b's faces, the same way, and also skipped if they can't beat a's best:
+  // b's best face is only read if it beats a's (below), and one that can't
+  // isn't it.
+  top = 0;
+  for (let f = 0; f < FB; f++) {
+    aboveB[f] = pb[4 * f] * ca[0] + pb[4 * f + 1] * ca[1] + pb[4 * f + 2] * ca[2] - pb[4 * f + 3];
+    if (aboveB[f] > aboveB[top]) top = f;
+  }
+  const firstB = A.lowest(pb[4 * top], pb[4 * top + 1], pb[4 * top + 2]) - pb[4 * top + 3];
+  if (firstB > margin) return;
   let faceB = -Infinity, fb = 0;
   for (let f = 0; f < FB; f++) {
-    const s = A.lowest(pb[4 * f], pb[4 * f + 1], pb[4 * f + 2]) - pb[4 * f + 3];
-    if (s > margin) return;
+    let s = firstB;
+    if (f !== top) {
+      if (aboveB[f] - ra < Math.max(faceB, firstB, faceA)) continue;
+      s = A.lowest(pb[4 * f], pb[4 * f + 1], pb[4 * f + 2]) - pb[4 * f + 3];
+      if (s > margin) return;
+    }
     if (s > faceB) { faceB = s; fb = f; }
   }
   // Pairs of edges whose arcs cross. b's normals are turned round, since the
@@ -1369,11 +1462,29 @@ function hullHull(a, b, margin, tolerance, out) {
   const EA = ea.length / 2, EB = eb.length / 2;
   if (sideB.length < FB) sideB = new Float64Array(grown(FB));
   const side = sideB;
+  // A pair can't beat the best face if either edge can't: b's against a's
+  // ball, along b's arc (the axis turned round), from b's corner; a's
+  // against b's ball, along a's arc, from a's corner. An edge pair below the
+  // best face changes nothing: only an edge beating it is ever read.
+  const best = Math.max(faceA, faceB);
+  if (reachB.length < EB) reachB = new Uint8Array(grown(EB));
+  let reachable = 0;
+  for (let j = 0; j < EB; j++) {
+    const l = 4 * sb[2 * j], r = 4 * sb[2 * j + 1], p = 3 * eb[2 * j];
+    const dx = ca[0] - vb[p], dy = ca[1] - vb[p + 1], dz = ca[2] - vb[p + 2];
+    const can = reaches(pb[l] * dx + pb[l + 1] * dy + pb[l + 2] * dz, pb[r] * dx + pb[r + 1] * dy + pb[r + 2] * dz,
+      pb[l] * pb[r] + pb[l + 1] * pb[r + 1] + pb[l + 2] * pb[r + 2], best + ra);
+    reachB[j] = can ? 1 : 0;
+    if (can) reachable++;
+  }
   let edgeSep = -Infinity, ei = -1, ej = -1, enx = 0, eny = 0, enz = 0;
-  for (let i = 0; i < EA; i++) {
+  for (let i = 0; i < EA && reachable > 0; i++) {
     const l = 4 * sa[2 * i], r = 4 * sa[2 * i + 1];
-    const ax = arcA[3 * i], ay = arcA[3 * i + 1], az = arcA[3 * i + 2];
     const u = 3 * ea[2 * i], w = 3 * ea[2 * i + 1];
+    const dx = cb[0] - va[u], dy = cb[1] - va[u + 1], dz = cb[2] - va[u + 2];
+    if (!reaches(pa[l] * dx + pa[l + 1] * dy + pa[l + 2] * dz, pa[r] * dx + pa[r + 1] * dy + pa[r + 2] * dz,
+      pa[l] * pa[r] + pa[l + 1] * pa[r + 1] + pa[l + 2] * pa[r + 2], best + rb)) continue;
+    const ax = arcA[3 * i], ay = arcA[3 * i + 1], az = arcA[3 * i + 2];
     const ux = va[w] - va[u], uy = va[w + 1] - va[u + 1], uz = va[w + 2] - va[u + 2];
     const ul = Math.sqrt(ux * ux + uy * uy + uz * uz);
     // The first test reads only b's two faces at an edge against this arc, so
@@ -1381,6 +1492,7 @@ function hullHull(a, b, margin, tolerance, out) {
     // borders: F dot products where it was 2E (12 corners: 20 against 60).
     for (let g = 0; g < FB; g++) side[g] = pb[4 * g] * ax + pb[4 * g + 1] * ay + pb[4 * g + 2] * az;
     for (let j = 0; j < EB; j++) {
+      if (reachB[j] === 0) continue;
       const cba = side[sb[2 * j]], dba = side[sb[2 * j + 1]];
       if (!(cba * dba < 0)) continue;
       const bx = arcB[3 * j], by = arcB[3 * j + 1], bz = arcB[3 * j + 2];
@@ -1392,7 +1504,7 @@ function hullHull(a, b, margin, tolerance, out) {
       if (!(len > PARALLEL * ul * Math.sqrt(tx * tx + ty * ty + tz * tz))) continue;
       let nx = unit[0], ny = unit[1], nz = unit[2];
       // Away from a: the edge is on a's surface, its centre inside.
-      if (nx * (va[u] - A.center[0]) + ny * (va[u + 1] - A.center[1]) + nz * (va[u + 2] - A.center[2]) < 0) {
+      if (nx * (va[u] - ca[0]) + ny * (va[u + 1] - ca[1]) + nz * (va[u + 2] - ca[2]) < 0) {
         nx = -nx; ny = -ny; nz = -nz;
       }
       const s = nx * (vb[p] - va[u]) + ny * (vb[p + 1] - va[u + 1]) + nz * (vb[p + 2] - va[u + 2]);

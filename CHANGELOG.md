@@ -194,6 +194,12 @@ All notable changes to Bearing are recorded here. The format follows
   The same results to the bit, and every scene faster: the pile and pyramid about 20 to 25%, hulls
   23 to 29%, terrain 15 to 19%, raycasts 11 to 14%, ragdolls 9%. A loaded world is made the same
   way, and a test fails if any of its stores falls back to a hash table.
+- Hulls skip the separating axes that can't win (Catto's inscribed spheres): each hull keeps the
+  radius of a ball inside it, and a face, or an edge along its whole arc, that the ball proves comes
+  out below the best face already measured isn't measured. The same results to the bit. On 1,000
+  rocks, 79% of face tests and 91% of edge pairs are skipped, and 70% of rocks' edge axes against
+  terrain triangles: hulls on terrain step 21 to 28% faster, the rock pile 1 to 2%. Saved worlds
+  are now format 6.
 - Joint friction: `friction` on ball joints, hinges and sliders, the most torque (N·m) or force
   (N) the joint resists turning or sliding with, as a stiff hinge does. A hinge's or slider's is
   its motor held at speed 0, to the bit; a ball joint's resists turning every way alike. 32 ragdolls

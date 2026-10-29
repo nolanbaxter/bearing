@@ -603,6 +603,52 @@ test('overlapping hulls, and hulls and boxes, always touch, at least as deep as 
   assert.ok(tried > 2000, `${tried} poses overlapped`);
 });
 
+test("the inscribed balls skip only axes that can't win: the same contacts, to the bit, with them taken away", () => {
+  // collide.js skips a face or edge axis its balls prove comes out below the
+  // best face, with the balls taken in by LOOSE for rounding. A skip that
+  // could win or tie would change which axis is taken, or its separation:
+  // compared here against the same hulls with no ball, nothing skipped, over
+  // poses apart, touching and deep, near the origin and 1 km from it.
+  const rnd = numbers(11), with_ = new Manifold(), without = new Manifold();
+  const rock = () => {
+    const pts = [];
+    for (let k = 0; k < 12; k++) pts.push(rnd() - 0.5, (rnd() - 0.5) * 0.8, rnd() - 0.5);
+    const h = build(pts), v = h.vertices, c = [0, 0, 0];
+    for (let i = 0; i < v.length; i++) c[i % 3] += v[i] / (v.length / 3);
+    return build(Array.from(v, (x, i) => x - c[i % 3]));
+  };
+  const bare = (h) => Object.assign(Object.create(Object.getPrototypeOf(h)), h, { inner: -Infinity });
+  const turned = () => {
+    const q = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5, rnd() - 0.5], l = Math.sqrt(q[0] ** 2 + q[1] ** 2 + q[2] ** 2 + q[3] ** 2);
+    return q.map((x) => x / l);
+  };
+  const same = (m, n, what) => {
+    assert.equal(m.count, n.count, `${what}: count`);
+    assert.ok(Object.is(m.loss, n.loss), `${what}: loss ${m.loss} against ${n.loss}`);
+    for (let k = 0; k < (m.count > 0 ? 3 : 0); k++) assert.ok(Object.is(m.normal[k], n.normal[k]), `${what}: normal`);
+    for (let k = 0; k < m.count; k++) {
+      assert.ok(Object.is(m.separations[k], n.separations[k]) && m.ids[k] === n.ids[k], `${what}: point ${k}`);
+      for (let j = 0; j < 3; j++) assert.ok(Object.is(m.points[3 * k + j], n.points[3 * k + j]), `${what}: point ${k}`);
+    }
+  };
+  let touching = 0;
+  for (let k = 0; k < 4000; k++) {
+    const a = new Shape(), b = new Shape(), a0 = new Shape(), b0 = new Shape();
+    const ha = rock(), hb = k % 4 === 0 ? null : rock();
+    a.kind = a0.kind = HULL; a.hull = ha; a0.hull = bare(ha);
+    if (hb === null) { b.kind = b0.kind = BOX; b.half.set([0.45, 0.3, 0.35]); b0.half.set([0.45, 0.3, 0.35]); } else { b.kind = b0.kind = HULL; b.hull = hb; b0.hull = bare(hb); }
+    const far = k % 2 ? 1000 : 0, r = 0.3 + rnd() * 0.9, t = [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5], l = Math.sqrt(t[0] ** 2 + t[1] ** 2 + t[2] ** 2);
+    const qa = turned(), qb = turned();
+    a.place(far, 0, 0, qa); a0.place(far, 0, 0, qa);
+    b.place(far + t[0] / l * r, t[1] / l * r, t[2] / l * r, qb); b0.place(far + t[0] / l * r, t[1] / l * r, t[2] / l * r, qb);
+    const n = collide(a, b, 0.02, 0.002, with_);
+    collide(a0, b0, 0.02, 0.002, without);
+    same(with_, without, `pose ${k}`);
+    if (n > 0) touching++;
+  }
+  assert.ok(touching > 1000, `${touching} poses touched`);
+});
+
 test('hulls and compounds give the same result twice, to the bit', () => {
   const run = () => {
     const rnd = numbers(41), world = new World();

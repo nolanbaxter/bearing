@@ -343,6 +343,15 @@ These were made with Nolan and override the rules below where they differ.
   short of exact (a face kept on a tie, a corner left out), so a kept manifold is never worse than
   a fresh one. Not for impact manifolds, meshes, heightfields or parts; boxes measured no faster.
   Hull pile 30% faster pinned; FORMAT 3.
+  Inscribed spheres (2026-10-29, from the speed research; Catto's post and Box3D; same bits):
+  `Hull.inner`, the least over faces of the lowest corner along its normal, is a ball about the
+  centre inside the hull (`Placed.inner`/`reach`; a box its smallest half-size). In `hullHull` and
+  hull-against-triangle edge axes, a face, or an edge along its whole arc (`reaches()`), that the
+  ball proves strictly below the best separation found is skipped, so it can't win or tie. Balls
+  shrunk by `LOOSE` (2^-16 of the pair's coordinates and reaches) for rounding; arcs of nearly
+  parallel normals (`NEARLY`, 2^-26) never skipped; nothing skipped if the centre isn't inside.
+  FORMAT 6. Skipped on 1,000 rocks: 79% of faces, 91% of edge pairs. Pinned: hulls on terrain
+  21-28%, rock pile 1-2% (its pairs mostly keep their manifolds).
 - **Solver turning terms and locals** (2026-10-22, milestone 16 step 2): Contacts `jac`, `J` = 36
   numbers a point (for n, t1, t2: ra x d, rb x d, Ia⁻¹(ra x d), Ib⁻¹(rb x d)), filled by `lever()` in
   `prepare()`, which also gives the effective masses. `closing()`/`push()` read it; `solve()` and

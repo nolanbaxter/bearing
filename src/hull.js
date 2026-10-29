@@ -81,6 +81,25 @@ export class Hull {
       size = Math.min(size, planes[4 * f + 3] - low);
     }
     this.size = size;
+    // The radius of a ball about the origin that fits inside it (Catto's
+    // inscribed sphere, Box3D's innerRadius), or 0 or less if the origin
+    // isn't inside: separating axes skip any axis it proves can't win
+    // (collide.js, hullHull). Not the faces' d: a merged face's corners can
+    // lie a little under its plane, and the faces' own polygons, which are
+    // made of corners, are what bound the hull. Every point of face f's
+    // polygon is at least its lowest corner's n·x along n, so at least that
+    // far from the origin: a ball that much in touches no face, and the
+    // faces close round it. A body's hull has the origin at its centre of
+    // mass, well inside.
+    let inner = Infinity;
+    for (let f = 0; f < F; f++) {
+      const nx = planes[4 * f], ny = planes[4 * f + 1], nz = planes[4 * f + 2];
+      for (let i = start[f]; i < start[f + 1]; i++) {
+        const v = 3 * loops[i];
+        inner = Math.min(inner, nx * vertices[v] + ny * vertices[v + 1] + nz * vertices[v + 2]);
+      }
+    }
+    this.inner = inner;
   }
 
   get faceCount() { return this.start.length - 1; }
