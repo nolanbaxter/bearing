@@ -3,10 +3,12 @@
 //
 // Needed because ES modules and fetch() are blocked over file://. Node's own
 // http and fs cover it, so there is no dependency here and never needs to be
-// one. It is Winding's serve.js, less the cross-origin isolation headers:
-// Bearing needs no SharedArrayBuffer, and those headers would stop the demo
-// loading Winding from jsDelivr unless the CDN opted in. Winding's job system
-// runs inline without them, with identical results.
+// one. It is Winding's serve.js, with the cross-origin isolation headers only
+// under /bench/ and /src/: Bearing's workers need SharedArrayBuffer, which a
+// browser gives only a cross-origin isolated page, and the comparison has to
+// measure them. The demo goes without, since the headers would stop it
+// loading Winding from jsDelivr unless the CDN opted in; Bearing runs on one
+// thread there, with identical results.
 //
 // Not part of the package: package.json's `files` publishes src/ and the API
 // reference only.
@@ -44,10 +46,17 @@ createServer(async (req, res) => {
     }
 
     const body = await readFile(full);
-    res.writeHead(200, {
+    const headers = {
       'content-type': TYPES[extname(full)] ?? 'application/octet-stream',
       'cache-control': 'no-store',
-    }).end(body);
+    };
+    // Isolated, so the comparison's workers get shared memory; src/ too, since
+    // a worker's module is loaded from there.
+    if (path.startsWith('/bench/') || path.startsWith('/src/')) {
+      headers['cross-origin-opener-policy'] = 'same-origin';
+      headers['cross-origin-embedder-policy'] = 'require-corp';
+    }
+    res.writeHead(200, headers).end(body);
   } catch {
     res.writeHead(404).end('not found');
   }

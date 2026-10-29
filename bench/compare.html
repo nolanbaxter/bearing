@@ -31,8 +31,11 @@ pre { white-space: pre-wrap; font: 13px/1.5 ui-monospace, monospace; background:
 // restitution 0, gravity 9.81 m/s², steps of 1/60 s, the same starting
 // positions and rotations, and the same 200 m floor.
 // EACH ENGINE'S OWN, as its users get it: solver iterations or substeps,
-// contact margins, sleep thresholds. Bearing: 8 substeps. Rapier: its SIMD
-// build, its fastest. Jolt: its single-threaded build, as Bearing has no
+// contact margins, sleep thresholds. Bearing: 8 substeps, with its workers
+// ('auto', which needs this page cross-origin isolated: serve.js does that
+// under /bench/) and again on one thread, so a single-threaded engine is
+// also met on one thread. Rapier: its SIMD
+// build, its fastest. Jolt: its single-threaded build, as Bearing had no
 // workers yet, with its contact limit raised as far as this build's fixed
 // scratch memory allows (see make()). cannon-es: its sweep-and-prune broadphase and sleeping, which
 // its own docs advise for many bodies; its defaults, a test of every pair and
@@ -68,7 +71,7 @@ import { hullMass } from '../src/shapes.js';
 const q = new URLSearchParams(location.search);
 const RUNS = Number(q.get('runs') ?? 3);
 
-const VERSIONS = { Bearing: 'this checkout', Rapier: '0.21.0, SIMD', Jolt: '1.1.0, single-threaded', 'cannon-es': '0.20.0' };
+const VERSIONS = { Bearing: 'this checkout, workers auto', 'Bearing (1 thread)': 'this checkout, workers 0', Rapier: '0.21.0, SIMD', Jolt: '1.1.0, single-threaded', 'cannon-es': '0.20.0' };
 const CDN = 'https://cdn.jsdelivr.net/npm/';
 
 // ---- the engines: each makes the scene and steps it, nothing else ----
@@ -77,7 +80,7 @@ const ENGINES = {
   Bearing: {
     load: () => import('../src/bearing.js'),
     make(B, scene) {
-      const world = new B.World();
+      const world = new B.World(this.options);
       world.addBody({ type: 'static', size: [200, 1, 200], position: [0, -0.5, 0] });
       // The defaults are the scene: a 1 m box, water's density (1,000 kg), friction 0.5.
       const shape = scene.hull ? { shape: 'hull', vertices: scene.hull } : {};
@@ -99,6 +102,12 @@ const ENGINES = {
         free: () => world.destroy(),
       };
     },
+  },
+
+  // The same, with workers 0.
+  'Bearing (1 thread)': {
+    load: () => import('../src/bearing.js'),
+    make(B, scene) { return ENGINES.Bearing.make.call({ options: { workers: 0 } }, B, scene); },
   },
 
   Rapier: {
@@ -592,7 +601,7 @@ async function main() {
   }
   const header = [
     `## ${new Date().toISOString().slice(0, 10)}, ${navigator.userAgent}`,
-    `Logical processors: ${navigator.hardwareConcurrency}. Median of ${RUNS} run${RUNS === 1 ? '' : 's'} (the 10,000-box pile, one); engines take turns in blocks of ${BLOCK} steps.`,
+    `Logical processors: ${navigator.hardwareConcurrency}; cross-origin isolated: ${globalThis.crossOriginIsolated === true ? 'yes' : 'no, so Bearing ran on one thread throughout'}. Median of ${RUNS} run${RUNS === 1 ? '' : 's'} (the 10,000-box pile, one); engines take turns in blocks of ${BLOCK} steps.`,
     `Versions: ${names.map((n) => `${n} ${VERSIONS[n]}`).join('; ')}.`,
   ].join('\n');
   out.textContent = header;
