@@ -360,20 +360,41 @@ export interface GlbOptions {
  */
 export function readGlb(bytes: ArrayBuffer | ArrayBufferView, options?: GlbOptions): { vertices: Float64Array; indices: Uint32Array };
 
-export type JointType = 'fixed' | 'ball' | 'hinge' | 'slider' | 'distance';
+export type JointType = 'fixed' | 'ball' | 'hinge' | 'slider' | 'distance' | 'rotation';
 
 /** What every joint takes. */
-interface JointCommon {
+interface JointBase {
   /** The body. Its angle, position and motor are measured against b. */
   a: Body;
   /** What a is held to; null, or left out, for a point in the world that never moves. */
   b?: Body | null;
+  /** Whether a and b still collide with each other. Default false. */
+  collide?: boolean;
+}
+
+/** What every joint that holds a point takes: all but a rotation joint. */
+interface JointCommon extends JointBase {
   /** World space, m: where the joint is, where the bodies are now. Default midway between their centres (a distance joint's, a's centre). */
   anchor?: Vec3;
   /** Where it is on b, or in the world with no b, if not the same point: a distance joint's other end. */
   anchorB?: Vec3;
-  /** Whether a and b still collide with each other. Default false. */
-  collide?: boolean;
+}
+
+/** A motor's drive to a target, as a spring: hinges, sliders, ball and rotation joints. */
+interface Drive {
+  /** The most the motor may push: N·m, or N for a slider. 0, the default, is the motor off: a target with no motorForce does nothing. */
+  motorForce?: number;
+  /** Hz: how stiff the drive to target is. Default 0, as stiff as the solver goes. */
+  frequency?: number;
+  /** 1, the default, settles without overshooting; 0 has no damping of its own. */
+  dampingRatio?: number;
+  /** The most the joint resists a turning (sliding) against b while the motor is off: N·m, or N. Default 0, none. */
+  friction?: number;
+}
+
+/** A ball or rotation joint's: a's turn against b, about b's own axes (the world's with no b), [x, y, z, w], any length; [0, 0, 0, 1] is as joined. null, the default, is none. */
+interface TurnDrive extends Drive {
+  target?: Quat | null;
 }
 
 interface Turning {
@@ -385,24 +406,20 @@ interface Turning {
   max?: number | null;
 }
 
-interface Driven extends Turning {
-  /** rad/s about axis, or m/s along it, that the motor drives a at against b. */
+interface Driven extends Turning, Drive {
+  /** rad/s about axis, or m/s along it, that the motor drives a at against b; with a target, how fast the target moves. */
   motorSpeed?: number;
-  /** The most the motor may push: N·m, or N. 0, the default, is no motor. */
-  motorForce?: number;
-  /** The most the joint resists a turning (sliding) against b while the motor is off: N·m, or N. Default 0, none. */
-  friction?: number;
+  /** A hinge's angle, radians, -π to π, or a slider's position, m, measured as min and max are, that the motor drives a to. null, the default, is none: the motor drives a speed. */
+  target?: number | null;
 }
 
 /** Welded: nothing free. */
 export interface FixedJointOptions extends JointCommon { type: 'fixed' }
 /** Any turn about its anchor; min and max limit its twist about axis, cone its swing. */
-export interface BallJointOptions extends JointCommon, Turning {
+export interface BallJointOptions extends JointCommon, Turning, TurnDrive {
   type?: 'ball';
   /** How far axis may swing, radians, 0 to π. Default π, none. */
   cone?: number;
-  /** The most the joint resists a turning against b, any way: N·m. Default 0, none. */
-  friction?: number;
 }
 /** Turns about axis; min and max limit its angle, radians, -π to π. */
 export interface HingeJointOptions extends JointCommon, Driven { type: 'hinge' }
@@ -423,7 +440,16 @@ export interface DistanceJointOptions extends JointCommon {
   dampingRatio?: number;
 }
 
-export type JointOptions = FixedJointOptions | BallJointOptions | HingeJointOptions | SliderJointOptions | DistanceJointOptions;
+/** Holds how a is turned against b (or the world), leaving where it is free; with a motor and a target, drives it there. */
+export interface RotationJointOptions extends JointBase, TurnDrive {
+  type: 'rotation';
+  /** For cone: world space; needn't be unit length. Default [0, 1, 0]. */
+  axis?: Vec3;
+  /** How far axis may swing from where it was, radians, 0 to π, while the motor or friction lets it turn. Default π, none. */
+  cone?: number;
+}
+
+export type JointOptions = FixedJointOptions | BallJointOptions | HingeJointOptions | SliderJointOptions | DistanceJointOptions | RotationJointOptions;
 
 /** What world.setJoint takes: any of addJoint's options but a and b. Which fit is checked against the joint's type when called. */
 export interface JointChanges {
@@ -435,6 +461,8 @@ export interface JointChanges {
   max?: number | null;
   length?: number;
   cone?: number;
+  /** A number for a hinge or slider, a rotation for a ball or rotation joint; null for none. */
+  target?: number | Quat | null;
   motorSpeed?: number;
   motorForce?: number;
   friction?: number;
@@ -443,20 +471,32 @@ export interface JointChanges {
   collide?: boolean;
 }
 
-interface JointInfoCommon {
+interface JointInfoBase {
   a: Body;
   b: Body | null;
+  collide: boolean;
+}
+
+interface JointInfoCommon extends JointInfoBase {
   /** Where a's end is now, world space. */
   anchor: [number, number, number];
-  collide: boolean;
+}
+
+/** A drive's settings, as jointOf gives them. */
+interface DriveInfo {
+  motorForce: number;
+  friction: number;
+  frequency: number;
+  dampingRatio: number;
 }
 
 /** What world.jointOf returns: a copy, in the form addJoint takes. min and max only if given. */
 export type JointInfo =
   | (JointInfoCommon & { type: 'fixed'; anchorB?: [number, number, number] })
-  | (JointInfoCommon & { type: 'ball'; anchorB?: [number, number, number]; axis: [number, number, number]; min?: number; max?: number; cone: number; friction: number })
-  | (JointInfoCommon & { type: 'hinge' | 'slider'; anchorB?: [number, number, number]; axis: [number, number, number]; min?: number; max?: number; motorSpeed: number; motorForce: number; friction: number })
-  | (JointInfoCommon & { type: 'distance'; anchorB: [number, number, number]; length: number; min?: number; max?: number; frequency: number; dampingRatio: number });
+  | (JointInfoCommon & DriveInfo & { type: 'ball'; anchorB?: [number, number, number]; axis: [number, number, number]; min?: number; max?: number; cone: number; target: [number, number, number, number] | null })
+  | (JointInfoCommon & DriveInfo & { type: 'hinge' | 'slider'; anchorB?: [number, number, number]; axis: [number, number, number]; min?: number; max?: number; target: number | null; motorSpeed: number })
+  | (JointInfoCommon & { type: 'distance'; anchorB: [number, number, number]; length: number; min?: number; max?: number; frequency: number; dampingRatio: number })
+  | (JointInfoBase & DriveInfo & { type: 'rotation'; axis: [number, number, number]; cone: number; target: [number, number, number, number] | null });
 
 export interface WorldOptions {
   /** m/s², default [0, -9.81, 0]. */

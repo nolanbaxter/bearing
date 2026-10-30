@@ -4,7 +4,8 @@
 
 import assert from 'node:assert/strict';
 import { World, Joint } from '../src/bearing.js';
-import { suite, test } from './test.js';
+import { suite, test, testAsync } from './test.js';
+import { cores, sharedMemory } from '../src/core/jobs.js';
 
 suite('joints');
 
@@ -767,4 +768,286 @@ test('the same joints give the same bits', () => {
     return Array.from(world.transforms);
   };
   assert.deepEqual(run(), run());
+});
+
+// ---- motors driven to a target (milestone 17) ----
+
+/** A 1 m, 10 kg rod lying along x from the origin, with I = 10 (1 + 0.01) / 12 + 10 · 0.5² = 3.3417 kg·m² about its end. */
+const ROD_I = 10 * (1 + 0.01) / 12 + 10 * 0.25;
+/** The angle a body has turned about z, for a body turned about z only. */
+const roll = (q) => 2 * Math.atan2(q[2], q[3]);
+/** How far apart two rotations are, in radians. */
+const between = (q, r) => 2 * Math.acos(Math.min(1, Math.abs(q[0] * r[0] + q[1] * r[1] + q[2] * r[2] + q[3] * r[3])));
+
+/** A rod on a joint of `type` driven to as it was made, with gravity as given; returns the world and the rod. */
+function drivenRod(type, drive, gravity = [0, 0, 0]) {
+  const world = new World({ gravity, sleeping: false });
+  const rod = world.addBody({ size: [1, 0.1, 0.1], position: [0.5, 0, 0], mass: 10 });
+  const at = type === 'rotation' ? {} : { anchor: [0, 0, 0] };
+  const target = type === 'hinge' ? 0 : [0, 0, 0, 1];
+  const joint = world.addJoint({ type, a: rod, ...at, ...(type === 'hinge' ? { axis: [0, 0, 1] } : {}), target, ...drive });
+  return { world, rod, joint };
+}
+
+test('a pushed limb springs back at its frequency, and settles without overshoot at dampingRatio 1', () => {
+  // The rod knocked at 1 rad/s off its target, gravity off: on a hinge and a
+  // ball joint it turns about its end, on a rotation joint about its centre.
+  // The drive's spring is made from each row's own effective mass (Box2D's
+  // soft step), so all three bounce at f, whatever they move. The soft step
+  // is the implicit Euler of the spring over the substep h, whose period is
+  // long by about (2πf h)² / 2: measured 1.00008 s at 1 Hz and 0.50016 s at
+  // 2 Hz (h = 1/480 s), within (2πf h)² of 1/f here.
+  for (const type of ['hinge', 'ball', 'rotation']) for (const f of [1, 2]) {
+    const { world, rod } = drivenRod(type, { motorForce: 1e4, frequency: f, dampingRatio: 0 });
+    rod.setAngularVelocity(0, 0, 1);
+    const crossings = [];
+    let prev = 0;
+    for (let s = 1; s <= 600; s++) {
+      world.step(DT);
+      const a = roll(rod.rotation);
+      if (prev > 0 && a <= 0) crossings.push((s - 1 + prev / (prev - a)) * DT);
+      prev = a;
+    }
+    const period = (crossings[crossings.length - 1] - crossings[0]) / (crossings.length - 1), wh = 2 * Math.PI * f * DT / 8;
+    assert.ok(Math.abs(period * f - 1) < wh * wh, `${type} at ${f} Hz: period ${period} s`);
+    // Critically damped, it comes back and stops, never swinging past.
+    const damped = drivenRod(type, { motorForce: 1e4, frequency: f, dampingRatio: 1 });
+    damped.rod.setAngularVelocity(0, 0, 1);
+    let least = 0, most = 0;
+    for (let s = 1; s <= 300; s++) {
+      damped.world.step(DT);
+      const a = roll(damped.rod.rotation);
+      least = Math.min(least, a);
+      most = Math.max(most, a);
+    }
+    assert.ok(most > 0.005 && least === 0, `${type} at ${f} Hz, damped: out to ${most}, back past it to ${least}`);
+    assert.ok(Math.abs(roll(damped.rod.rotation)) < 1e-9, `${type} at ${f} Hz, damped: settled at ${roll(damped.rod.rotation)}`);
+  }
+});
+
+test('a motor too weak for its load gives; strong enough, it holds', () => {
+  // The rod level on a hinge at its end, driven to 0 against gravity's
+  // 49.05 N·m. With 0.9 of that it sags and swings; with 1.1 it holds. A
+  // drive with no frequency is as stiff as a stop pushed back (JOINT_STIFFNESS,
+  // a quarter of the 480 Hz substep rate): it sags by load / (I (2π 120)²),
+  // 2.6e-5 rad. On a 5 Hz spring, by load / (I (2π 5)²), 0.0149 rad.
+  const load = 10 * 9.81 * 0.5;
+  const run = (k, frequency) => {
+    const { world, rod } = drivenRod('hinge', { motorForce: load * k, frequency }, [0, -9.81, 0]);
+    let worst = 0;
+    for (let s = 1; s <= 300; s++) {
+      world.step(DT);
+      if (s > 120) worst = Math.max(worst, Math.abs(roll(rod.rotation)));
+    }
+    return { worst, now: roll(rod.rotation) };
+  };
+  assert.ok(run(0.9, 0).worst > 0.3, 'too weak, it sags');
+  assert.ok(run(0.5, 5).worst > 1, 'much too weak, it falls');
+  const hard = run(1.1, 0), sprung = run(1.1, 5);
+  near(hard.now, -load / (ROD_I * (2 * Math.PI * 120) ** 2), 1e-6, 'the stiff drive sags');
+  near(sprung.now, -load / (ROD_I * (2 * Math.PI * 5) ** 2), 0.0149 * 0.01, 'the 5 Hz drive sags');
+  assert.ok(sprung.worst - Math.abs(sprung.now) < 1e-9, 'and holds still there');
+});
+
+test('a moving target with motorSpeed is followed without lagging', () => {
+  // A target set each step to where an animation turning at 1 rad/s is as the
+  // step starts. Without motorSpeed, the drive trails it by about a step's
+  // turn (1/60 rad); told how fast it moves, Bearing carries the target on
+  // through the step and the rod keeps up: measured 1.4e-7 rad stiff, 6.6e-7
+  // on a 5 Hz spring.
+  for (const frequency of [0, 5]) {
+    const lag = (motorSpeed) => {
+      const { world, rod, joint } = drivenRod('hinge', { motorForce: 1e4, frequency, motorSpeed });
+      let worst = 0;
+      for (let s = 1; s <= 120; s++) {
+        world.setJoint(joint, { target: (s - 1) * DT });
+        world.step(DT);
+        if (s > 60) worst = Math.max(worst, Math.abs(roll(rod.rotation) - s * DT));
+      }
+      return worst;
+    };
+    const without = lag(0), with_ = lag(1);
+    assert.ok(without > 0.01, `at ${frequency} Hz without motorSpeed it lags only ${without}`);
+    assert.ok(with_ < 1e-5, `at ${frequency} Hz with motorSpeed it lags ${with_}`);
+  }
+  // A target set once and given a speed turns steadily, its angle kept within -π to π.
+  const { world, rod, joint } = drivenRod('hinge', { motorForce: 1e4, motorSpeed: 2 });
+  for (let s = 0; s < 120; s++) world.step(DT);
+  const at = world.jointOf(joint).target;
+  near(at, 4 - 2 * Math.PI, 1e-12, 'the target, carried on 4 rad,');
+  const off = roll(rod.rotation) - at;
+  near(Math.atan2(Math.sin(off), Math.cos(off)), 0, 1e-5, 'and the rod with it, off by');   // measured 1.2e-6
+});
+
+// bench/compare.html's ragdoll, standing: its shins' soles on the floor.
+const RAG_PARTS = [[[0.32, 0.2, 0.2], [0, 1, 0]], [[0.36, 0.45, 0.22], [0, 1.325, 0]], [[0.2, 0.24, 0.22], [0, 1.67, 0]],
+  [[0.28, 0.1, 0.1], [-0.32, 1.5, 0]], [[0.26, 0.08, 0.08], [-0.59, 1.5, 0]], [[0.28, 0.1, 0.1], [0.32, 1.5, 0]],
+  [[0.26, 0.08, 0.08], [0.59, 1.5, 0]], [[0.14, 0.44, 0.14], [-0.09, 0.68, 0]], [[0.12, 0.44, 0.12], [-0.09, 0.24, 0]],
+  [[0.14, 0.44, 0.14], [0.09, 0.68, 0]], [[0.12, 0.44, 0.12], [0.09, 0.24, 0]]];
+const RAG_JOINTS = [['ball', 1, 0, [0, 1.1, 0]], ['ball', 2, 1, [0, 1.55, 0]], ['ball', 3, 1, [-0.18, 1.5, 0]],
+  ['hinge', 4, 3, [-0.46, 1.5, 0], [0, 1, 0]], ['ball', 5, 1, [0.18, 1.5, 0]], ['hinge', 6, 5, [0.46, 1.5, 0], [0, 1, 0]],
+  ['ball', 7, 0, [-0.09, 0.9, 0]], ['hinge', 8, 7, [-0.09, 0.46, 0], [1, 0, 0]], ['ball', 9, 0, [0.09, 0.9, 0]],
+  ['hinge', 10, 9, [0.09, 0.46, 0], [1, 0, 0]]];
+/**
+ * The drives' strength: the whole ragdoll's weight, 98 kg, at a lever of its
+ * own height, 1.77 m, 1,700 N·m. Standing, no joint carries more than what
+ * lies beyond it at a lever no longer than the body, so the drives never give
+ * under its own weight, only to a shove.
+ */
+const RAG_MASS = RAG_PARTS.reduce((m, [s]) => m + s[0] * s[1] * s[2] * 1000, 0), RAG_FORCE = RAG_MASS * 9.81 * 1.77;
+
+/** The ragdoll standing at x, its joints driven to its pose if `motors`, its pelvis kept upright against the world if `balance`. */
+function standing(world, x, motors, balance) {
+  const parts = RAG_PARTS.map(([size, p]) => world.addBody({ size, position: [p[0] + x, p[1] - 0.02, p[2]] }));
+  for (const [type, a, b, p, axis] of RAG_JOINTS) {
+    const drive = motors ? { target: type === 'hinge' ? 0 : [0, 0, 0, 1], motorForce: RAG_FORCE } : {};
+    world.addJoint({ type, a: parts[a], b: parts[b], anchor: [p[0] + x, p[1] - 0.02, p[2]], ...(axis ? { axis } : {}), ...drive });
+  }
+  if (balance) world.addJoint({ type: 'rotation', a: parts[0], target: [0, 0, 0, 1], motorForce: RAG_FORCE });
+  return parts;
+}
+
+test('a ragdoll stands on its motors and holds its pose; without them it falls', () => {
+  // Every joint driven to the pose it was made in, and a rotation joint
+  // keeping the pelvis upright against the world. Measured: no part strays
+  // more than 0.32 mm from where it stood in 10 s, and it sleeps standing.
+  // Shoved at the chest with 60 N·s (0.6 m/s on the whole body), it rocks and
+  // stands again; without the rotation joint, the same shove topples it.
+  const run = (motors, balance, shove) => {
+    const world = new World();
+    world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
+    const parts = standing(world, 0, motors, balance), start = parts.map((b) => [...b.position]);
+    let worst = 0;
+    for (let s = 1; s <= 600; s++) {
+      if (shove && s === 120) parts[1].applyImpulse([shove, 0, 0]);
+      world.step(DT);
+      if (!shove) parts.forEach((b, i) => { worst = Math.max(worst, apart(b.position, start[i])); });
+    }
+    return { worst, head: parts[2].position[1], asleep: parts.every((b) => b.asleep) };
+  };
+  const stands = run(true, true, 0);
+  assert.ok(stands.worst < 0.001, `a part strayed ${(stands.worst * 1000).toFixed(2)} mm`);
+  assert.ok(stands.asleep, 'standing, it sleeps');
+  assert.ok(run(false, false, 0).head < 0.5, 'without motors it collapses');
+  near(run(true, true, 60).head, 1.65, 0.01, 'shoved, it stands again: its head at');
+  assert.ok(run(true, false, 60).head < 1, 'shoved without its balance, it falls');
+});
+
+test('a rotation joint leaves where a body is free and holds how it is turned', () => {
+  // A box turned and spun, held by a rotation joint to the world, falls as a
+  // free body does, to the bit (the joint pushes nothing but turning), and
+  // turns not at all. Driven with 1 N·m and a cone of 0.3 rad, knocked at
+  // 5 rad/s, its axis stops at the cone.
+  const q = [0.1, 0.2, 0.3, Math.sqrt(1 - 0.14)];
+  const world = new World({ sleeping: false });
+  const held = world.addBody({ size: [1, 0.5, 0.3], position: [0, 10, 0], rotation: q, angularVelocity: [3, -2, 5] });
+  const free = world.addBody({ size: [1, 0.5, 0.3], position: [5, 10, 0], rotation: q });
+  world.addJoint({ type: 'rotation', a: held });
+  const coned = world.addBody({ size: [0.3, 1, 0.3], position: [10, 10, 0], angularVelocity: [5, 0, 0] });
+  world.addJoint({ type: 'rotation', a: coned, target: [0, 0, 0, 1], motorForce: 1, cone: 0.3 });
+  let turned = 0, swing = 0;
+  for (let s = 0; s < 60; s++) {
+    world.step(DT);
+    turned = Math.max(turned, between(held.rotation, q));
+    const up = turned1(coned.rotation);
+    swing = Math.max(swing, Math.acos(Math.min(1, up)));
+  }
+  assert.deepEqual([held.position[0], held.position[2]], [0, 0]);
+  assert.equal(held.position[1], free.position[1]);
+  assert.ok(turned < 1e-12, `turned ${turned} rad`);
+  assert.ok(swing < 0.3 + 0.01, `swung ${swing} rad past a cone of 0.3`);
+  assert.ok(coned.position[1] < 6, 'and falls as it swings');
+});
+/** The y component of a body's own y axis in the world: how upright it is. */
+function turned1(q) {
+  return 1 - 2 * (q[0] * q[0] + q[2] * q[2]);
+}
+
+test('a target with no motorForce does nothing; no target, no target work', () => {
+  // Off means off: hinge and slider motors, friction of every kind, springs'
+  // settings given to joints with no target, and targets with no force, do no
+  // target work and step to the same bits as without them.
+  const run = (o = {}) => {
+    const world = new World({ sleeping: false });
+    const wheel = world.addBody({ shape: 'sphere', radius: 0.5, mass: 10 });
+    world.addJoint({ type: 'hinge', a: wheel, anchor: [0, 0, 0], axis: [0, 0, 1], motorSpeed: 1, motorForce: 20, ...o.hinge });
+    const bob = world.addBody({ shape: 'sphere', radius: 0.05, position: [-1, 0, 0], angularVelocity: [1, 2, 3] });
+    world.addJoint({ a: bob, anchor: [-2, 0, 0], friction: 0.3, ...o.ball });
+    const crate = world.addBody({ position: [4, 2, 0], velocity: [1, -1, 0] });
+    world.addJoint({ type: 'slider', a: crate, axis: [1, -1, 0], friction: 4000, ...o.slider });
+    const post = world.addBody({ position: [0, 5, 3], angularVelocity: [0, 1, 0] });
+    world.addJoint({ type: 'rotation', a: post, ...o.rotation });
+    for (let s = 0; s < 120; s++) world.step(DT);
+    return { drives: world._drives, bits: [...world.transforms, ...world._velocity, ...world._angular, ...world._joints.impulse] };
+  };
+  const plain = run();
+  assert.equal(plain.drives, 0);
+  const spring = { frequency: 3, dampingRatio: 0.2 };
+  const sprung = run({ hinge: spring, ball: spring, slider: spring, rotation: spring });
+  assert.equal(sprung.drives, 0);
+  assert.deepEqual(sprung.bits, plain.bits, 'springs\' settings with no target change nothing');
+  const aimed = run({ ball: { target: [0, 0, 0.1, 1] }, slider: { target: 0.2 }, rotation: { target: [0.1, 0, 0, 1] } });
+  assert.equal(aimed.drives, 0, 'targets with no force');
+  assert.deepEqual(aimed.bits, plain.bits, 'targets with no force change nothing');
+  assert.ok(run({ hinge: { target: 0.2 } }).drives > 0, 'a hinge with a target and a force drives');
+});
+
+test('a driven ragdoll saved mid-drive steps on to the same bits; jointOf and setJoint for targets', () => {
+  const world = new World();
+  world.addBody({ type: 'static', size: [20, 1, 20], position: [0, -0.5, 0] });
+  const parts = standing(world, 0, true, true);
+  const arm = world.addBody({ size: [0.6, 0.1, 0.1], position: [3.3, 2, 0] });
+  const wave = world.addJoint({ type: 'hinge', a: arm, anchor: [3, 2, 0], axis: [0, 0, 1], target: 0, motorSpeed: 1.5, motorForce: 50, frequency: 4 });
+  parts[1].applyImpulse([30, 0, 10]);
+  for (let s = 0; s < 90; s++) world.step(DT);
+  const loaded = World.load(JSON.parse(JSON.stringify(world.save())));
+  for (let s = 0; s < 90; s++) { world.step(DT); loaded.step(DT); }
+  assert.deepEqual(Array.from(loaded.transforms), Array.from(world.transforms));
+  assert.deepEqual(Array.from(loaded._joints.impulse), Array.from(world._joints.impulse));
+  assert.deepEqual(Array.from(loaded._joints.target), Array.from(world._joints.target));
+
+  // jointOf: a hinge's target, carried on by its speed; a ball joint's
+  // normalized; a rotation joint's, with no anchors, copied by addJoint.
+  near(world.jointOf(wave).target, 180 * DT * 1.5 - 2 * Math.PI, 1e-12, 'the hinge\'s target, carried on,');
+  const ball = world.addJoint({ a: parts[2], b: parts[1], target: [0, 0, 2, 0], motorForce: 5, frequency: 2, dampingRatio: 0.5 });
+  const b = world.jointOf(ball);
+  assert.deepEqual([b.target, b.motorForce, b.frequency, b.dampingRatio, 'motorSpeed' in b], [[0, 0, 1, 0], 5, 2, 0.5, false]);
+  const upright = world.addJoint({ type: 'rotation', a: parts[1], target: [0.1, 0, 0, 1], motorForce: 9, cone: 0.5, axis: [0, 0, 1] });
+  const r = world.jointOf(upright);
+  assert.equal('anchor' in r || 'anchorB' in r || 'min' in r || 'max' in r || 'motorSpeed' in r, false);
+  assert.equal(r.cone, 0.5);
+  assert.ok(apart(r.axis, [0, 0, 1]) < 1e-15, `${r.axis}`);
+  // The copy's axis is worked out again from where the chest has turned to, so agrees to rounding.
+  const copy = world.jointOf(world.addJoint(world.jointOf(upright)));
+  assert.ok(apart(copy.axis, r.axis) < 1e-14, `${copy.axis}`);
+  assert.deepEqual({ ...copy, axis: null }, { ...r, axis: null });
+  // setJoint: target null, and back to a speed motor.
+  world.setJoint(wave, { target: null });
+  assert.equal(world.jointOf(wave).target, null);
+});
+
+await testAsync('a ragdoll on its motors steps to the same bits with no workers and with them', async () => {
+  // Joints run on the stepping thread, the contacts on the workers too: 16
+  // driven ragdolls dropped in a heap, every colour handed to the workers.
+  if (!(sharedMemory && cores() > 1)) return console.log('  --  skipped, no workers on this machine');
+  const make = (workers) => {
+    const world = new World({ workers });
+    world.addBody({ type: 'static', size: [40, 1, 40], position: [0, -0.5, 0] });
+    for (let i = 0; i < 16; i++) {
+      const parts = standing(world, (i % 4) * 0.7, true, i % 2 === 0);
+      for (const b of parts) b.setPosition(b.position[0], b.position[1] + 0.3 + (i >> 2) * 1.9, b.position[2] + (i % 3) * 0.2);
+    }
+    return world;
+  };
+  const one = make(0), many = make('auto');
+  many._jobs.least = [1, 1, 1, 1];
+  // In step until the workers have started (the first touch) and are ready.
+  for (let s = 0; s < 120 && many._jobs.control === null; s++) { one.step(DT); many.step(DT); }
+  assert.ok(await many._jobs.ready(), 'the workers never reported ready');
+  for (let s = 0; s < 240; s++) { one.step(DT); many.step(DT); }
+  assert.deepEqual(Array.from(many.transforms), Array.from(one.transforms));
+  assert.ok(many._jobs.parallel > 100, `only ${many._jobs.parallel} dispatches went to the workers`);
+  assert.ok(one._drives > 0);
+  many.destroy();
+  one.destroy();
 });

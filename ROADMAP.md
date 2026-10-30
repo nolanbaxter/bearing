@@ -650,7 +650,7 @@ i7-1260P, ms a step, one thread -> auto: landing 1,000-box pile 24.1 -> 7.4, pyr
 small worlds unchanged. In the browser pane, cross-origin isolated, an awake pile 11.3 -> 4.1 ms.
 Not yet run: Deno, Bun, and the Ryzen 5 5500 (Nolan's).
 
-**17. Pose motors ⬜**
+**17. Pose motors ✅** *(approved and done 2026-10-30)*
 *Concepts:* drives and soft constraints; a spring as a constraint with a frequency and a damping
 ratio; swing and twist; how Jolt's, PhysX's and Box2D's joints drive toward a target.
 Joint motors that pull toward a target, not only a speed: a hinge toward an angle, a slider toward
@@ -664,6 +664,13 @@ the games.
 *Done when:* a ragdoll stands on its motors and holds a pose, a pushed limb springs back at its
 frequency, a motor too weak for its load gives, every drive keeps the same bits on every machine,
 and a world with no target set does no target work.
+*Done (2026-10-30):* `target` on hinges, sliders and ball joints, and the new `'rotation'` joint;
+the drive a soft row (or three, clamped as one ball) pinned to the joint's hold rows, its strength
+`motorForce`, its spring `frequency`/`dampingRatio`, `frequency: 0` the stops' own softness. A
+knocked limb springs back at 1.00008 s a cycle at 1 Hz; the benchmark ragdoll stands on its motors
+within 0.32 mm for 10 s. Joints without a target keep their bits and their time. 100 ragdolls
+standing on their motors, sleeping off: 27-28 ms a step on one thread, 30 with workers (the joints
+run on one thread): milestone 19 starts there.
 
 **18. Joint forces ⬜**
 *Concepts:* constraint impulses as forces; reading results after a step.

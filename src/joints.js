@@ -4,7 +4,8 @@
 // a degree of freedom. A joint takes some away and leaves the rest: a hinge
 // leaves one, turning about its axis; a slider one, moving along it; a ball
 // joint three, every turn about its point; a fixed joint none. A distance
-// joint takes away one, the gap between two points.
+// joint takes away one, the gap between two points; a rotation joint three,
+// every turn, and leaves a's position entirely free.
 //
 // ROWS. Each motion a joint forbids is a row: one number the solver drives to
 // zero, such as how fast two anchors part along x. A row has a Jacobian, the
@@ -34,39 +35,61 @@
 // from the bodies' rotations at every solve pass, so a joint that turns
 // quickly stays exact.
 //
+// DRIVES. A motor given a target is a spring toward it, solved as a row
+// like any other: its speed is asked to be the target's own speed less
+// biasRate times how far the joint is from the target, softened by Box2D's
+// soft step (makeSpring(), a frequency and a damping ratio), and clamped to
+// the motor's force. Pushed from outside, as a torque worked out each frame
+// from the error, a stiff spring overshoots: by the time the torque is
+// applied the error it was worked out from has changed, and stiffer than
+// about the step rate it gains energy each step and blows up. Inside the
+// solver the push is worked out with the row's effective mass, against the
+// velocity the push itself makes, so it is steady at any stiffness, as a
+// contact is: a frequency of 0 is as stiff as the solver goes, as stiff as
+// a stop pushed back (soften()), still no harder than the motor's force.
+// A hinge's or slider's drive is its motor row, pinned to its
+// joint's rows that must hold (PINNED ROWS, below); a ball or rotation
+// joint's is three turning rows solved together (turnDrive()), clamped as
+// one vector, as ball joint friction is.
+//
 // STORAGE. Joints have slots and generational ids as bodies do
 // (core/slots.js), and their data in columns. Each body keeps a list of its
 // joints, through two of these columns, so removing a body can remove its
 // joints, and the pair filter can see that two bodies are joined.
 
-import { fail, show, finite, vec3, direction, oneOf, options, known, readOnly } from './core/check.js';
+import { fail, show, finite, vec3, direction, quat, oneOf, options, known, readOnly } from './core/check.js';
 import { atan2, rotate } from './core/math.js';
 import { Slots, resized, MAX_SLOTS } from './core/slots.js';
 import { Body } from './body.js';
 import { Forest, plant, factorForest, solveForest, inverseSPD, NODE } from './forest.js';
 import { PIXEL } from './contact.js';
 
-export const TYPES = ['fixed', 'ball', 'hinge', 'slider', 'distance'];
+export const TYPES = ['fixed', 'ball', 'hinge', 'slider', 'distance', 'rotation'];
 const FIXED = 0, BALL = 1, HINGE = 2, SLIDER = 3, DISTANCE = 4;
+/** A rotation joint's code: debug.js draws it, holding no point, its own way. */
+export const ROTATION = 5;
 const DYNAMIC = 0;   // World's type code
 const USED = 1;      // Slots' state for a slot in use
 
-const OPTIONS = ['type', 'a', 'b', 'anchor', 'anchorB', 'axis', 'min', 'max', 'length', 'cone',
+const OPTIONS = ['type', 'a', 'b', 'anchor', 'anchorB', 'axis', 'min', 'max', 'length', 'cone', 'target',
   'motorSpeed', 'motorForce', 'friction', 'frequency', 'dampingRatio', 'collide'];
 /** Options every joint has. */
-const SHARED = ['type', 'a', 'b', 'anchor', 'anchorB', 'collide'];
-/** And each type's own; giving one another type has throws. */
+const SHARED = ['type', 'a', 'b', 'collide'];
+/** And each type's own; giving one another type has throws. A rotation joint holds no point, so has no anchors. */
+const DRIVE = ['target', 'motorForce', 'friction', 'frequency', 'dampingRatio'];
 const OWN = [
-  [],
-  ['axis', 'min', 'max', 'cone', 'friction'],
-  ['axis', 'min', 'max', 'motorSpeed', 'motorForce', 'friction'],
-  ['axis', 'min', 'max', 'motorSpeed', 'motorForce', 'friction'],
-  ['length', 'min', 'max', 'frequency', 'dampingRatio'],
+  ['anchor', 'anchorB'],
+  ['anchor', 'anchorB', 'axis', 'min', 'max', 'cone', ...DRIVE],
+  ['anchor', 'anchorB', 'axis', 'min', 'max', 'motorSpeed', ...DRIVE],
+  ['anchor', 'anchorB', 'axis', 'min', 'max', 'motorSpeed', ...DRIVE],
+  ['anchor', 'anchorB', 'length', 'min', 'max', 'frequency', 'dampingRatio'],
+  ['axis', 'cone', ...DRIVE],
 ];
 
-// What `given` records: whether min, max and anchorB were given, or follow
-// their defaults (which for a distance joint follow its length and spring).
-const MIN = 1, MAX = 2, ANCHOR_B = 4;
+// What `given` records: whether min, max, anchorB and a target were given, or
+// follow their defaults (which for a distance joint follow its length and
+// spring; with no target, a motor drives a speed).
+const MIN = 1, MAX = 2, ANCHOR_B = 4, TARGET = 8;
 
 // Where each accumulated impulse is kept, in a joint's 11: the linear and
 // angular impulses as world vectors, then one number per scalar row. A ball
@@ -93,6 +116,10 @@ const COLUMNS = [
   ['friction', Float64Array, 1],
   ['frequency', Float64Array, 1],
   ['dampingRatio', Float64Array, 1],
+  // The target, if `given` has TARGET: a hinge's angle or a slider's position
+  // in the first, a ball or rotation joint's turn of a against b, in b's own
+  // axes (the world's with no b), as a unit quaternion [x, y, z, w].
+  ['target', Float64Array, 4],
   ['collide', Uint8Array, 1],
   ['next', Int32Array, 2],        // the next joint in a's list and in b's, as an edge (2j + side) plus 1
   ['impulse', Float64Array, IMPULSES],
@@ -121,6 +148,13 @@ export const JOINT_DAMPING_RATIO = 2;
 export class Joints {
   constructor() {
     this.slots = new Slots();
+    // Every column named first, then made: an object given more than a dozen
+    // fields by computed name becomes a dictionary (World's FAST PROPERTIES).
+    this.type = null; this.a = null; this.b = null; this.localA = null; this.localB = null;
+    this.frameA = null; this.frameB = null; this.min = null; this.max = null; this.given = null;
+    this.length = null; this.cone = null; this.motorSpeed = null; this.motorForce = null;
+    this.friction = null; this.frequency = null; this.dampingRatio = null; this.target = null;
+    this.collide = null; this.next = null; this.impulse = null; this.list = null;
     for (const [name, Type] of COLUMNS) this[name] = new Type(0);
     /** How many joints are in `list` this step. */
     this.active = 0;
@@ -284,7 +318,7 @@ export function setJoint(world, joint, changes) {
 
   // Everything checked: now written. What a change of shape or stop makes of
   // the impulses the joint remembers is no longer known, so they start over.
-  const limits = spec.min !== base.min || spec.max !== base.max || spec.given !== base.given || spec.cone !== base.cone;
+  const limits = spec.min !== base.min || spec.max !== base.max || (spec.given & (MIN | MAX)) !== (base.given & (MIN | MAX)) || spec.cone !== base.cone;
   if (type !== was || anchor || anchorB || axis) J.impulse.fill(0, j * IMPULSES, j * IMPULSES + IMPULSES);
   else if (limits) { const i = j * IMPULSES; J.impulse[i + LOWER] = 0; J.impulse[i + UPPER] = 0; J.impulse[i + CONE] = 0; }
   J.type[j] = type;
@@ -292,11 +326,13 @@ export function setJoint(world, joint, changes) {
   // A motor or friction switched off pushes no more. Its impulse, kept for
   // the warm start, would otherwise be applied at every substep with no row
   // left to solve it back: a wheel whose motor was turned off went on
-  // speeding up. A fixed joint's ANG holds it together, so only a ball's goes.
+  // speeding up. A fixed joint's ANG holds it together, so only a ball's goes;
+  // a rotation joint's holds it again, with no cone row left to solve.
   const i = j * IMPULSES;
   if (spec.motorForce === 0 && spec.friction === 0) {
     J.impulse[i + MOTOR] = 0;
     if (type === BALL) { J.impulse[i + ANG] = 0; J.impulse[i + ANG + 1] = 0; J.impulse[i + ANG + 2] = 0; }
+    if (type === ROTATION) J.impulse[i + CONE] = 0;
   }
   J.given[j] = spec.given | (J.given[j] & ANCHOR_B) | (anchorB ? ANCHOR_B : 0);
   if (anchor || anchorB) place(world, j, ends[0], ends[1], anchor !== null || anchorB === null, true);
@@ -315,22 +351,23 @@ export function jointOf(world, j) {
   const J = world._joints, type = J.type[j], s = read(J, j);
   const a = J.a[j], b = J.b[j];
   const out = { type: TYPES[type], a: new Body(world, world._slots.id(a)), b: b >= 0 ? new Body(world, world._slots.id(b)) : null };
-  out.anchor = worldAnchor(world, j, 0);
-  if (type === DISTANCE || (J.given[j] & ANCHOR_B) !== 0) out.anchorB = worldAnchor(world, j, 1);
+  if (type !== ROTATION) out.anchor = worldAnchor(world, j, 0);
+  if (type === DISTANCE || (type !== ROTATION && (J.given[j] & ANCHOR_B) !== 0)) out.anchorB = worldAnchor(world, j, 1);
   if (type !== FIXED && type !== DISTANCE) {
     QA.set(world._rotation.subarray(4 * a, 4 * a + 4));
     multiply(QA, 0, J.frameA, 4 * j, QA, 0);
     out.axis = column(QA, 0);
   }
   if (type === DISTANCE) out.length = s.length;
-  if (type !== FIXED) {
+  if (type !== FIXED && type !== ROTATION) {
     if (s.given & MIN) out.min = s.min;
     if (s.given & MAX) out.max = s.max;
   }
-  if (type === BALL) out.cone = s.cone;
-  if (type === HINGE || type === SLIDER) { out.motorSpeed = s.motorSpeed; out.motorForce = s.motorForce; }
-  if (type === BALL || type === HINGE || type === SLIDER) out.friction = s.friction;
-  if (type === DISTANCE) { out.frequency = s.frequency; out.dampingRatio = s.dampingRatio; }
+  if (type === BALL || type === ROTATION) out.cone = s.cone;
+  if (type !== FIXED && type !== DISTANCE) out.target = s.target;
+  if (type === HINGE || type === SLIDER) out.motorSpeed = s.motorSpeed;
+  if (type !== FIXED && type !== DISTANCE) { out.motorForce = s.motorForce; out.friction = s.friction; }
+  if (type !== FIXED) { out.frequency = s.frequency; out.dampingRatio = s.dampingRatio; }
   out.collide = J.collide[j] === 1;
   return out;
 }
@@ -371,17 +408,23 @@ const DEFAULTS = Object.freeze({
   // A ball joint swings freely unless given a cone.
   cone: Math.PI,
   motorSpeed: 0, motorForce: 0,
+  // No target: a motor drives a speed.
+  target: null,
   // Turning freely, as Jolt's, Rapier's and Box2D's joints do unless given it.
   friction: 0,
-  // No spring; given one, it settles without overshooting, as Bearing's
-  // contacts do, unless told to bounce.
+  // No spring: a distance joint a rod, a drive as stiff as it can be. Given
+  // one, it settles without overshooting, as Bearing's contacts do, unless
+  // told to bounce.
   frequency: 0, dampingRatio: 1,
 });
 
 /** A joint's type-specific settings, from its columns. */
 function read(J, j) {
+  const t = 4 * j, turned = J.type[j] === BALL || J.type[j] === ROTATION;
+  const target = (J.given[j] & TARGET) === 0 ? null
+    : turned ? [J.target[t], J.target[t + 1], J.target[t + 2], J.target[t + 3]] : J.target[t];
   return {
-    min: J.min[j], max: J.max[j], given: J.given[j] & (MIN | MAX), length: J.length[j], cone: J.cone[j],
+    min: J.min[j], max: J.max[j], given: J.given[j] & (MIN | MAX | TARGET), length: J.length[j], cone: J.cone[j], target,
     motorSpeed: J.motorSpeed[j], motorForce: J.motorForce[j], friction: J.friction[j], frequency: J.frequency[j], dampingRatio: J.dampingRatio[j],
   };
 }
@@ -390,6 +433,10 @@ function write(J, j, s) {
   J.min[j] = s.min; J.max[j] = s.max; J.length[j] = s.length; J.cone[j] = s.cone;
   J.motorSpeed[j] = s.motorSpeed; J.motorForce[j] = s.motorForce; J.friction[j] = s.friction;
   J.frequency[j] = s.frequency; J.dampingRatio[j] = s.dampingRatio;
+  const t = s.target, o = 4 * j;
+  if (t === null) J.target.fill(0, o, o + 4);
+  else if (typeof t === 'number') { J.target[o] = t; J.target[o + 1] = 0; J.target[o + 2] = 0; J.target[o + 3] = 0; }
+  else J.target.set(t, o);
 }
 
 /** Throws for any option the type doesn't have. */
@@ -413,6 +460,10 @@ function settings(caller, type, o, base, gap) {
     if (typeof c !== 'number' || !(c >= 0 && c <= Math.PI)) fail(caller, `cone must be an angle from 0 to π, in radians, got ${show(c)}`);
     s.cone = c;
   }
+  // null is a value, as for min and max: no target again.
+  if (o.target === null) s.target = null;
+  else if (has('target')) s.target = aim(caller, type, o.target);
+  s.given = (s.given & ~TARGET) | (s.target !== null ? TARGET : 0);
   if (has('motorSpeed')) s.motorSpeed = finite(caller, 'motorSpeed', o.motorSpeed);
   if (has('motorForce')) s.motorForce = atLeastZero(caller, 'motorForce', o.motorForce);
   if (has('friction')) s.friction = atLeastZero(caller, 'friction', o.friction);
@@ -428,6 +479,16 @@ function settings(caller, type, o, base, gap) {
     if (lo > hi) fail(caller, `min must be at most max (${hi}), got ${lo}`);
   }
   return s;
+}
+
+/** A target, checked for its type: an angle for a hinge, metres for a slider, a rotation for a ball or rotation joint, normalized. */
+function aim(caller, type, v) {
+  if (type === HINGE) {
+    if (typeof v !== 'number' || !(v >= -Math.PI && v <= Math.PI)) fail(caller, `target must be from -π to π, in radians, got ${show(v)}`);
+    return v;
+  }
+  if (type === SLIDER) return finite(caller, 'target', v);
+  return quat(caller, 'target', v);
 }
 
 /** A limit, checked for its type: angles for a hinge's or ball joint's turn, metres for a slider's or distance joint's. */
@@ -659,6 +720,13 @@ export function warmStartJoints(world) {
       apply(0, acc[o + MOTOR] + acc[o + LOWER] - acc[o + UPPER]);
     } else if (type === DISTANCE) {
       if (stretch(0) > 0) apply(0, acc[o + AXIAL] + acc[o + LOWER] - acc[o + UPPER]);
+    } else if (type === ROTATION) {
+      // What holds it, or drives it, or its friction: all one angular impulse.
+      angles(acc, o + ANG);
+      if (gives(J, j) && J.cone[j] < Math.PI) {
+        frames(world, j);
+        if (coneAxis(0) >= 0) apply(0, -acc[o + CONE]);
+      }
     } else {
       for (let k = 0; k < 3; k++) {
         point(9 * k, k);
@@ -668,7 +736,7 @@ export function warmStartJoints(world) {
         frames(world, j);
         flatten(acc, o + ANG);
       }
-      if (type === FIXED || type === HINGE || (type === BALL && J.friction[j] > 0)) angles(acc, o + ANG);
+      if (type === FIXED || type === HINGE || (type === BALL && gives(J, j))) angles(acc, o + ANG);
       if (type === HINGE) {
         axle(0);
         apply(0, acc[o + MOTOR] + acc[o + LOWER] - acc[o + UPPER]);
@@ -695,9 +763,10 @@ export function solveJoints(world, h, bias, again = false) {
   for (let i = 0; i < n; i++) {
     const j = list[i], o = j * IMPULSES, type = J.type[j], held = tree[j] !== 0;
     // A fixed joint in a tree has nothing that gives: the forest holds it all.
-    if (held && type === FIXED) continue;
+    // Nor has a rotation joint there, which is only in a tree while it holds.
+    if (held && (type === FIXED || type === ROTATION)) continue;
     base = o;
-    pins = type === FIXED || type === DISTANCE ? 0 : -1;
+    pins = type === FIXED || type === DISTANCE || type === ROTATION ? 0 : -1;
     pinType = type;
     load(world, j);
     geometry(world, j);
@@ -707,20 +776,27 @@ export function solveJoints(world, h, bias, again = false) {
         holdAngles(acc, o, bias);
         holdPoint(acc, o, bias);
         break;
-      case BALL:
-        if (J.friction[j] > 0) ballFriction(J.friction[j] * h, acc, o);
-        if (swings(J, j)) {
+      case BALL: {
+        // Its motor with no target holds it from turning, as friction does: a
+        // hinge's at motorSpeed 0 (driven()), and a ball joint has no speed.
+        const aims = aimed(J, j), most = J.motorForce[j] > 0 ? J.motorForce[j] : J.friction[j];
+        if (aims) {
           frames(world, j);
+          turnDrive(world, J, j, most * h, h, bias, acc, o);
+        } else if (most > 0) ballFriction(most * h, acc, o);
+        if (swings(J, j)) {
+          if (!aims) frames(world, j);
           twistLimits(J, j, acc, o, h, bias);
           if (J.cone[j] < Math.PI) coneLimit(J, j, acc, o, h, bias);
         }
         if (!held) holdPoint(acc, o, bias);
         break;
+      }
       case HINGE:
         frames(world, j);
         if (J.motorForce[j] > 0 || J.friction[j] > 0) {
           axle(0);
-          driven(J, j, h, acc, o);
+          driven(world, j, h, acc, o, bias);
         }
         hingeLimits(J, j, acc, o, h, bias);
         if (!held) {
@@ -733,12 +809,23 @@ export function solveJoints(world, h, bias, again = false) {
         reach();
         if (J.motorForce[j] > 0 || J.friction[j] > 0) {
           slide(0);
-          driven(J, j, h, acc, o);
+          driven(world, j, h, acc, o, bias);
         }
         sliderLimits(J, j, acc, o, h, bias);
         if (!held) {
           holdAngles(acc, o, bias);
           holdLine(acc, o, bias);
+        }
+        break;
+      case ROTATION:
+        frames(world, j);
+        if (gives(J, j)) {
+          const most = J.motorForce[j] > 0 ? J.motorForce[j] : J.friction[j];
+          if (aimed(J, j)) turnDrive(world, J, j, most * h, h, bias, acc, o);
+          else ballFriction(most * h, acc, o);
+          if (J.cone[j] < Math.PI) coneLimit(J, j, acc, o, h, bias);
+        } else {
+          holdAngles(acc, o, bias);
         }
         break;
       default:
@@ -749,8 +836,13 @@ export function solveJoints(world, h, bias, again = false) {
   if (J.forest.count > 0) holdForest(world, h, bias, again);
 }
 
-/** Whether joint slot j has rows that must hold, and so can be in a tree: all but a distance joint with room to stretch. */
+/**
+ * Whether joint slot j has rows that must hold, and so can be in a tree: all
+ * but a distance joint with room to stretch, and a rotation joint with a
+ * motor or friction, all of whose rows may give.
+ */
 function holds(J, j) {
+  if (J.type[j] === ROTATION) return !gives(J, j);
   if (J.type[j] !== DISTANCE) return true;
   const f = J.frequency[j], length = J.length[j];
   return low(DISTANCE, J.given[j], J.min[j], length, f) === high(DISTANCE, J.given[j], J.max[j], length, f);
@@ -759,12 +851,13 @@ function holds(J, j) {
 /** This step's trees, from the joints gather() listed: see forest.js. */
 export function plantJoints(world) {
   PLANTING = world._joints;
-  plant(world, world._joints.list, world._joints.active, planted);
+  plant(world, world._joints.list, world._joints.active, planted, pointed);
 }
-// plant()'s test, made once: a closure made in each step would be the
+// plant()'s tests, made once: a closure made in each step would be the
 // allocation in step() that rule 76 forbids. A step isn't re-entered.
 let PLANTING = null;
 const planted = (j) => holds(PLANTING, j);
+const pointed = (j) => PLANTING.type[j] !== ROTATION;
 
 /**
  * Every tree joint's rows that must hold, solved exactly together
@@ -843,7 +936,9 @@ const KEPT = 1 - PIXEL / 8;
  * at another pose doesn't see repeat, is answered a million times over. A
  * bridge of 20 planks opened 2.3 m. Held at one point or none, no tree's
  * rows repeat (each joint's rows hold its child, rows apart), and an error
- * of θ stays one of about θ.
+ * of θ stays one of about θ. A rotation joint to the world counts, though it
+ * holds no point: its rows hold the body's turn to the world's, and repeat
+ * any other joint's that does too (a hinge to the world beside it).
  */
 function age(world, all) {
   const F = world._joints.forest, T = F.count, order = F.order, parent = F.parent, side = F.side, fresh = F.fresh, since = F.since, q = world._rotation;
@@ -884,7 +979,7 @@ function build(world, rate) {
     geometry(world, j);
     F.scale[t] = 0;
     let m = 0;
-    if (type === FIXED || type === SLIDER) {
+    if (type === FIXED || type === SLIDER || type === ROTATION) {
       frames(world, j);
       rotate(QA, 0, REL[0], REL[1], REL[2], false, C);
       for (let k = 0; k < 3; k++) {
@@ -942,8 +1037,9 @@ function settleForest(world) {
     // when it was made (age()); F.row is this pass's.
     const j = F.joint[t], type = J.type[j], o = j * IMPULSES, jac = F.jac, r = 72 * t + 36;
     const l = NODE * t;
-    if (type === FIXED || type === SLIDER) {
+    if (type === FIXED || type === SLIDER || type === ROTATION) {
       for (let k = 0; k < 3; k++) acc[o + ANG + k] += vec[l + k];
+      if (type === ROTATION) continue;
       if (type === SLIDER) {
         // The line's rows, along P1 and P2: their impulse as a world vector.
         for (let k = 0; k < 3; k++) acc[o + LIN + k] += vec[l + 3] * jac[r + 18 + k] + vec[l + 4] * jac[r + 24 + k];
@@ -1042,6 +1138,19 @@ function frames(world, j) {
   A2[0] = 1 - 2 * (y * y + z * z); A2[1] = 2 * (x * y + z * w); A2[2] = 2 * (x * z - y * w);
   conjugateTimes(QA, 0, QB, 0, REL, 0);
   if (REL[3] < 0) { REL[0] = -REL[0]; REL[1] = -REL[1]; REL[2] = -REL[2]; REL[3] = -REL[3]; }
+}
+
+/**
+ * Whether a ball or rotation joint has rows that may give: a motor or
+ * friction. A rotation joint without either holds a's turn against b fixed.
+ */
+function gives(J, j) {
+  return J.motorForce[j] > 0 || J.friction[j] > 0;
+}
+
+/** Whether joint slot j drives toward a target: given one, and a motor to drive it (motorForce 0 is a motor off). */
+function aimed(J, j) {
+  return (J.given[j] & TARGET) !== 0 && J.motorForce[j] > 0;
 }
 
 /** Whether a ball joint has a limit, and so needs its axes. */
@@ -1331,12 +1440,78 @@ function motor(o, target, most, acc, k) {
  * A hinge's or slider's driven row, at row 0: its motor, or with the motor
  * off, its friction, which is a motor held to speed 0 that pushes no harder
  * than `friction`, as Jolt's mMaxFrictionTorque is. A motor already resists
- * up to its own force, so friction adds nothing to one.
+ * up to its own force, so friction adds nothing to one. A motor given a
+ * target drives toward it (drive()), the target moving at motorSpeed.
  */
-function driven(J, j, h, acc, o) {
-  const force = J.motorForce[j];
-  if (force > 0) motor(0, J.motorSpeed[j], force * h, acc, o + MOTOR);
+function driven(world, j, h, acc, o, bias) {
+  const J = world._joints, force = J.motorForce[j];
+  if (force > 0 && (J.given[j] & TARGET) !== 0) {
+    world._drives++;
+    const t = 4 * j, rate = J.motorSpeed[j], hinge = J.type[j] === HINGE;
+    // The target moves at motorSpeed, carried on a substep as the relax pass
+    // begins: that pass measures the joint where the substep's move left it,
+    // so the target has to be where it is at that moment too, and the next
+    // solve pass, from the same place, finds it there. Left where it was set,
+    // a target the bodies kept up with would be a substep's travel behind them
+    // at every pass after the first, and the spring would hold them there.
+    if (!bias && rate !== 0) J.target[t] = hinge ? round(J.target[t] + rate * h) : J.target[t] + rate * h;
+    const error = hinge ? round(twist() - J.target[t]) : -(D[0] * A1[0] + D[1] * A1[1] + D[2] * A1[2]) - J.target[t];
+    soften(J, j, h, bias);
+    drive(0, error, rate, force * h, acc, o + MOTOR);
+  } else if (force > 0) motor(0, J.motorSpeed[j], force * h, acc, o + MOTOR);
   else motor(0, 0, J.friction[j] * h, acc, o + MOTOR);
+}
+
+/**
+ * An angle brought within -π to π, the short way round: a hinge's angle and
+ * its target are each within that, so one turn either way is enough.
+ */
+function round(angle) {
+  return angle > Math.PI ? angle - 2 * Math.PI : angle < -Math.PI ? angle + 2 * Math.PI : angle;
+}
+
+/**
+ * The drive's softness this pass, into `spring`: with a frequency, the
+ * spring it makes over the substep, which is a real force and so acts in the
+ * relax pass too, as a distance joint's spring does. With none, as stiff as
+ * any row solved one joint at a time can be: a stop pushed back's softness
+ * (jointSoft, JOINT_STIFFNESS of the substep rate) while solving, and none
+ * while relaxing, which takes back the speed that pulling left behind. Not
+ * the tree's JOINT_BIAS, the whole error asked back each substep: a drive is
+ * solved one joint at a time, not with the tree, and so stiff, the ragdoll
+ * standing on every joint driven hopped about the floor at up to 1 m/s and
+ * 5 rad/s and wandered 1.5 m in 10 s; at JOINT_STIFFNESS it stands within
+ * 0.32 mm, and a level 1 m arm held by it sags 2.6e-5 rad.
+ */
+function soften(J, j, h, bias) {
+  const f = J.frequency[j];
+  if (f > 0) {
+    makeSpring(f, J.dampingRatio[j], h);
+  } else if (bias) {
+    spring.biasRate = jointSoft.biasRate;
+    spring.massScale = jointSoft.massScale;
+    spring.impulseScale = jointSoft.impulseScale;
+  } else {
+    spring.biasRate = 0;
+    spring.massScale = 1;
+    spring.impulseScale = 0;
+  }
+}
+
+/**
+ * A drive on row o, softened by `spring` (soften()): asks the row's speed to
+ * be the target's own, `rate`, less biasRate times `error`, how far past its
+ * target the joint is along the row, and pushes no harder than `most`, the
+ * motor's force times the substep, either way. Box2D's soft step with its
+ * motor's clamp, pinned to the joint's rows that must hold as a motor is.
+ */
+function drive(o, error, rate, most, acc, k) {
+  const old = acc[k];
+  const l = -free(o) * spring.massScale * (speed(o) - rate + spring.biasRate * error) - spring.impulseScale * old;
+  let next = old + l;
+  if (next > most) next = most; else if (next < -most) next = -most;
+  acc[k] = next;
+  pinned(o, next - old, acc);
 }
 
 /**
@@ -1350,6 +1525,84 @@ function driven(J, j, h, acc, o) {
  * turning rows', so the warm start applies it with angles().
  */
 function ballFriction(most, acc, o) {
+  // λ = -K⁻¹ v: what stops the turning this pass. Where K can't be inverted
+  // (a body locked about some axes, held to one that can't turn), each row
+  // is solved alone instead, a row that nothing can turn along taking none.
+  // ponytail: rows alone are only Jacobi; solve the free 2x2 if partly
+  // locked ball joints with friction ever need it exact.
+  if (spinMass()) {
+    for (let f = 0; f < 3; f++) SPUN[f] = -(K3[3 * f] * RHS[0] + K3[3 * f + 1] * RHS[1] + K3[3 * f + 2] * RHS[2]);
+  } else {
+    for (let f = 0; f < 3; f++) SPUN[f] = K3[4 * f] > 0 ? -RHS[f] / K3[4 * f] : 0;
+  }
+  spun(most, acc, o);
+}
+
+/**
+ * A ball or rotation joint's drive: ballFriction()'s three rows of a turning
+ * against b, asked to bring a to its target turn (turnError()), softened by
+ * the drive's spring (soften()), and clamped as one vector to a ball of
+ * radius `most`, the motor's force times the substep: the same pull whichever
+ * way the joint is off, however the scene is turned. The impulse is kept in
+ * ANG, as friction's is, which is off while a motor is on.
+ */
+function turnDrive(world, J, j, most, h, bias, acc, o) {
+  world._drives++;
+  turnError(world, J, j);
+  soften(J, j, h, bias);
+  const i = o + ANG, scale = spring.massScale, rate = spring.biasRate, keep = spring.impulseScale;
+  const inverted = spinMass();
+  for (let f = 0; f < 3; f++) RHS[f] += rate * ERR[f];
+  if (inverted) {
+    for (let f = 0; f < 3; f++) SPUN[f] = -scale * (K3[3 * f] * RHS[0] + K3[3 * f + 1] * RHS[1] + K3[3 * f + 2] * RHS[2]) - keep * acc[i + f];
+  } else {
+    for (let f = 0; f < 3; f++) SPUN[f] = K3[4 * f] > 0 ? -scale * RHS[f] / K3[4 * f] - keep * acc[i + f] : 0;
+  }
+  spun(most, acc, o);
+}
+
+/**
+ * How far b is turned against a past what the target asks, as a world
+ * vector, axis times angle, into ERR: the sense the turning rows' speeds
+ * have (ωb - ωa), so a drive asks it back as a fixed joint asks back its
+ * error. The target T is a's turn from where it was joined, in b's own axes
+ * (the world's with no b), so in the world now it is qb T qb⁻¹; a's turn
+ * since joined, carried as b has moved since, is X = QA QB⁻¹ (frames(): QA =
+ * qa qa₀⁻¹ F and QB = qb qb₀⁻¹ F share the joint's axis frame F); the error
+ * is E = X (qb T qb⁻¹)⁻¹. Its angle, 2 atan2(|v|, w), is Bearing's own
+ * atan2, exact on every machine, and the short way round: q and -q are the
+ * same turn, so w is taken 0 or more.
+ */
+function turnError(world, J, j) {
+  const t = 4 * j, T = J.target, b = J.b[j];
+  if (b >= 0) {
+    rotate(world._rotation, 4 * b, T[t], T[t + 1], T[t + 2], false, ERR);
+    AIM[0] = ERR[0]; AIM[1] = ERR[1]; AIM[2] = ERR[2];
+  } else {
+    AIM[0] = T[t]; AIM[1] = T[t + 1]; AIM[2] = T[t + 2];
+  }
+  AIM[3] = T[t + 3];
+  timesConjugate(QA, 0, QB, 0, TURN, 0);
+  timesConjugate(TURN, 0, AIM, 0, TURN, 0);
+  let x = TURN[0], y = TURN[1], z = TURN[2], w = TURN[3];
+  if (w < 0) { x = -x; y = -y; z = -z; w = -w; }
+  const s = Math.sqrt(x * x + y * y + z * z);
+  if (s === 0) {
+    ERR[0] = 0; ERR[1] = 0; ERR[2] = 0;
+    return;
+  }
+  const k = -2 * atan2(s, w) / s;
+  ERR[0] = x * k; ERR[1] = y * k; ERR[2] = z * k;
+}
+const ERR = new Float64Array(3), AIM = new Float64Array(4), TURN = new Float64Array(4);
+
+/**
+ * The three turning rows of ballFriction() and turnDrive(), at SPIN, and
+ * their coupling with the joint's pinned rows holding into K3, inverted if
+ * this returns true, with the pinned rows' share of a push on each in SHARE,
+ * and each row's speed in RHS.
+ */
+function spinMass() {
   if (pins < 0) pin(pinType);
   for (let f = 0; f < 3; f++) {
     const r = SPIN[f];
@@ -1376,16 +1629,11 @@ function ballFriction(most, acc, o) {
     }
     RHS[f] = speed(SPIN[f]);
   }
-  // λ = -K⁻¹ v: what stops the turning this pass. Where K can't be inverted
-  // (a body locked about some axes, held to one that can't turn), each row
-  // is solved alone instead, a row that nothing can turn along taking none.
-  // ponytail: rows alone are only Jacobi; solve the free 2x2 if partly
-  // locked ball joints with friction ever need it exact.
-  if (inverseSPD(K3, 3, K3)) {
-    for (let f = 0; f < 3; f++) SPUN[f] = -(K3[3 * f] * RHS[0] + K3[3 * f + 1] * RHS[1] + K3[3 * f + 2] * RHS[2]);
-  } else {
-    for (let f = 0; f < 3; f++) SPUN[f] = K3[4 * f] > 0 ? -RHS[f] / K3[4 * f] : 0;
-  }
+  return inverseSPD(K3, 3, K3);
+}
+
+/** SPUN added to the turning rows' impulse at ANG, the sum clamped to a ball of radius `most`, and applied with the pinned rows' reaction. */
+function spun(most, acc, o) {
   const i = o + ANG;
   let x = acc[i] + SPUN[0], y = acc[i + 1] + SPUN[1], z = acc[i + 2] + SPUN[2];
   const l2 = x * x + y * y + z * z;
@@ -1634,6 +1882,16 @@ function cross(r, k, out, o) {
 function multiply(a, ao, b, bo, out, oo) {
   const ax = a[ao], ay = a[ao + 1], az = a[ao + 2], aw = a[ao + 3];
   const bx = b[bo], by = b[bo + 1], bz = b[bo + 2], bw = b[bo + 3];
+  out[oo] = aw * bx + ax * bw + ay * bz - az * by;
+  out[oo + 1] = aw * by + ay * bw + az * bx - ax * bz;
+  out[oo + 2] = aw * bz + az * bw + ax * by - ay * bx;
+  out[oo + 3] = aw * bw - ax * bx - ay * by - az * bz;
+}
+
+/** out[oo..] = a ⊗ conj(b). out may be a or b. */
+function timesConjugate(a, ao, b, bo, out, oo) {
+  const ax = a[ao], ay = a[ao + 1], az = a[ao + 2], aw = a[ao + 3];
+  const bx = -b[bo], by = -b[bo + 1], bz = -b[bo + 2], bw = b[bo + 3];
   out[oo] = aw * bx + ax * bw + ay * bz - az * by;
   out[oo + 1] = aw * by + ay * bw + az * bx - ax * bz;
   out[oo + 2] = aw * bz + az * bw + ax * by - ay * bx;

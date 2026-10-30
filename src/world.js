@@ -370,6 +370,8 @@ export class World {
     this._joints = new Joints();
     /** Steps that ran the joint solver: for the off-means-off test, which reads it. */
     this._jointSteps = 0;
+    /** Drives toward a target solved, one a joint a pass: for the off-means-off test, which reads it. */
+    this._drives = 0;
     /** Times of impact worked out (contact.js): for the off-means-off test, which reads it. */
     this._impacts = 0;
     /** Steps that had a fast body to sweep, and bodies put back (_catch): for the tests, which read them. */

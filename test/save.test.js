@@ -77,7 +77,7 @@ test('the save holds every field of the world: a new one must change FORMAT and 
   assert.deepEqual(fields, [
     '_angular', '_angularDamping', '_awake', '_awakeCount', '_awakeList', '_axes', '_box', '_broadphase', '_calm',
     '_catchSteps', '_catches', '_caught', '_ceiling', '_characterCount', '_characterSteps', '_com', '_comGiven',
-    '_contacts', '_damping', '_density', '_destroyed', '_dims', '_epoch', '_events', '_fast', '_force',
+    '_contacts', '_damping', '_density', '_destroyed', '_dims', '_drives', '_epoch', '_events', '_fast', '_force',
     '_forced', '_forcedSlots', '_frame', '_framed', '_framedCount', '_friction', '_frozen', '_frozenCount',
     '_geometry', '_gravity', '_gravityScale', '_ground', '_groundAt', '_impacts', '_inAwake', '_inertia',
     '_inertiaGiven', '_inner', '_invI', '_invInertia', '_invMass', '_island', '_islandNext', '_islandSteps',
@@ -96,7 +96,7 @@ test('load refuses what save() didn\'t write, data of another format, and damage
   assert.throws(() => World.load(null), /^Error: load: data must be what world.save\(\) returned, got null$/);
   assert.throws(() => World.load({ bodies: [] }), /^Error: load: data must be what world.save\(\) returned, got an object$/);
   const data = new World().save();
-  assert.throws(() => World.load({ ...data, format: 0 }), /^Error: load: data is format 0; this Bearing reads format 7$/);
+  assert.throws(() => World.load({ ...data, format: 0 }), /^Error: load: data is format 0; this Bearing reads format 8$/);
   const damaged = JSON.parse(JSON.stringify(data));
   damaged.objects[0].f._slots = { r: 999 };
   assert.throws(() => World.load(damaged), /^Error: load: data is damaged: a link to object 999, of \d+$/);

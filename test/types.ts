@@ -194,6 +194,21 @@ export function joints(): void {
   world.addJoint({ type: 'hinge', a: door, cone: 1 });
   // @ts-expect-error a fixed joint has no friction
   world.addJoint({ type: 'fixed', a: door, friction: 1 });
+  // Motors driven to targets, and rotation joints.
+  world.addJoint({ type: 'hinge', a: door, b: frame, target: 0.5, motorForce: 200, frequency: 4, dampingRatio: 0.7 });
+  world.addJoint({ type: 'slider', a: door, target: -0.2, motorSpeed: 0.1, motorForce: 50 });
+  world.addJoint({ a: door, target: [0, 0, 0.38, 0.92], motorForce: 40, frequency: 3 });
+  const upright: Joint = world.addJoint({ type: 'rotation', a: door, target: new Float64Array([0, 0, 0, 1]), motorForce: 800, cone: 0.4, axis: [0, 1, 0] });
+  world.addJoint({ type: 'rotation', a: door, b: frame, friction: 3 });
+  world.setJoint(upright, { target: null, motorForce: 0 });
+  const turn = world.jointOf(upright);
+  if (turn.type === 'rotation') { const t: [number, number, number, number] | null = turn.target; const f: number = turn.frequency; }
+  // @ts-expect-error a rotation joint holds no point, so has no anchor
+  world.addJoint({ type: 'rotation', a: door, anchor: [0, 0, 0] });
+  // @ts-expect-error a ball joint has no motorSpeed
+  world.addJoint({ type: 'ball', a: door, motorSpeed: 1 });
+  // @ts-expect-error a hinge's target is an angle
+  world.addJoint({ type: 'hinge', a: door, target: [0, 0, 0, 1] });
   // @ts-expect-error a joint holds a body: a is required
   world.addJoint({ type: 'ball' });
   // @ts-expect-error a and b are set when it is made

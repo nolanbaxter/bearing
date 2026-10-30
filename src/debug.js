@@ -15,7 +15,7 @@
 
 import { Shape, Parts, placePart, BOX as BOX_KIND, SPHERE as SPHERE_KIND, CAPSULE as CAPSULE_KIND, HULL as HULL_KIND } from './collide.js';
 import { load } from './contact.js';
-import { worldAnchor } from './joints.js';
+import { worldAnchor, ROTATION } from './joints.js';
 import { sin, cos } from './core/math.js';
 
 const DYNAMIC = 0, STATIC = 1, KINEMATIC = 2, CHARACTER = 3;   // World's type codes
@@ -206,13 +206,22 @@ function contacts(world) {
   colour = AWAKE;
 }
 
-/** Each joint: a line from each body's centre to its anchor on that body. */
+/**
+ * Each joint: a line from each body's centre to its anchor on that body. A
+ * rotation joint holds no point, so has no anchor to draw: a line between its
+ * bodies' centres, none to the world.
+ */
 function joints(world) {
   const J = world._joints, slots = J.slots, p = world._position;
   colour = JOINT;
   room(world, 2 * slots.count);
   for (let j = 0; j < slots.top; j++) {
     if (slots.state[j] !== 1) continue;
+    if (J.type[j] === ROTATION) {
+      const a3 = 3 * J.a[j], b3 = 3 * J.b[j];
+      if (b3 >= 0) line(p[a3], p[a3 + 1], p[a3 + 2], p[b3], p[b3 + 1], p[b3 + 2]);
+      continue;
+    }
     const a = J.a[j], b = J.b[j], A = worldAnchor(world, j, 0), B = worldAnchor(world, j, 1);
     line(p[3 * a], p[3 * a + 1], p[3 * a + 2], A[0], A[1], A[2]);
     if (b >= 0) line(p[3 * b], p[3 * b + 1], p[3 * b + 2], B[0], B[1], B[2]);

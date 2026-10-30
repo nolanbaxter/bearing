@@ -129,10 +129,11 @@ export class Forest {
 /**
  * Finds this step's trees among the joints `holds` says have rows that must
  * hold, in list order, so which joints close loops depends only on the
- * inputs. world._node is a per-body column, the body's node plus 1, left
- * zeroed again.
+ * inputs; `point` says whether a joint holds a point, and so can hold its
+ * tree down (below). world._node is a per-body column, the body's node plus
+ * 1, left zeroed again.
  */
-export function plant(world, list, n, holds) {
+export function plant(world, list, n, holds, point) {
   const F = world._joints.forest, J = world._joints, type = world._type, node = world._node;
   F.fit(J.slots.capacity);
   F.count = 0;
@@ -173,9 +174,12 @@ export function plant(world, list, n, holds) {
   // impulses aren't replayed (joints.js, warmStartJoints()). Flags per tree
   // root in seen, free again now, 1 for held down and 2 for in contact;
   // gather() lists no joint without a dynamic body, so a side of -1 has a
-  // node opposite.
+  // node opposite. A joint that holds no point (a rotation joint) doesn't
+  // hold its tree down: a body it holds upright, swept back along its path
+  // by World._catch, turns back along it too, and opens nothing.
   seen.fill(0, 0, F.bodies);
   for (let t = 0; t < T; t++) {
+    if (!point(F.joint[t])) continue;
     if (F.side[2 * t] < 0) seen[find(F.union, F.side[2 * t + 1])] = 1;
     else if (F.side[2 * t + 1] < 0) seen[find(F.union, F.side[2 * t])] = 1;
   }

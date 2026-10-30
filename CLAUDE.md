@@ -208,6 +208,18 @@ These were made with Nolan and override the rules below where they differ.
   each pass asks is still measured along the current rows (asked along the kept rows, the leg
   kept 60% of its energy). `age()` in joints.js; forest `fresh`/`since`, scratch. Ragdolls
   11-19%, chains 20-26% faster pinned; friction ragdolls sleep 5.6-6.3 s (5.1-5.4).
+  Pose motors (2026-10-30, milestone 17, API approved: "Approved, go ahead"): `target` on hinge
+  (angle), slider (position) and ball (orientation of a against b, about b's own axes, from how they
+  were joined), and type `'rotation'` (orientation only, position free; for balance). The drive is
+  a spring: `frequency`/`dampingRatio` (the distance spring's names), strength `motorForce` (0 off,
+  so a target with no force does nothing), `frequency: 0` the stops' `jointSoft` (with JOINT_BIAS a
+  hard-driven ragdoll hopped and wandered 1.5 m: drives are solved one joint at a time). Hinge and
+  slider: the motor row, pinned (`driven()`, `drive()`); `motorSpeed` with a target moves the stored
+  target each substep. Ball and rotation: `turnDrive()`, three angular rows clamped as one ball of
+  motorForce x h, error the short way round by Bearing's `atan2`; `ballFriction` split into
+  `spinMass()`/`spun()`, same bits. A holding rotation joint is in the forest; one to the world
+  counts as held in `age()` but not held down (`plant()` takes a `point` callback). `_drives`
+  counts for off-means-off. FORMAT 8. No-target joints keep their bits and time.
 - **Continuous collision** (2026-10-15, milestone 13, approved): speculative contacts stay; a pair
   not touching that moves against itself by more than its tolerance in the step (`moving()` in
   `src/contact.js`) asks `impact()` (`src/impact.js`, conservative advancement over velocity,

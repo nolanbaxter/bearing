@@ -479,26 +479,27 @@ the joint's type allows, and returns its [handle](#joint). See [Joints](#joints)
 
 | Option | Default | Meaning |
 |---|---|---|
-| `type` | `'ball'` | `'fixed'`: welded, nothing free. `'ball'`: turns any way about its anchor. `'hinge'`: turns about `axis`. `'slider'`: slides along `axis`, turning not at all. `'distance'`: keeps two points `length` apart, or between `min` and `max`. |
+| `type` | `'ball'` | `'fixed'`: welded, nothing free. `'ball'`: turns any way about its anchor. `'hinge'`: turns about `axis`. `'slider'`: slides along `axis`, turning not at all. `'distance'`: keeps two points `length` apart, or between `min` and `max`. `'rotation'`: holds or drives how `a` is turned against `b`, and leaves where it is free. |
 | `a` | none; it must be given | The body. Its angle, position and motor are measured against `b`. |
 | `b` | `null` | What `a` is held to: another body, or `null` for a point in the world that never moves. |
-| `anchor` | midway between their centres; with no `b`, `a`'s centre; a distance joint's, `a`'s centre | Where the joint is, in world space, in metres, where the bodies are now. Bearing works out where that is on each. |
-| `anchorB` | `anchor`; a distance joint's, `b`'s centre | Where it is on `b`, or in the world with no `b`, if not the same point: a distance joint's other end. For any other joint, a point it pulls to `anchor`. |
-| `axis` | `[0, 1, 0]` | A hinge's axis, a slider's direction, a ball joint's axis for `cone` and its twist. Needn't be unit length. Not for a fixed or distance joint. |
-| `min` | none | The least a's free coordinate may be: a hinge's angle or a ball joint's twist about `axis`, in radians, from -π to π, or -Infinity for none; a slider's position along `axis`, in metres; a distance joint's length, in metres, 0 or more, its `length` without a spring and 0 with one. Measured from where the joint is made. `null` goes back to the default. Not for a fixed joint. |
+| `anchor` | midway between their centres; with no `b`, `a`'s centre; a distance joint's, `a`'s centre | Where the joint is, in world space, in metres, where the bodies are now. Bearing works out where that is on each. Not for a rotation joint, which holds no point. |
+| `anchorB` | `anchor`; a distance joint's, `b`'s centre | Where it is on `b`, or in the world with no `b`, if not the same point: a distance joint's other end. For any other joint, a point it pulls to `anchor`. Not for a rotation joint. |
+| `axis` | `[0, 1, 0]` | A hinge's axis, a slider's direction, a ball or rotation joint's axis for `cone`, and a ball joint's for its twist. Needn't be unit length. Not for a fixed or distance joint. |
+| `min` | none | The least a's free coordinate may be: a hinge's angle or a ball joint's twist about `axis`, in radians, from -π to π, or -Infinity for none; a slider's position along `axis`, in metres; a distance joint's length, in metres, 0 or more, its `length` without a spring and 0 with one. Measured from where the joint is made. `null` goes back to the default. Not for a fixed or rotation joint. |
 | `max` | none | The most, the same way: up to π, or Infinity for none; a distance joint's, its `length` without a spring. |
 | `length` | how far apart the anchors are | A distance joint's length, in metres, 0 or more: what it holds, or springs back to. |
-| `cone` | `π` (none) | How far a ball joint's `axis` on `a` may swing from its `axis` on `b`, in radians, from 0 to π. |
-| `motorSpeed` | `0` | The speed a hinge's or slider's motor drives `a` at against `b`: rad/s about `axis`, or m/s along it. |
-| `motorForce` | `0` (no motor) | The most the motor may push, 0 or more: N·m for a hinge, N for a slider. |
-| `friction` | `0` (none) | The most a ball joint, hinge or slider resists `a` turning or sliding against `b` with, 0 or more, as a stiff hinge does: N·m for a ball joint or hinge, N for a slider. A hinge's or slider's acts while its motor is off. Not for a fixed or distance joint. |
-| `frequency` | `0` (no spring) | Makes a distance joint a spring, pulling it to `length`: how many times a second it would bounce, in Hz. |
-| `dampingRatio` | `1` | How quickly the spring stops bouncing: 1 settles without overshooting, as Bearing's contacts do; 0 bounces for ever. |
+| `cone` | `π` (none) | How far a ball or rotation joint's `axis` on `a` may swing from its `axis` on `b` (the world's, with no `b`), in radians, from 0 to π. A hard stop, as `min` and `max` are. |
+| `target` | `null` (none: the motor drives a speed) | Where the motor drives `a` against `b`, as a spring (see `frequency`): a hinge's angle about `axis`, in radians, from -π to π; a slider's position along `axis`, in metres; a ball or rotation joint's turn, `[x, y, z, w]`, any length but not all zero, about `b`'s own axes (the world's with no `b`). Measured as `min` and `max` are, from where the joint was made: `0`, or `[0, 0, 0, 1]`, is as they were. It drives only while `motorForce` is more than 0. `null` goes back to none. Not for a fixed or distance joint. |
+| `motorSpeed` | `0` | The speed a hinge's or slider's motor drives `a` at against `b`: rad/s about `axis`, or m/s along it. With a `target`, how fast the target moves: Bearing carries it on as it steps, and the drive follows it without lagging. Not for a ball or rotation joint. |
+| `motorForce` | `0` (motor off) | The most the motor may push, 0 or more: N·m for a hinge, ball or rotation joint, N for a slider. `0` is a motor off, so a `target` with no `motorForce` does nothing. A ball or rotation joint's is one limit for every way it turns. A ball or rotation joint's motor with no `target` holds it from turning, up to this, as `friction` does. Not for a fixed or distance joint. |
+| `friction` | `0` (none) | The most a ball, hinge, slider or rotation joint resists `a` turning or sliding against `b` with, 0 or more, as a stiff hinge does: N·m for a ball, hinge or rotation joint, N for a slider. It acts while the motor is off. Not for a fixed or distance joint. |
+| `frequency` | `0` | How springy a distance joint or a motor's drive to its `target` is: how many times a second it would bounce, in Hz. A distance joint with one is a spring, pulling it to `length`; with none, a rod. A drive with none is as stiff as the solver goes, reaching its target as fast as `motorForce` lets it. Not for a fixed joint. |
+| `dampingRatio` | `1` | How quickly the spring stops bouncing: 1 settles without overshooting, as Bearing's contacts do; 0 is no damping of its own (see [Joints](#joints), Notes). Not for a fixed joint. |
 | `collide` | `false` | Whether `a` and `b` still collide with each other. |
 
 Returns: a [`Joint`](#joint).
 
-Throws: `addJoint: this world was destroyed`; `addJoint: options must be an object, got …`; `addJoint: unknown option '…' (did you mean '…'?)`; `addJoint: unknown option '…' (the options are type, a, b, anchor, anchorB, axis, min, max, length, cone, motorSpeed, motorForce, friction, frequency, dampingRatio, collide)`; `addJoint: type must be 'fixed', 'ball', 'hinge', 'slider' or 'distance', got …`; `addJoint: a <type> joint has no <option>`; `addJoint: a must be a Body of this world, got …`; `addJoint: a was removed`; `addJoint: b must be a Body of this world, or null, got …`; `addJoint: b was removed`; `addJoint: a and b must be different bodies`; `addJoint: anchor must be 3 finite numbers, got …`; `addJoint: anchorB must be 3 finite numbers, got …`; `addJoint: axis must be 3 finite numbers, not all zero, got …`; `addJoint: length must be 0 or more, got …`; `addJoint: cone must be an angle from 0 to π, in radians, got …`; `addJoint: motorSpeed must be a finite number, got …`; `addJoint: motorForce must be 0 or more, got …`; `addJoint: friction must be 0 or more, got …`; `addJoint: frequency must be 0 or more, got …`; `addJoint: dampingRatio must be 0 or more, got …`; `addJoint: min must be from -π to π, in radians, or -Infinity, got …`; `addJoint: max must be from -π to π, in radians, or Infinity, got …`; `addJoint: min must be a number or -Infinity, got …`; `addJoint: max must be a number or Infinity, got …`; `addJoint: min must be 0 or more, got …`; `addJoint: max must be 0 or more, or Infinity, got …`; `addJoint: min must be at most max (…), got …`; `addJoint: collide must be true or false, got …`; `addJoint: a world holds at most 16777216 joints (the slot field of an id is 24 bits)`.
+Throws: `addJoint: this world was destroyed`; `addJoint: options must be an object, got …`; `addJoint: unknown option '…' (did you mean '…'?)`; `addJoint: unknown option '…' (the options are type, a, b, anchor, anchorB, axis, min, max, length, cone, target, motorSpeed, motorForce, friction, frequency, dampingRatio, collide)`; `addJoint: type must be 'fixed', 'ball', 'hinge', 'slider', 'distance' or 'rotation', got …`; `addJoint: a <type> joint has no <option>`; `addJoint: a must be a Body of this world, got …`; `addJoint: a was removed`; `addJoint: b must be a Body of this world, or null, got …`; `addJoint: b was removed`; `addJoint: a and b must be different bodies`; `addJoint: anchor must be 3 finite numbers, got …`; `addJoint: anchorB must be 3 finite numbers, got …`; `addJoint: axis must be 3 finite numbers, not all zero, got …`; `addJoint: length must be 0 or more, got …`; `addJoint: cone must be an angle from 0 to π, in radians, got …`; `addJoint: target must be from -π to π, in radians, got …`; `addJoint: target must be a finite number, got …`; `addJoint: target must be 4 finite numbers, not all zero, got …`; `addJoint: motorSpeed must be a finite number, got …`; `addJoint: motorForce must be 0 or more, got …`; `addJoint: friction must be 0 or more, got …`; `addJoint: frequency must be 0 or more, got …`; `addJoint: dampingRatio must be 0 or more, got …`; `addJoint: min must be from -π to π, in radians, or -Infinity, got …`; `addJoint: max must be from -π to π, in radians, or Infinity, got …`; `addJoint: min must be a number or -Infinity, got …`; `addJoint: max must be a number or Infinity, got …`; `addJoint: min must be 0 or more, got …`; `addJoint: max must be 0 or more, or Infinity, got …`; `addJoint: min must be at most max (…), got …`; `addJoint: collide must be true or false, got …`; `addJoint: a world holds at most 16777216 joints (the slot field of an id is 24 bits)`.
 
 ```js
 const frame = world.addBody({ type: 'static', size: [0.1, 2, 0.1], position: [-0.05, 1, 0] });
@@ -507,10 +508,12 @@ world.addJoint({ type: 'hinge', a: door, b: frame, anchor: [0, 1, 0], axis: [0, 
 const lamp = world.addBody({ shape: 'sphere', radius: 0.2, position: [0, 4, 0] });
 world.addJoint({ a: lamp, anchor: [0, 5, 0] });                          // hung from a point, a ball joint
 const rope = world.addJoint({ type: 'distance', a: ball, b: crate, min: 0 });   // a rope, as long as they are apart
+world.addJoint({ type: 'hinge', a: door, b: frame, anchor: [0, 1, 0], target: 0.5, motorForce: 200, frequency: 4 });   // swings to 0.5 rad and holds
+world.addJoint({ type: 'rotation', a: crate, motorForce: 500, target: [0, 0, 0, 1] });   // kept upright, free to move
 ```
 
 Notes: a joint wakes the bodies it holds. An option for another type throws, as `radius` does on a
-box: `a hinge joint has no cone`. A joint between two bodies neither of which is dynamic does
+box: `a hinge joint has no cone`, `a rotation joint has no anchor`. A joint between two bodies neither of which is dynamic does
 nothing until one is made dynamic.
 
 <a id="world-setjoint"></a>
@@ -519,20 +522,24 @@ nothing until one is made dynamic.
 Changes any of the options [`addJoint`](#world-addjoint) took but `a` and `b`, with the same names,
 defaults and checks, and leaves the rest as they are.
 
-Throws: `setJoint: this world was destroyed`; `setJoint: joint must be a Joint, got …`; `setJoint: that joint belongs to another world`; `setJoint: this joint was removed`; `setJoint: changes must be an object, got …`; `setJoint: unknown option '…' (did you mean '…'?)`; `setJoint: unknown option '…' (the options are type, a, b, anchor, anchorB, axis, min, max, length, cone, motorSpeed, motorForce, friction, frequency, dampingRatio, collide)`; `setJoint: a and b can't change; remove the joint and add another`; `setJoint: type must be 'fixed', 'ball', 'hinge', 'slider' or 'distance', got …`; `setJoint: a <type> joint has no <option>`; `setJoint: anchor must be 3 finite numbers, got …`; `setJoint: anchorB must be 3 finite numbers, got …`; `setJoint: axis must be 3 finite numbers, not all zero, got …`; `setJoint: length must be 0 or more, got …`; `setJoint: cone must be an angle from 0 to π, in radians, got …`; `setJoint: motorSpeed must be a finite number, got …`; `setJoint: motorForce must be 0 or more, got …`; `setJoint: friction must be 0 or more, got …`; `setJoint: frequency must be 0 or more, got …`; `setJoint: dampingRatio must be 0 or more, got …`; `setJoint: min must be from -π to π, in radians, or -Infinity, got …`; `setJoint: max must be from -π to π, in radians, or Infinity, got …`; `setJoint: min must be a number or -Infinity, got …`; `setJoint: max must be a number or Infinity, got …`; `setJoint: min must be 0 or more, got …`; `setJoint: max must be 0 or more, or Infinity, got …`; `setJoint: min must be at most max (…), got …`; `setJoint: collide must be true or false, got …`.
+Throws: `setJoint: this world was destroyed`; `setJoint: joint must be a Joint, got …`; `setJoint: that joint belongs to another world`; `setJoint: this joint was removed`; `setJoint: changes must be an object, got …`; `setJoint: unknown option '…' (did you mean '…'?)`; `setJoint: unknown option '…' (the options are type, a, b, anchor, anchorB, axis, min, max, length, cone, target, motorSpeed, motorForce, friction, frequency, dampingRatio, collide)`; `setJoint: a and b can't change; remove the joint and add another`; `setJoint: type must be 'fixed', 'ball', 'hinge', 'slider', 'distance' or 'rotation', got …`; `setJoint: a <type> joint has no <option>`; `setJoint: anchor must be 3 finite numbers, got …`; `setJoint: anchorB must be 3 finite numbers, got …`; `setJoint: axis must be 3 finite numbers, not all zero, got …`; `setJoint: length must be 0 or more, got …`; `setJoint: cone must be an angle from 0 to π, in radians, got …`; `setJoint: target must be from -π to π, in radians, got …`; `setJoint: target must be a finite number, got …`; `setJoint: target must be 4 finite numbers, not all zero, got …`; `setJoint: motorSpeed must be a finite number, got …`; `setJoint: motorForce must be 0 or more, got …`; `setJoint: friction must be 0 or more, got …`; `setJoint: frequency must be 0 or more, got …`; `setJoint: dampingRatio must be 0 or more, got …`; `setJoint: min must be from -π to π, in radians, or -Infinity, got …`; `setJoint: max must be from -π to π, in radians, or Infinity, got …`; `setJoint: min must be a number or -Infinity, got …`; `setJoint: max must be a number or Infinity, got …`; `setJoint: min must be 0 or more, got …`; `setJoint: max must be 0 or more, or Infinity, got …`; `setJoint: min must be at most max (…), got …`; `setJoint: collide must be true or false, got …`.
 
 ```js
 const hinge = world.addJoint({ type: 'hinge', a: crate, anchor: [2, 1, 0], axis: [0, 0, 1] });
 world.setJoint(hinge, { motorSpeed: 2, motorForce: 500 });   // turn it at 2 rad/s, up to 500 N·m
 world.setJoint(hinge, { min: -0.5, max: 0.5 });
 world.setJoint(hinge, { min: null });                        // no lower limit again
+world.setJoint(hinge, { target: 0.3, frequency: 2 });        // drive it to 0.3 rad on a 2 Hz spring, up to 500 N·m
+world.setJoint(hinge, { target: null });                     // back to turning at 2 rad/s
 ```
 
 Notes: everything follows at once, and the joint's bodies wake. A new `anchor` or `anchorB` is a
 world point where the bodies are now; a new `axis` also counts the joint's angle and position
 from 0 again from here. A new type starts from its own defaults, as a new shape does: the anchors,
 axis and `collide` carry over, and a new distance joint is as long as its ends are apart. A
-joint made to let its bodies collide does so from the next step.
+joint made to let its bodies collide does so from the next step. A new `target` keeps what the
+motor was pushing with, so a target moved every step, as an animation moves it, is followed
+smoothly.
 
 <a id="world-jointof"></a>
 ### `world.jointOf(joint)` → `object`
@@ -541,16 +548,20 @@ A copy of the joint's options as they are now, in the form [`addJoint`](#world-a
 so `world.addJoint(world.jointOf(joint))` makes another like it. Changing the result changes
 nothing.
 
-Returns: `{ type, a, b, anchor, anchorB, axis, min, max, length, cone, motorSpeed, motorForce, friction, frequency, dampingRatio, collide }`,
+Returns: `{ type, a, b, anchor, anchorB, axis, min, max, length, cone, target, motorSpeed, motorForce, friction, frequency, dampingRatio, collide }`,
 each only for the types that have it: `anchor` where `a`'s end is now, in world space, and
-`anchorB` for a distance joint, or one given it, where `b`'s is. `min` and `max` only if they were
-given. `a` and `b` are [`Body`](#body) handles, `b` `null` for a point in the world.
+`anchorB` for a distance joint, or one given it, where `b`'s is; a rotation joint has neither.
+`min` and `max` only if they were given. `target` is `null` for none, a number for a hinge or
+slider, and `[x, y, z, w]`, of unit length, for a ball or rotation joint; one given a `motorSpeed`
+is where Bearing has carried it to. `a` and `b` are [`Body`](#body) handles, `b` `null` for a
+point in the world.
 
 Throws: `jointOf: this world was destroyed`; `jointOf: joint must be a Joint, got …`; `jointOf: that joint belongs to another world`; `jointOf: this joint was removed`.
 
 ```js
 const swing = world.addJoint({ type: 'hinge', a: crate, anchor: [2, 1, 0], max: 1 });
 console.log(world.jointOf(swing).max);   // 1
+console.log(world.jointOf(swing).target);   // null
 ```
 
 Notes: a joint's angle and position count from where it was made, so a copy made where its bodies
@@ -809,7 +820,7 @@ stepping exactly as the saved world would have.
 Returns: a new [`World`](#world), its own: changing it changes nothing in the world it was saved
 from, or the data.
 
-Throws: `load: data must be what world.save() returned, got …`; `load: data is format …; this Bearing reads format 7`; `load: data is damaged: …`.
+Throws: `load: data must be what world.save() returned, got …`; `load: data is format …; this Bearing reads format 8`; `load: data is damaged: …`.
 
 ```js
 const checkpoint = world.save();
@@ -832,7 +843,7 @@ data.
 |---|---|---|
 | `shapes` | `true` | Every body's collision shape: a box's 12 edges, a ball's 3 rings, a capsule's rings and sides, a hull's edges, a compound's parts, a mesh's or heightfield's triangles. Awake bodies blue, asleep dimmer, static grey, kinematic purple, characters green, sensors yellow. |
 | `contacts` | `true` | The last step's contact points, each a red line out along its normal (from `a` towards `b`) a quarter of the smaller body's thinnest size long. |
-| `joints` | `true` | Each joint, orange: a line from each body's centre to its anchor on that body. |
+| `joints` | `true` | Each joint, orange: a line from each body's centre to its anchor on that body; a rotation joint's, which has no anchor, between its bodies' centres, and none to the world. |
 | `boxes` | `false` | The boxes the broadphase files each body in, which it is filed again on leaving. |
 
 Returns: a `Float32Array`, a view of the world's own array, which the next call replaces: copy it
@@ -1615,6 +1626,7 @@ A joint takes some away, and leaves the rest:
 | `'hinge'` | Turning about `axis`. | Its angle about `axis` |
 | `'slider'` | Moving along `axis`. | Its position along `axis` |
 | `'distance'` | Everything but the gap between its two anchors. | The gap's length |
+| `'rotation'` | Every move, and no turn: `a` keeps how it is turned against `b`, or the world. | None; `cone`, how far `axis` may swing |
 
 - **`a` moves against `b`.** `a` is the body, and `b` what it is held to, a point in the world if
   left out. A joint's angle, position, limits and motor are `a`'s against `b`: a hinge's angle is
@@ -1637,6 +1649,26 @@ A joint takes some away, and leaves the rest:
 - **Motors drive a speed.** A hinge's or slider's motor pushes `a` toward `motorSpeed` against `b`,
   as hard as `motorForce` allows and no harder, so a motor too weak for its load stalls, or is
   driven backwards, pushing as hard as it can. Turned off (`motorForce: 0`), it pushes no more.
+- **Motors drive to a target.** Given a `target`, a hinge's, slider's, ball or rotation joint's
+  motor is a spring pulling `a` to it: an angle, a position, or a turn against `b`. `frequency`
+  is how stiff it is, in Hz, and `dampingRatio` how it settles, as a distance joint's spring;
+  `frequency: 0`, the default, is as stiff as the solver goes. It pushes no harder than
+  `motorForce`, so a motor too weak for its load gives under it, and a target past a stop drives
+  against the stop. **The motor must have a force: a `target` with `motorForce: 0` does nothing.**
+  The spring is solved inside the step with everything else, not pushed from outside, so it is
+  steady however stiff: an arm pushed off its target springs back at its frequency, and a ragdoll
+  with every joint driven to its pose stands on its own feet. A hinge's or slider's `motorSpeed` is
+  how fast the target moves, so a target moved every step, as an animation moves it, is followed
+  without lagging behind it. A ball or rotation joint's drive pulls with the same strength
+  whichever way it is off, however the scene is turned. A drive costs a row a substep (three for a
+  ball or rotation joint), as a motor does.
+- **Rotation joints.** A `'rotation'` joint holds how `a` is turned against `b`, or against the
+  world with no `b`, and leaves where it is entirely free: a body held by one falls, slides and is
+  pushed about, never turning. With a motor (`motorForce` and a `target`) it drives that turn
+  instead and may give, and `cone` stops `axis` swinging further than that from where it was, so a
+  ragdoll's chest can be kept upright against the world without pinning it to a point, and never
+  tip more than its cone. With no motor and no friction it holds exactly and its `cone` has nothing
+  to stop; with `friction` it holds up to that torque and then turns, slowed.
 - **Friction stops a joint swinging.** `friction` resists `a` turning (or sliding) against `b`,
   up to that torque (or force) and no more, as a stiff hinge does: a joint loaded less than that
   holds still, and one loaded more turns, slowed. A hinge's or slider's is its motor held at speed
@@ -1660,14 +1692,28 @@ A joint takes some away, and leaves the rest:
   point in the world is held: nothing it does moves them. A joint between two bodies neither of
   which is dynamic does nothing. A body's [`lockRotation`](#world-addbody) holds in a joint too.
 - **No joints, no cost.** A world without joints runs no joint solver, and a sleeping chain's
-  joints cost nothing.
+  joints cost nothing. A joint with no `target` does no target work.
+
+```js
+const shoulder = world.addBody({ type: 'static', size: [0.2, 0.2, 0.2], position: [0, 3, 0] });
+const arm = world.addBody({ size: [0.6, 0.1, 0.1], position: [0.4, 3, 0] });
+// Raised 0.6 rad about z and held there, on a 5 Hz spring, by up to 100 N·m.
+world.addJoint({ type: 'ball', a: arm, b: shoulder, anchor: [0.1, 3, 0], target: [0, 0, Math.sin(0.3), Math.cos(0.3)], motorForce: 100, frequency: 5 });
+// A chest kept upright against the world, never tipping past 0.4 rad, free to fall and be carried.
+const chest = world.addBody({ size: [0.4, 0.5, 0.25], position: [3, 1.3, 0] });
+world.addJoint({ type: 'rotation', a: chest, target: [0, 0, 0, 1], motorForce: 800, frequency: 3, cone: 0.4 });
+```
 
 Notes: a joint gives by a millionth of what it pushes, so that solving a tree leaves first never
 divides by nothing where a body can't move along some row: far too little to see. A
 joint turning very fast opens a little within a step and closes again: a chain's end whipped to
 hundreds of radians a second opened 7.5 mm for a moment. A body hanging from a dangling joint with
 nothing to rub on swings for as long as a pendulum would: to settle, give its joint some
-`friction`, or the body some [`angularDamping`](#world-addbody).
+`friction`, or the body some [`angularDamping`](#world-addbody). A spring (a distance joint's,
+or a drive's) bounces at its `frequency` to within 0.2% at up to 5 Hz, but solved in steps it
+loses some swing even at `dampingRatio: 0`, the more the stiffer: about 8% a second at 1 Hz and
+87% at 5 Hz, with the default 8 substeps at 60 steps a second (more substeps lose less). A stiff
+drive settles that much sooner, which is what a pose wants.
 
 <a id="events"></a>
 ## Contact events and sensors

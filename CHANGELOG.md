@@ -214,6 +214,18 @@ All notable changes to Bearing are recorded here. The format follows
   its 15 s take 19% less time (the last 5 s 62% less), and it is all asleep at 12.5 s instead of
   14. With both, the pile's 15 s take 35% less time (8.4 to 5.5 s) and it is all asleep at 10.5 s.
   Saved worlds are now format 7.
+- Pose motors: a joint's motor can drive to a `target`, a hinge's angle, a slider's position, or
+  a ball joint's turn of `a` against `b`, as a spring with a `frequency` and `dampingRatio` (as a
+  distance joint's), no stronger than `motorForce` (0 is a motor off: a target with no force does
+  nothing). Solved inside the step, so it is steady however stiff: a knocked limb springs back at
+  its frequency (1.00008 s at 1 Hz), a motor too weak for its load gives, and the benchmark's
+  ragdoll stands on its own feet with every joint driven to its pose, within 0.32 mm for 10 s. A
+  hinge's or slider's `motorSpeed` with a target is how fast the target moves, so one moved each
+  step is followed without lagging (1.4e-7 rad against a step's turn without). A new `'rotation'`
+  joint holds how `a` is turned against `b`, or the world, leaving it free to move, or with a
+  motor drives that turn, its `cone` a hard stop: a ragdoll's pelvis kept upright this way stands
+  through a 60 N·s shove that topples it without. Joints with no target keep their bits. Saved
+  worlds are now format 8.
 - Joint friction: `friction` on ball joints, hinges and sliders, the most torque (N·m) or force
   (N) the joint resists turning or sliding with, as a stiff hinge does. A hinge's or slider's is
   its motor held at speed 0, to the bit; a ball joint's resists turning every way alike. 32 ragdolls
