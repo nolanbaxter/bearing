@@ -58,7 +58,7 @@ met and measured.
 | Queries | Raycast (nearest, and all hits), shape cast, overlap test. |
 | Events | Contact begin, stay and end, and sensors (triggers), read after a step as plain data. |
 | Gameplay | Character bodies: walk, slide along walls, climb steps and slopes, stand on moving platforms. |
-| Joints | Fixed, ball, hinge, slider, and distance/spring, with limits and motors. |
+| Joints | Fixed, ball, hinge, slider, and distance/spring, with limits and motors. Motors that drive toward a target angle, orientation or position, springy, as active ragdolls need; each joint's force read after a step. |
 | CCD | Fast small bodies don't pass through thin walls. |
 | Data | `world.save()` and `World.load(data)`, exact. `world.debugLines()` as a `Float32Array`. Content read from a `.glb` with no dependency. |
 
@@ -82,11 +82,18 @@ Goals, provisional until milestone 7 measures where Bearing actually stands. If 
 a goal can't be met, it is reset with those numbers and Nolan's OK, never quietly.
 
 - Faster than cannon-es on every benchmark scene.
-- Within 2× of Rapier's time per step on every benchmark scene, on both machines.
+- 100 active ragdolls standing on their motors (11 bodies and 10 joints each, holding a pose, so
+  never asleep) step in 8 ms or less on the laptop: half a 60 fps frame, the other half left for
+  drawing and the game. Nolan's game series (2026-10-30) puts 100 such units against a breaking
+  wall in its second game. Recorded on the desktop too, and on a Steam Deck when there is one.
 - The stack-quality scenes stand in Bearing wherever they stand in Rapier and Jolt.
 
+Rapier's time per step on every scene is still measured and recorded in `bench/RESULTS.md`, but
+"within 2× of it" is no longer a goal: it was reset on 2026-10-30 (see the Log).
+
 Benchmark scenes: a pile of 1,000 and of 10,000 boxes settling; a 10-box stack and the 210-box
-pyramid; 10,000 raycasts a step into 1,000 bodies; a 100-link chain; a ragdoll (from milestone 12).
+pyramid; 10,000 raycasts a step into 1,000 bodies; a 100-link chain; a ragdoll (from milestone 12);
+100 active ragdolls holding a pose (from milestone 17).
 
 ### Ease
 
@@ -643,7 +650,39 @@ i7-1260P, ms a step, one thread -> auto: landing 1,000-box pile 24.1 -> 7.4, pyr
 small worlds unchanged. In the browser pane, cross-origin isolated, an awake pile 11.3 -> 4.1 ms.
 Not yet run: Deno, Bun, and the Ryzen 5 5500 (Nolan's).
 
-**17. Documentation ⬜**
+**17. Pose motors ⬜**
+*Concepts:* drives and soft constraints; a spring as a constraint with a frequency and a damping
+ratio; swing and twist; how Jolt's, PhysX's and Box2D's joints drive toward a target.
+Joint motors that pull toward a target, not only a speed: a hinge toward an angle, a slider toward
+a position, a ball joint toward an orientation of `a` against `b`, each a spring with a frequency,
+a damping ratio and a strength limit, solved inside the step so it stays steady however stiff.
+What active ragdolls stand, balance and swing on: games 2, 6, 7 and 8 of the series.
+*Belongs in Bearing because* a stiff spring can only be steady inside the solver; pushed from
+outside by torques, it jitters or blows up. Choosing the poses, balancing and hit reactions stay in
+the games.
+*Needs Nolan:* the API proposal.
+*Done when:* a ragdoll stands on its motors and holds a pose, a pushed limb springs back at its
+frequency, a motor too weak for its load gives, every drive keeps the same bits on every machine,
+and a world with no target set does no target work.
+
+**18. Joint forces ⬜**
+*Concepts:* constraint impulses as forces; reading results after a step.
+Each joint's force and torque from the last step, read after it, as contacts are: what a game
+needs to break a joint (dismemberment in game 4, gates and walls in game 2).
+*Belongs in Bearing because* only the solver knows them. Breaking a joint at some force stays in
+the games: read the force, remove the joint.
+*Needs Nolan:* the API proposal.
+*Done when:* a hanging weight reads its weight through its joint, a jerk reads its peak, and the
+figures are the same with any number of workers.
+
+**19. Many active ragdolls ⬜**
+*Concepts:* profiling joint-heavy scenes; tree solves at scale; workers for joints.
+The speed goal above: 100 active ragdolls holding a pose in 8 ms or less a step on the laptop.
+They never sleep, so the joint solve itself has to be fast. Measured with A/B blocks; anything that
+changes results only by a documented tolerance, and with Nolan's OK.
+*Done when:* the goal is met, or reset with Nolan with the measurements that show why.
+
+**20. Documentation ⬜**
 *Concepts:* writing reference documentation people can learn from.
 The README with the measured comparison, its method and machines; `docs/SIDE-BY-SIDE.md`, the same
 small program in Bearing, Rapier and cannon-es, each run to check it works; and engine examples in
@@ -651,7 +690,7 @@ the docs, showing how Three.js, Babylon.js, PlayCanvas, Pixi and Winding copy `t
 They are examples, not code in the package.
 *Done when:* every example in every doc runs in a test.
 
-**18. 1.0 ⬜**
+**21. 1.0 ⬜**
 *Concepts:* release engineering; trusted publishing; checking determinism across JavaScript engines.
 Every goal above met and measured; the determinism hash checked on Bun as well as Node in CI;
 1.0.0 released (see [Versions and releases](#versions-and-releases)).
@@ -661,7 +700,10 @@ Every goal above met and measured; the determinism hash checked on Bun as well a
 
 - **2D**, as a separate module with the same conventions (rule 106). *Needs Nolan first:* pixel
   units with y down, as Winding's 2D view has, or metres with y up (rule 50).
-- **Vehicles and ragdoll helpers**, built on joints.
+- Not in Bearing: a vehicle controller and a ragdoll builder. Arcade handling and a humanoid from
+  a config file are game feel, built from raycasts, forces, joints and pose motors Bearing already
+  gives, so they belong in the games' shared foundation (Nolan, 2026-10-30: these updates must
+  belong in Bearing, not in the game's code).
 - Not planned: soft bodies, cloth and fluids. They are different solvers, and would be a different
   package.
 
@@ -726,8 +768,11 @@ Each milestone that adds API is a minor version. Fixes between them are patches.
 | 0.10.0 | 13 | Continuous collision. |
 | 0.11.0 | 14 | Convex hulls and compound shapes. |
 | 0.12.0 | 15 | Save, load and debug lines. |
-| 0.12.x | 16, 17 | The performance pass, workers and the docs: reworks, so patches. A setting for workers would be an addition, and 0.13.0. |
-| 1.0.0 | 18 | Every goal met and measured. |
+| 0.12.x | 16 | The performance pass and workers: reworks, so patches. A setting for workers would be an addition, and 0.13.0. |
+| 0.13.0 | 17 | Pose motors. |
+| 0.14.0 | 18 | Joint forces. |
+| 0.14.x | 19, 20 | Many active ragdolls fast, and the docs: reworks, so patches. |
+| 1.0.0 | 21 | Every goal met and measured. |
 
 ### How a release is made
 
@@ -914,3 +959,13 @@ Winding's way, copied before the first one:
   mesh). Counting a lean at its limit as stuck unless it slips over a tolerance a second would
   gain 0.02 to 0.98 s, at most 7% of the pile's 13, but freezes that slope box; telling the two
   apart means watching whether the slip grows, which is the time rule.
+- **2026-10-30.** Three milestones added before 1.0, at Nolan's word, from his game series plan
+  (eight small low-poly games on Winding and Bearing): 17, pose motors, the base of the active
+  ragdolls games 2, 6, 7 and 8 stand on; 18, joint forces, for breaking joints in games 2 and 4;
+  and 19, many active ragdolls fast. Documentation and 1.0 move to 20 and 21. The speed goal
+  "within 2× of Rapier's time per step on every scene" is reset to 100 active ragdolls in 8 ms on
+  the laptop, the need the series sets: on 2026-10-29 Bearing was 1.2× Rapier on the stack and
+  1.9× on the rays but 4 to 7× on the pyramid, ragdolls and hulls, where Rapier sleeps sooner, and
+  32 ragdolls took 5.5 to 7.7 ms. Vehicles and a ragdoll builder come off the after-1.0 list: they
+  are game feel and belong in the games' code (Nolan: the updates must belong in Bearing, not in
+  the game's code). Joint breaking likewise: Bearing reports the force, the game removes the joint.
